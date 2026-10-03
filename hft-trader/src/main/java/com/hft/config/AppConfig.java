@@ -12,12 +12,10 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Конфигурация всего приложения: список бирж + общие для всех риск-параметры.
+ * Инфраструктурная конфигурация: порт и токен админки, адреса бирж и testnet.
  *
- * Раньше был один блок "exchange" на одну биржу. Теперь "exchanges" —
- * список, у каждой записи свои url, ключи и символы. Риск и админка
- * остаются общими: лимит дневного убытка, например, разумно считать
- * суммарно по всем биржам, а не отдельно на каждую.
+ * Торговых параметров (риск, стратегия, символы, глубина стакана) здесь нет —
+ * они задаются для каждой биржи через админку и хранятся в SQLite, см. {@link TradingParams}.
  *
  * Приоритет источников, от высшего к низшему:
  *   1. Переменные окружения (переопределяют конкретную биржу по префиксу)
@@ -32,14 +30,6 @@ public final class AppConfig {
 
     private final List<ExchangeConfig> exchanges;
 
-    // Риск — общий для всех бирж
-    private double maxPositionQuote = 100.0;
-    private double maxDailyLossQuote = 50.0;
-    private double maxSlippagePercent = 0.3;
-    private double feeReservePercent = 0.2;
-    private int maxOrdersPerMinute = 30;
-    private boolean tradingEnabled = false;
-
     // Админка
     private boolean adminEnabled = true;
     private int adminPort = 8080;
@@ -53,17 +43,14 @@ public final class AppConfig {
         Map<String, Object> yaml = readYaml();
         List<ExchangeConfig> exchanges = parseExchanges(yaml);
         AppConfig cfg = new AppConfig(exchanges);
-        if (yaml != null) cfg.applyRiskYaml(yaml);
+        if (yaml != null) cfg.applyAdminYaml(yaml);
         cfg.applyEnv();
-        cfg.validate();
 
-        log.info("Конфигурация загружена. Бирж: {}", exchanges.size());
+        log.info("Конфигурация загружена. Бирж с явными адресами: {}", exchanges.size());
         for (ExchangeConfig ex : exchanges) {
-            log.info("  [{}] enabled={} testnet={} символы={}",
-                    ex.id(), ex.enabled(), ex.testnet(), ex.symbols());
+            log.info("  [{}] testnet={} rest={} ws={}", ex.id(), ex.testnet(), ex.restUrl(), ex.wsUrl());
         }
-        log.info("Торговля: {}, админка: {}", cfg.tradingEnabled,
-                cfg.adminEnabled ? "порт " + cfg.adminPort : "выключена");
+        log.info("Админка: {}", cfg.adminEnabled ? "порт " + cfg.adminPort : "выключена");
         return cfg;
     }
 
@@ -88,46 +75,25 @@ public final class AppConfig {
         return null;
     }
 
+    /** Блок exchanges в YAML — только адреса/testnet; список может быть пустым. */
     @SuppressWarnings("unchecked")
     private static List<ExchangeConfig> parseExchanges(Map<String, Object> root) {
         List<ExchangeConfig> result = new ArrayList<>();
-        if (root == null) {
-            result.add(defaultBinance());
-            return result;
-        }
-
-        Object rawList = root.get("exchanges");
-        if (!(rawList instanceof List<?> list) || list.isEmpty()) {
-            result.add(defaultBinance());
-            return result;
-        }
+        Object rawList = root == null ? null : root.get("exchanges");
+        if (!(rawList instanceof List<?> list)) return result;
 
         for (Object item : list) {
             Map<String, Object> m = (Map<String, Object>) item;
             String id = str(m.get("id"), "binance").toLowerCase();
-
-            List<String> symbols = new ArrayList<>();
-            Object syms = m.get("symbols");
-            if (syms instanceof List<?> sl) {
-                sl.forEach(s -> symbols.add(String.valueOf(s).toUpperCase()));
-            }
-            if (symbols.isEmpty()) symbols.add("BTCUSDT");
-
             boolean testnet = bool(m.get("testnet"), true);
             ExchangeConfig ec = new ExchangeConfig(
                     id,
-                    bool(m.get("enabled"), true),
                     testnet,
                     str(m.get("rest-url"), defaultRestUrl(id, testnet)),
                     str(m.get("ws-url"), defaultWsUrl(id, testnet)),
                     intOf(m.get("recv-window-ms"), 5000),
-                    symbols,
-                    intOf(m.get("book-depth"), 20),
-                    intOf(m.get("price-window"), 1000)
-            );
-
-            // Переменные окружения переопределяют конкретную биржу по префиксу:
-            // BINANCE_TESTNET, BINANCE_SYMBOLS, BYBIT_TESTNET, BYBIT_SYMBOLS ...
+                    List.of(), 0, 0);
+            // Переменные окружения переопределяют конкретную биржу по префиксу: BINANCE_TESTNET, BYBIT_REST_URL ...
             result.add(applyExchangeEnv(ec));
         }
         return result;
@@ -138,27 +104,7 @@ public final class AppConfig {
         boolean testnet = bool(env(prefix + "_TESTNET"), ec.testnet());
         String restUrl = str(env(prefix + "_REST_URL"), ec.restUrl());
         String wsUrl = str(env(prefix + "_WS_URL"), ec.wsUrl());
-        boolean enabled = bool(env(prefix + "_ENABLED"), ec.enabled());
-
-        List<String> symbols = ec.symbols();
-        String envSymbols = env(prefix + "_SYMBOLS");
-        if (envSymbols != null && !envSymbols.isBlank()) {
-            List<String> parsed = new ArrayList<>();
-            for (String s : envSymbols.split(",")) {
-                String t = s.trim().toUpperCase();
-                if (!t.isEmpty()) parsed.add(t);
-            }
-            if (!parsed.isEmpty()) symbols = parsed;
-        }
-
-        return new ExchangeConfig(ec.id(), enabled, testnet, restUrl, wsUrl,
-                ec.recvWindowMs(), symbols, ec.bookDepth(), ec.priceWindowSize());
-    }
-
-    private static ExchangeConfig defaultBinance() {
-        return new ExchangeConfig("binance", true, true,
-                defaultRestUrl("binance", true), defaultWsUrl("binance", true),
-                5000, List.of("BTCUSDT"), 20, 1000);
+        return new ExchangeConfig(ec.id(), testnet, restUrl, wsUrl, ec.recvWindowMs(), List.of(), 0, 0);
     }
 
     private static String defaultRestUrl(String id, boolean testnet) {
@@ -179,15 +125,7 @@ public final class AppConfig {
     }
 
     @SuppressWarnings("unchecked")
-    private void applyRiskYaml(Map<String, Object> root) {
-        Map<String, Object> risk = (Map<String, Object>) root.getOrDefault("risk", Map.of());
-        maxPositionQuote = dbl(risk.get("max-position-quote"), maxPositionQuote);
-        maxDailyLossQuote = dbl(risk.get("max-daily-loss-quote"), maxDailyLossQuote);
-        maxSlippagePercent = dbl(risk.get("max-slippage-percent"), maxSlippagePercent);
-        feeReservePercent = dbl(risk.get("fee-reserve-percent"), feeReservePercent);
-        maxOrdersPerMinute = intOf(risk.get("max-orders-per-minute"), maxOrdersPerMinute);
-        tradingEnabled = bool(risk.get("trading-enabled"), tradingEnabled);
-
+    private void applyAdminYaml(Map<String, Object> root) {
         Map<String, Object> admin = (Map<String, Object>) root.getOrDefault("admin", Map.of());
         adminEnabled = bool(admin.get("enabled"), adminEnabled);
         adminPort = intOf(admin.get("port"), adminPort);
@@ -195,26 +133,9 @@ public final class AppConfig {
     }
 
     private void applyEnv() {
-        maxPositionQuote = dbl(env("RISK_MAX_POSITION_QUOTE"), maxPositionQuote);
-        maxDailyLossQuote = dbl(env("RISK_MAX_DAILY_LOSS_QUOTE"), maxDailyLossQuote);
-        maxSlippagePercent = dbl(env("RISK_MAX_SLIPPAGE_PERCENT"), maxSlippagePercent);
-        feeReservePercent = dbl(env("RISK_FEE_RESERVE_PERCENT"), feeReservePercent);
-        maxOrdersPerMinute = intOf(env("RISK_MAX_ORDERS_PER_MINUTE"), maxOrdersPerMinute);
-        tradingEnabled = bool(env("TRADING_ENABLED"), tradingEnabled);
-
         adminEnabled = bool(env("ADMIN_ENABLED"), adminEnabled);
         adminPort = intOf(env("ADMIN_PORT"), adminPort);
         adminToken = str(env("ADMIN_TOKEN"), adminToken);
-    }
-
-    private void validate() {
-        if (exchanges.isEmpty()) {
-            throw new IllegalStateException("Не задано ни одной биржи");
-        }
-        boolean anyEnabled = exchanges.stream().anyMatch(ExchangeConfig::enabled);
-        if (!anyEnabled) {
-            throw new IllegalStateException("Все биржи выключены (enabled: false)");
-        }
     }
 
     private static String env(String key) {
@@ -228,48 +149,21 @@ public final class AppConfig {
         if (v == null) return def;
         try { return Integer.parseInt(String.valueOf(v).trim()); } catch (NumberFormatException e) { return def; }
     }
-    private static double dbl(Object v, double def) {
-        if (v == null) return def;
-        try { return Double.parseDouble(String.valueOf(v).trim()); } catch (NumberFormatException e) { return def; }
-    }
 
     // ---------- Геттеры ----------
 
     public List<ExchangeConfig> exchanges() { return List.copyOf(exchanges); }
 
-    public ExchangeConfig exchange(String id) {
-        return exchanges.stream().filter(e -> e.id().equalsIgnoreCase(id)).findFirst()
-                .orElseThrow(() -> new IllegalArgumentException("Биржа не найдена в конфиге: " + id));
-    }
-
     /**
-     * Конфигурация биржи по умолчанию, если в application.yml для неё нет
-     * записи — например, если бот запущен вообще без YAML и вся настройка
-     * идёт через админку. testnet=true по умолчанию — так безопаснее.
+     * Подключение по умолчанию, если в application.yml для биржи нет записи
+     * (в том числе когда YAML нет вообще). testnet=true по умолчанию — так безопаснее;
+     * переменные окружения ID_TESTNET/ID_REST_URL/ID_WS_URL действуют и здесь.
      */
     public ExchangeConfig defaultExchangeConfig(String id) {
-        return new ExchangeConfig(id, true, true,
-                defaultRestUrl(id, true), defaultWsUrl(id, true),
-                5000, List.of("BTCUSDT"), 20, 1000);
+        return applyExchangeEnv(new ExchangeConfig(id, true,
+                defaultRestUrl(id, true), defaultWsUrl(id, true), 5000, List.of(), 0, 0));
     }
 
-    public double maxPositionQuote() { return maxPositionQuote; }
-    public void setMaxPositionQuote(double v) { this.maxPositionQuote = v; }
-
-    public double maxDailyLossQuote() { return maxDailyLossQuote; }
-    public void setMaxDailyLossQuote(double v) { this.maxDailyLossQuote = v; }
-
-    public double maxSlippagePercent() { return maxSlippagePercent; }
-    public void setMaxSlippagePercent(double v) { this.maxSlippagePercent = v; }
-
-    public double feeReservePercent() { return feeReservePercent; }
-    public void setFeeReservePercent(double v) { this.feeReservePercent = v; }
-
-    public int maxOrdersPerMinute() { return maxOrdersPerMinute; }
-    public void setMaxOrdersPerMinute(int v) { this.maxOrdersPerMinute = v; }
-
-    public boolean tradingEnabled() { return tradingEnabled; }
-    public void setTradingEnabled(boolean v) { this.tradingEnabled = v; }
     public boolean adminEnabled() { return adminEnabled; }
     public int adminPort() { return adminPort; }
     public String adminToken() { return adminToken; }

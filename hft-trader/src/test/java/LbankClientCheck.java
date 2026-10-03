@@ -10,7 +10,7 @@ public class LbankClientCheck {
       byte[] b = routes.getOrDefault(ex.getRequestURI().getPath(),"{}").getBytes(); ex.sendResponseHeaders(200,b.length); ex.getResponseBody().write(b); ex.close(); });
     s.start(); String url="http://127.0.0.1:"+s.getAddress().getPort();
     var f = new SymbolFilters(); f.put("BTCUSDT", new SymbolFilters.Filter(0.0001,1e9,0.0001,0,1e9,0.01,1));
-    var c = new LbankRestClient(new ExchangeConfig("lbank",true,false,url,"",5000,List.of("BTCUSDT"),20,100), new Credentials("KEY","SECRET"), f);
+    var c = new LbankRestClient(new ExchangeConfig("lbank", false,url,"",5000,List.of("BTCUSDT"),20,100), new Credentials("KEY","SECRET"), f);
     routes.put("/v2/supplement/create_order.do","{\"result\":\"true\",\"data\":{\"order_id\":\"uuid-1\"},\"error_code\":0}");
     routes.put("/v2/supplement/orders_info.do","{\"result\":\"true\",\"data\":{\"orders\":[{\"status\":2,\"deal_amount\":\"0.5\",\"amount\":\"0.5\",\"avg_price\":\"100\",\"type\":\"sell_market\"}]},\"error_code\":0}");
     OrderResult r = c.sellMarket("BTCUSDT", 0.5);

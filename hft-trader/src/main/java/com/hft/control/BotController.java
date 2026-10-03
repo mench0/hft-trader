@@ -2,9 +2,11 @@ package com.hft.control;
 
 import com.hft.config.AppConfig;
 import com.hft.config.ExchangeConfig;
+import com.hft.config.TradingParams;
+import com.hft.config.TradingSettings;
+import com.hft.exchange.ExchangeFactory;
 import com.hft.exchange.ExchangeGateway;
-import com.hft.exchange.binance.BinanceExchange;
-import com.hft.exchange.bybit.BybitExchange;
+import com.hft.exchange.catalog.ExchangeCatalog;
 import com.hft.persistence.PersistedState;
 import com.hft.persistence.SqliteStateStore;
 import org.slf4j.Logger;
@@ -20,9 +22,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * Управляет тем, какие биржи и какие символы выбраны, и когда бот
  * реально подключается к рынку. Всё, что здесь меняется — выбор бирж,
- * тикеров, параметры риска и стратегии — сразу сохраняется на диск через
- * {@link SqliteStateStore}, поэтому перезапуск процесса не откатывает настройки
- * к тем, что были в application.yml при первом старте.
+ * тикеров, торговые параметры каждой биржи — сразу сохраняется на диск через
+ * {@link SqliteStateStore}, поэтому перезапуск процесса настройки не откатывает.
  *
  * Состояния:
  *   NOT_STARTED — биржи не подключены, можно менять выбор
@@ -45,9 +46,9 @@ public final class BotController {
     /** Живые подключения после start(). Пусто, пока бот не запущен. */
     private final Map<String, ExchangeGateway> active = new LinkedHashMap<>();
 
-    /** Последние применённые параметры стратегии на биржу — переживают рестарт
-     *  и переприменяются к новой стратегии при следующем start(). */
-    private final Map<String, PersistedState.StrategyParams> strategyParams = new ConcurrentHashMap<>();
+    /** Торговые параметры каждой биржи. Объект на биржу живёт всё время процесса: шлюз биржи держит
+     *  на него ссылку, поэтому изменение из админки сразу видно работающей стратегии и риску. */
+    private final Map<String, TradingSettings> settings = new ConcurrentHashMap<>();
 
     private final AtomicBoolean running = new AtomicBoolean(false);
     private volatile boolean autoStart;
@@ -62,9 +63,10 @@ public final class BotController {
         restoreFromDiskOrDefaults();
         // параметры mean-reversion для бэктеста — те, что заданы для биржи в админке (или по умолчанию)
         this.discovery = com.hft.discovery.DiscoveryService.createDefault(ex -> {
-            PersistedState.StrategyParams sp = strategyParams.get(ex);
-            return sp == null ? null : new com.hft.discovery.MeanReversionBacktest.Params(
-                    sp.entryZ(), sp.exitZ(), sp.stopLossPercent(), 30, 60);
+            TradingSettings ts = settings.get(ex);
+            if (ts == null) return null;
+            TradingParams p = ts.get();
+            return new com.hft.discovery.MeanReversionBacktest.Params(p.entryZ(), p.exitZ(), p.stopLossPercent(), 30, 60);
         });
     }
 
@@ -74,28 +76,18 @@ public final class BotController {
         var saved = stateStore.load();
         if (saved.isPresent()) {
             PersistedState s = saved.get();
-            s.selection().forEach((ex, syms) -> selection.put(ex, new CopyOnWriteArrayList<>(syms)));
-            strategyParams.putAll(s.strategyParams());
+            if (s.selection() != null) s.selection().forEach((ex, syms) -> selection.put(ex, new CopyOnWriteArrayList<>(syms)));
+            if (s.trading() != null) s.trading().forEach((ex, values) -> {
+                try {
+                    settings.put(ex, new TradingSettings(defaultsFor(ex).with(values)));
+                } catch (IllegalArgumentException e) {
+                    log.error("[{}] сохранённые параметры некорректны ({}) — беру значения по умолчанию", ex, e.getMessage());
+                }
+            });
             autoStart = s.autoStart();
             autoTrade = s.autoTrade();
-
-            var risk = s.risk();
-            config.setMaxPositionQuote(risk.maxPositionQuote());
-            config.setMaxDailyLossQuote(risk.maxDailyLossQuote());
-            config.setMaxSlippagePercent(risk.maxSlippagePercent());
-            config.setFeeReservePercent(risk.feeReservePercent());
-            config.setMaxOrdersPerMinute(risk.maxOrdersPerMinute());
-            config.setTradingEnabled(risk.tradingEnabled());
             log.info("Настройки восстановлены из {}", stateStore.filePath());
             return;
-        }
-
-        // Файла состояния ещё нет (первый запуск) — берём отправную точку
-        // из application.yml, если там что-то прописано
-        for (ExchangeConfig ec : config.exchanges()) {
-            if (ec.enabled()) {
-                selection.put(ec.id(), new CopyOnWriteArrayList<>(ec.symbols()));
-            }
         }
         persist(); // сразу создаём файл состояния, чтобы он появился на диске
     }
@@ -104,16 +96,10 @@ public final class BotController {
     private void persist() {
         Map<String, List<String>> selectionCopy = new LinkedHashMap<>();
         selection.forEach((k, v) -> selectionCopy.put(k, List.copyOf(v)));
-
-        var risk = new PersistedState.RiskSnapshot(
-                config.maxPositionQuote(), config.maxDailyLossQuote(), config.maxSlippagePercent(),
-                config.feeReservePercent(), config.maxOrdersPerMinute(), config.tradingEnabled());
-
-        stateStore.save(new PersistedState(selectionCopy, autoStart, autoTrade, risk, Map.copyOf(strategyParams)));
+        Map<String, Map<String, String>> trading = new LinkedHashMap<>();
+        settings.forEach((k, v) -> trading.put(k, v.get().toStringMap()));
+        stateStore.save(new PersistedState(selectionCopy, autoStart, autoTrade, trading));
     }
-
-    /** Вызывается извне (из AdminServer) после смены риск-параметров, чтобы они тоже сохранились. */
-    public void persistNow() { persist(); }
 
     // ======================= ВЫБОР ДО СТАРТА =======================
 
@@ -142,7 +128,6 @@ public final class BotController {
     public void deselectExchange(String exchangeId) {
         requireNotRunning();
         selection.remove(exchangeId);
-        strategyParams.remove(exchangeId);
         log.info("Биржа {} убрана из выбора", exchangeId);
         persist();
     }
@@ -169,49 +154,40 @@ public final class BotController {
         }
     }
 
-    // ======================= ПАРАМЕТРЫ СТРАТЕГИИ =======================
+    // ======================= ТОРГОВЫЕ ПАРАМЕТРЫ =======================
+
+    /** Значения по умолчанию для биржи: комиссия тейкера — из каталога. */
+    private static TradingParams defaultsFor(String exchangeId) {
+        TradingParams d = TradingParams.DEFAULTS;
+        return ExchangeCatalog.find(exchangeId)
+                .map(i -> d.with(Map.of("takerFeePercent", String.valueOf(i.takerFeePct()))))
+                .orElse(d);
+    }
+
+    private TradingSettings settingsFor(String exchangeId) {
+        return settings.computeIfAbsent(exchangeId, id -> new TradingSettings(defaultsFor(id)));
+    }
+
+    /** Текущие параметры биржи (значения по умолчанию, если их ещё не меняли). */
+    public TradingParams params(String exchangeId) {
+        TradingSettings ts = settings.get(exchangeId);
+        return ts != null ? ts.get() : defaultsFor(exchangeId);
+    }
 
     /**
-     * Применить параметры стратегии к конкретной бирже и запомнить их —
-     * при следующем /control/start (в том числе после рестарта процесса)
-     * они применятся к новой стратегии автоматически.
+     * Частичное изменение параметров биржи: переданные ключи меняются, остальные остаются.
+     * Работающая биржа подхватывает их на следующем тике; bookDepth/priceWindow — после перезапуска.
      */
-    public void applyStrategyParams(String exchangeId, PersistedState.StrategyParams params) {
-        strategyParams.put(exchangeId, params);
-        ExchangeGateway gw = active.get(exchangeId);
-        if (gw != null) {
-            var strat = gw.strategy();
-            strat.setEntryZ(params.entryZ());
-            strat.setExitZ(params.exitZ());
-            strat.setStopLossPercent(params.stopLossPercent());
-            strat.setMinImbalance(params.minImbalance());
-            strat.setOrderQuote(params.orderQuote());
+    public synchronized TradingParams updateParams(String exchangeId, Map<String, String> updates) {
+        if (!SUPPORTED_EXCHANGES.contains(exchangeId)) {
+            throw new IllegalArgumentException("Неподдерживаемая биржа: " + exchangeId + ". Доступны: " + SUPPORTED_EXCHANGES);
         }
+        TradingSettings ts = settingsFor(exchangeId);
+        TradingParams updated = ts.get().with(updates);
+        ts.set(updated);
         persist();
-    }
-
-    public PersistedState.StrategyParams strategyParamsFor(String exchangeId) {
-        var saved = strategyParams.get(exchangeId);
-        if (saved != null) return saved;
-        // Если ничего не сохранено — вернуть значения по умолчанию из живой стратегии
-        ExchangeGateway gw = active.get(exchangeId);
-        if (gw != null) {
-            var s = gw.strategy();
-            return new PersistedState.StrategyParams(
-                    s.entryZ(), s.exitZ(), s.stopLossPercent(), s.minImbalance(), s.orderQuote());
-        }
-        return new PersistedState.StrategyParams(2.0, 0.3, 0.5, 0.15, 20.0);
-    }
-
-    private void applyStoredStrategyParams(String exchangeId, ExchangeGateway gw) {
-        var params = strategyParams.get(exchangeId);
-        if (params == null) return;
-        var strat = gw.strategy();
-        strat.setEntryZ(params.entryZ());
-        strat.setExitZ(params.exitZ());
-        strat.setStopLossPercent(params.stopLossPercent());
-        strat.setMinImbalance(params.minImbalance());
-        strat.setOrderQuote(params.orderQuote());
+        log.info("[{}] торговые параметры изменены: {}", exchangeId, updates);
+        return updated;
     }
 
     // ======================= АВТОЗАПУСК =======================
@@ -245,15 +221,15 @@ public final class BotController {
         for (var entry : selection.entrySet()) {
             String id = entry.getKey();
             List<String> symbols = entry.getValue();
-            ExchangeConfig ec = buildExchangeConfig(id, symbols);
-            ExchangeGateway gw = createExchange(id, ec);
+            TradingSettings ts = settingsFor(id);
+            ExchangeConfig ec = buildExchangeConfig(id, symbols, ts.get());
+            ExchangeGateway gw = ExchangeFactory.create(id, ec, ts);
             active.put(id, gw);
         }
 
         for (ExchangeGateway gw : active.values()) {
             try {
                 gw.start();
-                applyStoredStrategyParams(gw.id(), gw);
             } catch (Exception e) {
                 log.error("Не удалось запустить биржу {}", gw.id(), e);
                 active.values().forEach(g -> { try { g.stop(); } catch (Exception ignored) {} });
@@ -277,20 +253,27 @@ public final class BotController {
     }
 
     /** Включить торговлю на всех активных биржах (или на одной, если id != "all"). */
-    public void startTrading(String targetId) {
-        config.setTradingEnabled(true);
+    public synchronized void startTrading(String targetId) {
         for (ExchangeGateway gw : resolveTargets(targetId)) {
+            setTradingEnabled(gw.id(), true);
             gw.risk().resumeTrading();
             gw.strategy().enable();
         }
         persist();
     }
 
-    public void stopTrading(String targetId) {
+    public synchronized void stopTrading(String targetId, String reason) {
         for (ExchangeGateway gw : resolveTargets(targetId)) {
+            setTradingEnabled(gw.id(), false);
             gw.strategy().disable();
-            gw.risk().stopTrading("Остановлено через админку");
+            gw.risk().stopTrading(reason);
         }
+        persist();
+    }
+
+    private void setTradingEnabled(String exchangeId, boolean enabled) {
+        TradingSettings ts = settingsFor(exchangeId);
+        ts.set(ts.get().with(Map.of("tradingEnabled", String.valueOf(enabled))));
     }
 
     public List<ExchangeGateway> resolveTargets(String id) {
@@ -300,32 +283,12 @@ public final class BotController {
         return List.of(gw);
     }
 
-    private ExchangeConfig buildExchangeConfig(String id, List<String> symbols) {
+    private ExchangeConfig buildExchangeConfig(String id, List<String> symbols, TradingParams p) {
         ExchangeConfig base = config.exchanges().stream()
                 .filter(e -> e.id().equals(id))
                 .findFirst()
                 .orElseGet(() -> config.defaultExchangeConfig(id));
-        return new ExchangeConfig(base.id(), true, base.testnet(), base.restUrl(), base.wsUrl(),
-                base.recvWindowMs(), symbols, base.bookDepth(), base.priceWindowSize());
-    }
-
-    private ExchangeGateway createExchange(String id, ExchangeConfig ec) {
-        return switch (id) {
-            case "binance" -> new BinanceExchange(ec, config);
-            case "bybit" -> new BybitExchange(ec, config);
-            case "okx" -> new com.hft.exchange.okx.OkxExchange(ec, config);
-            case "mexc" -> new com.hft.exchange.mexc.MexcExchange(ec, config);
-            case "gate" -> new com.hft.exchange.gate.GateExchange(ec, config);
-            case "lbank" -> new com.hft.exchange.lbank.LbankExchange(ec, config);
-            case "hyperliquid" -> new com.hft.exchange.hyperliquid.HyperliquidExchange(ec, config);
-            case "uniswapv2" -> new com.hft.exchange.uniswap.UniswapV2Exchange(ec, config);
-            case "bingx" -> new com.hft.exchange.bingx.BingxExchange(ec, config);
-            default -> {
-                var info = com.hft.exchange.catalog.ExchangeCatalog.find(id)
-                        .filter(i -> i.adapter() == com.hft.exchange.catalog.ExchangeInfo.Adapter.PAPER_BLIND)
-                        .orElseThrow(() -> new IllegalArgumentException("Неизвестная или не реализованная биржа: " + id));
-                yield new com.hft.exchange.generic.PaperExchange(info, ec, config);
-            }
-        };
+        return new ExchangeConfig(base.id(), base.testnet(), base.restUrl(), base.wsUrl(),
+                base.recvWindowMs(), symbols, p.bookDepth(), p.priceWindow());
     }
 }

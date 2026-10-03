@@ -1,5 +1,7 @@
 package com.hft.engine;
 
+import com.hft.config.TradingParams;
+import com.hft.config.TradingSettings;
 import com.hft.model.OrderResult;
 import com.hft.model.Tick;
 import com.hft.store.MarketDataStore;
@@ -33,12 +35,8 @@ public final class MeanReversionStrategy extends Strategy {
 
     private static final Logger log = LoggerFactory.getLogger(MeanReversionStrategy.class);
 
-    // Параметры — вынесены в поля, чтобы менять из админки без пересборки
-    private volatile double entryZ = 2.0;       // порог входа в сигмах
-    private volatile double exitZ = 0.3;        // порог выхода
-    private volatile double stopLossPercent = 0.5;
-    private volatile double minImbalance = 0.15; // минимальный перевес бидов
-    private volatile double orderQuote = 20.0;   // размер сделки в USDT
+    /** Параметры биржи из админки; читаются на каждом тике, меняются без перезапуска. */
+    private final TradingSettings settings;
 
     /** Открытые позиции: символ -> детали входа. */
     private final Map<String, Position> positions = new ConcurrentHashMap<>();
@@ -47,16 +45,12 @@ public final class MeanReversionStrategy extends Strategy {
 
     private final OrderExecutor executor;
     private final double[] top = new double[4];          // только поток конвейера
-    private volatile long maxBookAgeMs = 2_000;
     /** Фид в реальном времени? (на REST-запасе стакан старый — новые входы запрещены, выходы разрешены) */
     private volatile java.util.function.BooleanSupplier realtime = () -> true;
 
-    public MeanReversionStrategy(MarketDataStore market, OrderService orders) {
-        this(market, orders, "default");
-    }
-
-    public MeanReversionStrategy(MarketDataStore market, OrderService orders, String exchangeId) {
+    public MeanReversionStrategy(MarketDataStore market, OrderService orders, String exchangeId, TradingSettings settings) {
         super("mean-reversion", market, orders);
+        this.settings = settings;
         this.executor = new OrderExecutor(exchangeId, 4);
     }
 
@@ -78,30 +72,31 @@ public final class MeanReversionStrategy extends Strategy {
         double z = window.currentZScore();
         Position pos = positions.get(symbol);
 
+        TradingParams p = settings.get();
         if (pos == null) {
-            checkEntry(symbol, z, book);
+            checkEntry(symbol, z, book, p);
         } else {
-            checkExit(symbol, z, tick.price(), pos);
+            checkExit(symbol, z, tick.price(), pos, p);
         }
     }
 
-    private void checkEntry(String symbol, double z, OrderBook book) {
+    private void checkEntry(String symbol, double z, OrderBook book, TradingParams p) {
         // Ищем только перепроданность — лонг от низа
-        if (z > -entryZ) return;
-        if (book.ageMs() > maxBookAgeMs || !realtime.getAsBoolean()) return;   // старые данные — не входим
+        if (z > -p.entryZ()) return;
+        if (book.ageMs() > p.maxBookAgeMs() || !realtime.getAsBoolean()) return;   // старые данные — не входим
 
         // Стакан должен подтверждать: покупателей больше
-        double imbalance = book.imbalance(5);
-        if (imbalance < minImbalance) return;
+        double imbalance = book.imbalance(p.imbalanceLevels());
+        if (imbalance < p.minImbalance()) return;
 
         // Спред не должен быть аномально широким — признак низкой ликвидности
         if (!book.readTop(top)) return;                  // bid/ask из одного снимка
         double mid = (top[0] + top[2]) / 2;
         double spread = (top[2] - top[0]) / mid * 100.0;
-        if (spread > 0.1) return;
+        if (spread > p.maxSpreadPercent()) return;
 
         double price = top[2];
-        double qty = orderQuote / price;
+        double qty = p.orderQuote() / price;
 
         log.info("Сигнал входа {}: z={} imbalance={} spread={}%",
                 symbol, String.format("%.2f", z),
@@ -117,13 +112,13 @@ public final class MeanReversionStrategy extends Strategy {
         });
     }
 
-    private void checkExit(String symbol, double z, double currentPrice, Position pos) {
+    private void checkExit(String symbol, double z, double currentPrice, Position pos, TradingParams p) {
         double pnlPercent = (currentPrice - pos.entryPrice()) / pos.entryPrice() * 100.0;
 
-        boolean takeProfit = z >= -exitZ;
-        boolean stopLoss = pnlPercent <= -stopLossPercent;
-        // Страховка от зависших позиций: закрыть через час в любом случае
-        boolean timeout = System.currentTimeMillis() - pos.openedAtMs() > 3_600_000;
+        boolean takeProfit = z >= -p.exitZ();
+        boolean stopLoss = pnlPercent <= -p.stopLossPercent();
+        // Страховка от зависших позиций: закрыть по таймауту в любом случае
+        boolean timeout = System.currentTimeMillis() - pos.openedAtMs() > p.positionTimeoutMs();
 
         if (!takeProfit && !stopLoss && !timeout) return;
 
@@ -140,7 +135,10 @@ public final class MeanReversionStrategy extends Strategy {
         double left = pos.quantity() - result.executedQty();
         if (left > pos.quantity() * 1e-6) positions.put(symbol, new Position(pos.entryPrice(), left, pos.openedAtMs()));
         else positions.remove(symbol);
-        double realized = (result.avgPrice() - pos.entryPrice()) * result.executedQty();
+        // комиссия тейкера на обеих ногах — в риск идёт чистый результат, по нему считается дневной лимит убытка
+        double fee = settings.get().takerFeePercent() / 100.0 * (result.avgPrice() + pos.entryPrice()) * result.executedQty();
+        double realized = (result.avgPrice() - pos.entryPrice()) * result.executedQty() - fee;
+        orders.risk().recordPnl(realized);
         log.info("Позиция закрыта: {} {} @ {}, результат {} USDT",
                 result.executedQty(), symbol, result.avgPrice(), String.format("%.4f", realized));
     }
@@ -155,18 +153,5 @@ public final class MeanReversionStrategy extends Strategy {
         });
     }
 
-    // Параметры доступны на изменение через админку
-    public void setEntryZ(double v) { this.entryZ = v; }
-    public void setExitZ(double v) { this.exitZ = v; }
-    public void setStopLossPercent(double v) { this.stopLossPercent = v; }
-    public void setMinImbalance(double v) { this.minImbalance = v; }
-    public void setOrderQuote(double v) { this.orderQuote = v; }
-    public void setMaxBookAgeMs(long v) { this.maxBookAgeMs = v; }
-
-    public double entryZ() { return entryZ; }
-    public double exitZ() { return exitZ; }
-    public double stopLossPercent() { return stopLossPercent; }
-    public double minImbalance() { return minImbalance; }
-    public double orderQuote() { return orderQuote; }
     public int openPositions() { return positions.size(); }
 }

@@ -1,6 +1,6 @@
 package com.hft.engine;
 
-import com.hft.config.AppConfig;
+import com.hft.config.TradingSettings;
 import com.hft.metrics.Latency;
 import com.hft.model.OrderEnums.Side;
 import com.hft.model.OrderEnums.TimeInForce;
@@ -36,18 +36,20 @@ public final class OrderService {
     private final BalanceStore balances;
     private final SymbolFilters filters;
     private final RiskManager risk;
-    private final AppConfig config;
+    private final TradingSettings settings;
+
+    public RiskManager risk() { return risk; }
 
     private final Latency orderLatency = new Latency("Латентность ордера");
 
     public OrderService(ExchangeOrderApi rest, MarketDataStore market, BalanceStore balances,
-                        SymbolFilters filters, RiskManager risk, AppConfig config) {
+                        SymbolFilters filters, RiskManager risk, TradingSettings settings) {
         this.rest = rest;
         this.market = market;
         this.balances = balances;
         this.filters = filters;
         this.risk = risk;
-        this.config = config;
+        this.settings = settings;
     }
 
     // ======================= УДОБНЫЕ МЕТОДЫ =======================
@@ -165,7 +167,6 @@ public final class OrderService {
             // 5. Обновление локальных балансов
             if (result.executedQty() > 0) {
                 applyToBalances(result);
-                risk.onOrderFilled(result, refPrice);
             }
 
             log.info("{} -> {}", request, result);
@@ -196,7 +197,7 @@ public final class OrderService {
         String[] assets = BalanceStore.splitSymbol(request.symbol());
         String base = assets[0];
         String quote = assets[1];
-        double reserve = 1.0 - config.feeReservePercent() / 100.0;
+        double reserve = 1.0 - settings.get().feeReservePercent() / 100.0;
 
         double qty;
         if (request.side() == Side.BUY) {

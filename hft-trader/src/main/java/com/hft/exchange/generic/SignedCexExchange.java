@@ -1,8 +1,8 @@
-package com.hft.exchange.hyperliquid;
+package com.hft.exchange.generic;
 
-import com.hft.config.AppConfig;
 import com.hft.config.Credentials;
 import com.hft.config.ExchangeConfig;
+import com.hft.config.TradingSettings;
 import com.hft.engine.MarketDataHandler;
 import com.hft.engine.MeanReversionStrategy;
 import com.hft.engine.OrderService;
@@ -10,12 +10,10 @@ import com.hft.engine.TickPipeline;
 import com.hft.exchange.ExchangeGateway;
 import com.hft.exchange.catalog.ExchangeCatalog;
 import com.hft.exchange.catalog.ExchangeInfo;
-import com.hft.exchange.generic.BookFeed;
-import com.hft.exchange.generic.ExchangeSupport;
-import com.hft.exchange.generic.RequestStatsSource;
 import com.hft.paper.PaperOrderApi;
 import com.hft.risk.RiskManager;
 import com.hft.rest.ExchangeOrderApi;
+import com.hft.rest.SignedCexClient;
 import com.hft.store.BalanceStore;
 import com.hft.store.MarketDataStore;
 import com.hft.store.SymbolFilters;
@@ -27,14 +25,14 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Hyperliquid целиком, собран по тому же паттерну, что и {@link com.hft.exchange.bybit.BybitExchange}:
- * свои хранилища, REST-клиент, риск-менеджер, сервис ордеров, конвейер тиков и фид.
- * Перпы. Стакан, ордера (WS post), исполнения — по WebSocket, REST запасной.
- * LIVE включается только при HYPERLIQUID_API_KEY/_SECRET и HYPERLIQUID_LIVE=true, иначе — бумажный движок на живых данных.
+ * Биржа на клиенте {@link SignedCexClient} (OKX, Gate, MEXC, BingX, LBank, Hyperliquid, Uniswap V2):
+ * свои хранилища, клиент, риск-менеджер, сервис ордеров, конвейер тиков и фид.
+ * Биржи отличаются только клиентом — он передаётся фабрикой.
+ * LIVE включается только при ID_API_KEY/_SECRET и ID_LIVE=true, иначе — бумажный движок на живых данных.
  */
-public final class HyperliquidExchange implements ExchangeGateway, RequestStatsSource {
+public final class SignedCexExchange implements ExchangeGateway, RequestStatsSource {
 
-    private static final Logger log = LoggerFactory.getLogger(HyperliquidExchange.class);
+    private static final Logger log = LoggerFactory.getLogger(SignedCexExchange.class);
 
     private final ExchangeInfo info;
     private final ExchangeConfig config;
@@ -43,7 +41,13 @@ public final class HyperliquidExchange implements ExchangeGateway, RequestStatsS
     private final MarketDataStore market;
     private final BalanceStore balances;
     private final SymbolFilters filters;
-    private final HyperliquidRestClient rest;               // null в режиме PAPER
+    /** Создаёт клиент биржи для режима LIVE. */
+    @FunctionalInterface
+    public interface ClientFactory {
+        SignedCexClient create(ExchangeConfig config, Credentials credentials, SymbolFilters filters);
+    }
+
+    private final SignedCexClient rest;               // null в режиме PAPER
     private final PaperOrderApi paper;         // null в режиме LIVE
     private final RiskManager risk;
     private final OrderService orderService;
@@ -54,8 +58,8 @@ public final class HyperliquidExchange implements ExchangeGateway, RequestStatsS
     private final BookFeed feed;
     private volatile long lastRestSyncMs = System.currentTimeMillis();
 
-    public HyperliquidExchange(ExchangeConfig config, AppConfig appConfig) {
-        this.info = ExchangeCatalog.find("hyperliquid").orElseThrow();
+    public SignedCexExchange(String id, ExchangeConfig config, TradingSettings settings, ClientFactory clientFactory) {
+        this.info = ExchangeCatalog.find(id).orElseThrow();
         this.config = config;
         this.credentials = Credentials.fromEnv(info.id());
 
@@ -65,22 +69,23 @@ public final class HyperliquidExchange implements ExchangeGateway, RequestStatsS
         config.symbols().forEach(market::register);
 
         boolean live = ExchangeSupport.isLive(info, credentials);
-        this.rest = live ? new HyperliquidRestClient(config, credentials, filters) : null;
+        this.rest = live ? clientFactory.create(config, credentials, filters) : null;
         this.paper = live ? null : new PaperOrderApi(market, balances, info.makerFeePct(), info.takerFeePct());
         ExchangeOrderApi api = live ? rest : paper;
         if (paper != null) config.symbols().forEach(s -> ExchangeSupport.putDefaultFilter(filters, s));
 
-        this.risk = new RiskManager(appConfig, market, info.id());
-        this.orderService = new OrderService(api, market, balances, filters, risk, appConfig);
+        this.risk = new RiskManager(settings, market, info.id());
+        this.orderService = new OrderService(api, market, balances, filters, risk, settings);
 
         this.dataHandler = new MarketDataHandler(market);
-        this.strategy = new MeanReversionStrategy(market, orderService, info.id());
+        this.strategy = new MeanReversionStrategy(market, orderService, info.id(), settings);
         this.pipeline = new TickPipeline(dataHandler, strategy);
         this.feed = ExchangeSupport.newFeed(info, config, market, pipeline, paper, this::onFeedGaveUp);
         strategy.setRealtimeSource(feed::isRealtime);          // на REST-запасе новых входов нет
 
         if (!credentials.isPresent()) {
-            log.warn("[{}] API-ключи не заданы (HYPERLIQUID_API_KEY/HYPERLIQUID_API_SECRET) — только сбор данных и бумажная торговля", info.id());
+            String env = info.id().toUpperCase();
+            log.warn("[{}] API-ключи не заданы ({}_API_KEY/{}_API_SECRET) — только сбор данных и бумажная торговля", info.id(), env, env);
         }
     }
 

@@ -55,7 +55,7 @@ public class UniswapClientCheck {
       byte[] bt=("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":"+res+"}").getBytes(); ex.sendResponseHeaders(200,bt.length); ex.getResponseBody().write(bt); ex.close(); });
     srv.start(); String url="http://127.0.0.1:"+srv.getAddress().getPort();
     var f = new SymbolFilters(); var tc = new TC();
-    var c = new UniswapV2Client(new ExchangeConfig("uniswapv2",true,false,url,"",5000,List.of("WETHUSDC"),20,100), new Credentials("0xaa","key"), f, tc,
+    var c = new UniswapV2Client(new ExchangeConfig("uniswapv2", false,url,"",5000,List.of("WETHUSDC"),20,100), new Credentials("0xaa","key"), f, tc,
         ROUTER, "WETH="+WETH+":18;USDC="+USDC+":6", "0.5");
     c.loadFilters(List.of("WETHUSDC"));
     // покупка на 100 USDC

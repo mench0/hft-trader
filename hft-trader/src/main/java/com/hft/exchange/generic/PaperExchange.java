@@ -1,6 +1,6 @@
 package com.hft.exchange.generic;
 
-import com.hft.config.AppConfig;
+import com.hft.config.TradingSettings;
 import com.hft.config.ExchangeConfig;
 import com.hft.engine.MarketDataHandler;
 import com.hft.engine.MeanReversionStrategy;
@@ -45,7 +45,7 @@ public final class PaperExchange implements ExchangeGateway, RequestStatsSource 
     private final TickPipeline pipeline;
     private final BookFeed feed;
 
-    public PaperExchange(ExchangeInfo info, ExchangeConfig config, AppConfig appConfig) {
+    public PaperExchange(ExchangeInfo info, ExchangeConfig config, TradingSettings settings) {
         this.info = info;
         this.config = config;
 
@@ -57,11 +57,11 @@ public final class PaperExchange implements ExchangeGateway, RequestStatsSource 
         this.paper = new PaperOrderApi(market, balances, info.makerFeePct(), info.takerFeePct());
         config.symbols().forEach(s -> ExchangeSupport.putDefaultFilter(filters, s));
 
-        this.risk = new RiskManager(appConfig, market, info.id());
-        this.orderService = new OrderService(paper, market, balances, filters, risk, appConfig);
+        this.risk = new RiskManager(settings, market, info.id());
+        this.orderService = new OrderService(paper, market, balances, filters, risk, settings);
 
         this.dataHandler = new MarketDataHandler(market);
-        this.strategy = new MeanReversionStrategy(market, orderService, info.id());
+        this.strategy = new MeanReversionStrategy(market, orderService, info.id(), settings);
         this.pipeline = new TickPipeline(dataHandler, strategy);
         this.feed = ExchangeSupport.newFeed(info, config, market, pipeline, paper, this::onFeedGaveUp);
         strategy.setRealtimeSource(feed::isRealtime);          // на REST-запасе новых входов нет

@@ -1,8 +1,8 @@
 package com.hft.risk;
 
-import com.hft.config.AppConfig;
+import com.hft.config.TradingParams;
+import com.hft.config.TradingSettings;
 import com.hft.model.OrderRequest;
-import com.hft.model.OrderResult;
 import com.hft.store.MarketDataStore;
 import com.hft.store.OrderBook;
 import org.slf4j.Logger;
@@ -32,12 +32,14 @@ public final class RiskManager {
 
     private static final Logger log = LoggerFactory.getLogger(RiskManager.class);
 
-    private final AppConfig config;
+    private final TradingSettings settings;
     private final MarketDataStore market;
     private final String exchangeId;
 
     private final AtomicBoolean killSwitch = new AtomicBoolean(false);
     private final DoubleAdder dailyPnl = new DoubleAdder();
+    /** Номер суток UTC, к которым относится dailyPnl: при смене суток счётчик обнуляется. */
+    private volatile long pnlDay = utcDay(System.currentTimeMillis());
     private final AtomicInteger ordersThisMinute = new AtomicInteger();
     private final AtomicLong minuteWindowStart = new AtomicLong(System.currentTimeMillis());
     private final AtomicLong rejectedCount = new AtomicLong();
@@ -45,8 +47,8 @@ public final class RiskManager {
 
     private volatile String lastRejectReason = "";
 
-    public RiskManager(AppConfig config, MarketDataStore market, String exchangeId) {
-        this.config = config;
+    public RiskManager(TradingSettings settings, MarketDataStore market, String exchangeId) {
+        this.settings = settings;
         this.market = market;
         this.exchangeId = exchangeId;
     }
@@ -62,37 +64,38 @@ public final class RiskManager {
      * Порядок проверок от дешёвых к дорогим.
      */
     public Decision check(OrderRequest request, double resolvedQty, double estimatedPrice) {
+        TradingParams p = settings.get();
         if (killSwitch.get()) {
             return reject("Торговля остановлена (kill switch)");
         }
 
-        if (!config.tradingEnabled()) {
+        if (!p.tradingEnabled()) {
             return reject("Торговля выключена в конфигурации");
         }
 
         // Лимит частоты — защита от бага в стратегии, который начнёт слать ордера в цикле
-        if (!allowRate()) {
-            return reject("Превышен лимит " + config.maxOrdersPerMinute() + " ордеров в минуту");
+        if (!allowRate(p.maxOrdersPerMinute())) {
+            return reject("Превышен лимит " + p.maxOrdersPerMinute() + " ордеров в минуту");
         }
 
         // Дневной убыток
-        double pnl = dailyPnl.sum();
-        if (pnl < -config.maxDailyLossQuote()) {
+        double pnl = dailyPnl();
+        if (pnl < -p.maxDailyLossQuote()) {
             killSwitch.set(true);
             log.error("[{}] Достигнут дневной лимит убытка {}. Торговля остановлена.", exchangeId, pnl);
             return reject("Достигнут дневной лимит убытка");
         }
 
         // Свежесть данных: торговать по протухшему стакану опасно
-        if (!market.isFresh(request.symbol(), 5000)) {
+        if (!market.isFresh(request.symbol(), p.maxDataAgeMs())) {
             return reject("Нет свежих данных по " + request.symbol());
         }
 
         // Размер позиции в деньгах
         double notional = resolvedQty * estimatedPrice;
-        if (notional > config.maxPositionQuote()) {
+        if (notional > p.maxPositionQuote()) {
             return reject(String.format("Размер позиции %.2f превышает лимит %.2f",
-                    notional, config.maxPositionQuote()));
+                    notional, p.maxPositionQuote()));
         }
 
         // Проскальзывание для рыночных ордеров
@@ -101,10 +104,10 @@ public final class RiskManager {
             if (book != null && book.isReady()) {
                 boolean isBuy = request.side() == com.hft.model.OrderEnums.Side.BUY;
                 double slip = book.estimateSlippagePercent(resolvedQty, isBuy);
-                if (!Double.isNaN(slip) && slip > config.maxSlippagePercent()) {
+                if (!Double.isNaN(slip) && slip > p.maxSlippagePercent()) {
                     return reject(String.format(
                             "Ожидаемое проскальзывание %.3f%% превышает лимит %.3f%% — стакан слишком тонкий",
-                            slip, config.maxSlippagePercent()));
+                            slip, p.maxSlippagePercent()));
                 }
                 if (Double.isNaN(slip)) {
                     return reject("В стакане недостаточно объёма для этого ордера");
@@ -123,7 +126,7 @@ public final class RiskManager {
         return Decision.deny(reason);
     }
 
-    private boolean allowRate() {
+    private boolean allowRate(int maxPerMinute) {
         long now = System.currentTimeMillis();
         long windowStart = minuteWindowStart.get();
         if (now - windowStart > 60_000) {
@@ -131,22 +134,30 @@ public final class RiskManager {
                 ordersThisMinute.set(0);
             }
         }
-        return ordersThisMinute.incrementAndGet() <= config.maxOrdersPerMinute();
+        return ordersThisMinute.incrementAndGet() <= maxPerMinute;
     }
 
-    /** Учёт результата сделки. Положительное значение — прибыль. */
+    /** Учёт реализованного результата сделки (после комиссий). Положительное значение — прибыль. */
     public void recordPnl(double quotePnl) {
+        rollDay();
         dailyPnl.add(quotePnl);
     }
 
-    /** Учёт исполненного ордера для грубой оценки PnL по средней цене. */
-    public void onOrderFilled(OrderResult result, double referencePrice) {
-        if (result.executedQty() <= 0 || referencePrice <= 0) return;
-        double diff = result.side() == com.hft.model.OrderEnums.Side.BUY
-                ? (referencePrice - result.avgPrice())
-                : (result.avgPrice() - referencePrice);
-        recordPnl(diff * result.executedQty());
+    /** В 00:00 UTC дневной результат начинается с нуля. Kill switch при этом не снимается. */
+    private void rollDay() {
+        long day = utcDay(System.currentTimeMillis());
+        if (day != pnlDay) {
+            synchronized (this) {
+                if (day != pnlDay) {
+                    dailyPnl.reset();
+                    pnlDay = day;
+                    log.info("[{}] Новые сутки UTC — дневной PnL сброшен", exchangeId);
+                }
+            }
+        }
     }
+
+    private static long utcDay(long ms) { return ms / 86_400_000L; }
 
     // ---------- Управление ----------
 
@@ -165,13 +176,7 @@ public final class RiskManager {
         return killSwitch.get();
     }
 
-    /** Сброс дневных счётчиков — вызывать в начале суток. */
-    public void resetDaily() {
-        dailyPnl.reset();
-        log.info("Дневные счётчики сброшены");
-    }
-
-    public double dailyPnl() { return dailyPnl.sum(); }
+    public double dailyPnl() { rollDay(); return dailyPnl.sum(); }
     public long rejectedCount() { return rejectedCount.get(); }
     public long acceptedCount() { return acceptedCount.get(); }
     public String lastRejectReason() { return lastRejectReason; }

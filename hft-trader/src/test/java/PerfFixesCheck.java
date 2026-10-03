@@ -41,8 +41,7 @@ public class PerfFixesCheck {
     ck("no torn reads across threads", torn == 0 && reads > 100_000);
 
     // ---- стратегия не ждёт биржу
-    var ctor = AppConfig.class.getDeclaredConstructor(List.class); ctor.setAccessible(true);
-    AppConfig app = ctor.newInstance(List.of()); app.setTradingEnabled(true);
+    var app = new TradingSettings(TradingParams.DEFAULTS.with(Map.of("tradingEnabled", "true")));
     MarketDataStore market = new MarketDataStore(20, 20); market.register("BTCUSDT");
     BalanceStore bal = new BalanceStore(); bal.set("USDT", 1000, 0);
     SymbolFilters f = new SymbolFilters(); f.put("BTCUSDT", new SymbolFilters.Filter(0, 1e12, 1e-6, 0, 1e12, 1e-8, 5.0));
@@ -53,7 +52,7 @@ public class PerfFixesCheck {
                           try { return m.invoke(paper, args); } catch (InvocationTargetException e) { throw e.getCause(); } });
     RiskManager risk = new RiskManager(app, market, "test");
     OrderService os = new OrderService(slow, market, bal, f, risk, app);
-    MeanReversionStrategy mr = new MeanReversionStrategy(market, os, "test");
+    MeanReversionStrategy mr = new MeanReversionStrategy(market, os, "test", app);
     mr.enable();
     Runnable book = () -> { long now = System.currentTimeMillis(); market.book("BTCUSDT").applySnapshot(new double[]{99.97,99.96,99.95}, new double[]{50,50,50}, 3, new double[]{100.0,100.01,100.02}, new double[]{10,10,10}, 3, now, now); };
     book.run();
@@ -75,7 +74,7 @@ public class PerfFixesCheck {
 
     // на REST-запасе (не реальное время) — новых входов нет
     MarketDataStore m2 = new MarketDataStore(20, 20); m2.register("BTCUSDT");
-    MeanReversionStrategy mr2 = new MeanReversionStrategy(m2, new OrderService(slow, m2, bal, f, new RiskManager(app, m2, "t2"), app), "t2");
+    MeanReversionStrategy mr2 = new MeanReversionStrategy(m2, new OrderService(slow, m2, bal, f, new RiskManager(app, m2, "t2"), app), "t2", app);
     mr2.enable(); mr2.setRealtimeSource(() -> false);
     long now = System.currentTimeMillis();
     m2.book("BTCUSDT").applySnapshot(new double[]{99.97}, new double[]{50}, 1, new double[]{100.0}, new double[]{10}, 1, now, now);

@@ -2,13 +2,7 @@ import com.hft.config.*;
 import com.hft.exchange.ExchangeGateway;
 import com.hft.exchange.catalog.*;
 import com.hft.exchange.generic.*;
-import com.hft.exchange.okx.OkxExchange;
-import com.hft.exchange.gate.GateExchange;
-import com.hft.exchange.hyperliquid.HyperliquidExchange;
-import com.hft.exchange.mexc.MexcExchange;
-import com.hft.exchange.bingx.BingxExchange;
-import com.hft.exchange.lbank.LbankExchange;
-import com.hft.exchange.uniswap.UniswapV2Exchange;
+import com.hft.exchange.ExchangeFactory;
 import java.util.*;
 import java.util.function.BooleanSupplier;
 
@@ -19,13 +13,12 @@ public class ExchangeLifecycleCheck {
   static boolean await(BooleanSupplier c, long ms) throws Exception { long t=System.currentTimeMillis()+ms; while(System.currentTimeMillis()<t){ if(c.getAsBoolean()) return true; Thread.sleep(20);} return c.getAsBoolean(); }
 
   public static void main(String[] a) throws Exception {
-    var ctor = AppConfig.class.getDeclaredConstructor(List.class); ctor.setAccessible(true);
-    AppConfig app = ctor.newInstance(List.of());
+    var app = new TradingSettings(TradingParams.DEFAULTS);
     // OKX: WS-стакан через MiniWsServer
     try (var ws = new MiniWsServer()) {
       ws.onText = (c, t) -> { if (t.contains("\"subscribe\"")) c.text("{\"arg\":{\"channel\":\"books\",\"instId\":\"BTC-USDT\"},\"action\":\"snapshot\",\"data\":[{\"asks\":[[\"101\",\"2\"]],\"bids\":[[\"99\",\"3\"]],\"ts\":\"1\"}]}"); };
-      var cfg = new ExchangeConfig("okx", true, false, "http://127.0.0.1:9", ws.url(), 5000, List.of("BTCUSDT"), 20, 100);
-      ExchangeGateway gw = new OkxExchange(cfg, app);
+      var cfg = new ExchangeConfig("okx", false, "http://127.0.0.1:9", ws.url(), 5000, List.of("BTCUSDT"), 20, 100);
+      ExchangeGateway gw = ExchangeFactory.create("okx", cfg, app);
       ck("id", gw.id().equals("okx"));
       gw.start();
       var b = gw.marketData().book("BTCUSDT");
@@ -49,18 +42,16 @@ public class ExchangeLifecycleCheck {
     List<ExchangeGateway> all = new ArrayList<>();
     String[][] defs = {{"gate","BTCUSDT"},{"mexc","BTCUSDT"},{"bingx","BTCUSDT"},{"lbank","BTCUSDT"},{"hyperliquid","BTCUSDC"}};
     for (String[] d : defs) {
-      var cfg = new ExchangeConfig(d[0], true, false, "http://127.0.0.1:9", "ws://127.0.0.1:9/ws", 5000, List.of(d[1]), 20, 100);
-      ExchangeGateway g = switch (d[0]) {
-        case "gate" -> new GateExchange(cfg, app); case "mexc" -> new MexcExchange(cfg, app); case "bingx" -> new BingxExchange(cfg, app);
-        case "lbank" -> new LbankExchange(cfg, app); default -> new HyperliquidExchange(cfg, app); };
+      var cfg = new ExchangeConfig(d[0], false, "http://127.0.0.1:9", "ws://127.0.0.1:9/ws", 5000, List.of(d[1]), 20, 100);
+      ExchangeGateway g = ExchangeFactory.create(d[0], cfg, app);
       g.start();
       ck(d[0]+" starts paper", g.id().equals(d[0]) && g.balances().total(d[1].endsWith("USDC")?"USDC":"USDT")==1000 && g instanceof RequestStatsSource r && !r.isLive());
       g.stop();
     }
-    var dy = new PaperExchange(ExchangeCatalog.find("dydx").get(), new ExchangeConfig("dydx", true, false, "http://127.0.0.1:9", "ws://127.0.0.1:9/ws", 5000, List.of("BTCUSD"), 20, 100), app);
+    var dy = new PaperExchange(ExchangeCatalog.find("dydx").get(), new ExchangeConfig("dydx", false, "http://127.0.0.1:9", "ws://127.0.0.1:9/ws", 5000, List.of("BTCUSD"), 20, 100), app);
     dy.start(); ck("dydx paper starts", dy.id().equals("dydx") && dy.balances().total("USD")==1000); dy.stop();
-    var uni = new UniswapV2Exchange(new ExchangeConfig("uniswapv2", true, false, "http://127.0.0.1:9", "ws://127.0.0.1:9/ws", 5000, List.of("WETHUSDC"), 20, 100), app);
-    ck("uniswap constructs in paper", uni.id().equals("uniswapv2") && !uni.isLive());
+    var uni = ExchangeFactory.create("uniswapv2", new ExchangeConfig("uniswapv2", false, "http://127.0.0.1:9", "ws://127.0.0.1:9/ws", 5000, List.of("WETHUSDC"), 20, 100), app);
+    ck("uniswap constructs in paper", uni.id().equals("uniswapv2") && uni instanceof RequestStatsSource ur && !ur.isLive());
     System.out.println("pass="+pass+" fail="+fail); System.exit(fail==0?0:1);
   }
 }

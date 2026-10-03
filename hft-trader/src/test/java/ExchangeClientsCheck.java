@@ -23,7 +23,7 @@ public class ExchangeClientsCheck {
     });
     s.start(); return s;
   }
-  static ExchangeConfig cfg(String id, String url){ return new ExchangeConfig(id,true,false,url,"",5000,List.of("BTCUSDT"),20,100); }
+  static ExchangeConfig cfg(String id, String url){ return new ExchangeConfig(id, false,url,"",5000,List.of("BTCUSDT"),20,100); }
   static SymbolFilters filt(){ var f=new SymbolFilters(); f.put("BTCUSDT", new SymbolFilters.Filter(0.0001,1e9,0.0001,0,1e9,0.01,1)); return f; }
   static Credentials cr = new Credentials("KEY","SECRET");
 

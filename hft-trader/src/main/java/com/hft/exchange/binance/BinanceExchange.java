@@ -1,6 +1,6 @@
 package com.hft.exchange.binance;
 
-import com.hft.config.AppConfig;
+import com.hft.config.TradingSettings;
 import com.hft.config.Credentials;
 import com.hft.config.ExchangeConfig;
 import com.hft.engine.MarketDataHandler;
@@ -43,7 +43,7 @@ public final class BinanceExchange implements ExchangeGateway {
     private final TickPipeline pipeline;
     private final BinanceMarketDataFeed feed;
 
-    public BinanceExchange(ExchangeConfig config, AppConfig appConfig) {
+    public BinanceExchange(ExchangeConfig config, TradingSettings settings) {
         this.config = config;
         this.credentials = Credentials.fromEnv(config.id());
 
@@ -53,11 +53,11 @@ public final class BinanceExchange implements ExchangeGateway {
         config.symbols().forEach(market::register);
 
         this.rest = new BinanceRestClient(config, credentials, filters);
-        this.risk = new RiskManager(appConfig, market, config.id());
-        this.orderService = new OrderService(rest, market, balances, filters, risk, appConfig);
+        this.risk = new RiskManager(settings, market, config.id());
+        this.orderService = new OrderService(rest, market, balances, filters, risk, settings);
 
         this.dataHandler = new MarketDataHandler(market);
-        this.strategy = new MeanReversionStrategy(market, orderService, "binance");
+        this.strategy = new MeanReversionStrategy(market, orderService, "binance", settings);
         this.pipeline = new TickPipeline(dataHandler, strategy);
         this.feed = new BinanceMarketDataFeed(config, market, pipeline);
 

@@ -20,8 +20,8 @@ import java.util.concurrent.TimeUnit;
  * если через админку раньше был включён автозапуск
  * (POST /control/autostart?enabled=true), то при рестарте процесса
  * биржи, выбранные на момент последнего сохранения состояния, поднимутся
- * сами. Все настройки (выбор бирж/тикеров, параметры риска и стратегии)
- * читаются из {@code data/state.json} — файл создаётся и обновляется
+ * сами. Все настройки (выбор бирж/тикеров, торговые параметры каждой биржи)
+ * читаются из {@code data/state.db} (SQLite) — файл создаётся и обновляется
  * автоматически при любом изменении через API.
  *
  * Без автозапуска — как и раньше, приложение просто поднимает админку
@@ -100,7 +100,7 @@ public final class Main {
             log.info("Остановка...");
             for (ExchangeGateway gw : controller.active().values()) {
                 gw.strategy().disable();
-                if (config.tradingEnabled()) {
+                if (controller.params(gw.id()).tradingEnabled()) {
                     try { gw.strategy().closeAll(); }
                     catch (Exception e) { log.error("[{}] Не удалось закрыть позиции", gw.id(), e); }
                 }

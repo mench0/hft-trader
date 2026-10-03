@@ -7,7 +7,6 @@ import com.hft.config.AppConfig;
 import com.hft.control.BotController;
 import com.hft.exchange.ExchangeGateway;
 import com.hft.metrics.PrometheusExporter;
-import com.hft.persistence.PersistedState;
 import com.hft.store.OrderBook;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -35,7 +34,7 @@ import java.util.concurrent.Executors;
  *   2. POST /control/select?exchange=binance&symbols=BTCUSDT,ETHUSDT
  *   3. POST /control/select?exchange=bybit&symbols=BTCUSDT
  *   4. POST /control/deselect?exchange=bybit
- *   5. POST /risk?maxPositionQuote=50&maxDailyLossQuote=20&...
+ *   5. POST /exchange/params?exchange=binance&maxPositionQuote=50&entryZ=2.5&...
  *   6. POST /control/start                            — поднять WS/REST для выбранных бирж
  *   7. POST /trading/start                             — включить реальную отправку ордеров
  *   8. POST /trading/stop / /control/stop / /trading/panic
@@ -83,8 +82,7 @@ public final class AdminServer {
         route("/control/autostart", this::handleAutoStart);
 
         // Параметры — всё, что можно менять без пересборки
-        route("/risk", this::handleRisk);
-        route("/strategy/params", this::handleStrategyParams);
+        route("/exchange/params", this::handleExchangeParams);
 
         // Торговля поверх уже запущенных подключений
         route("/trading/start", this::handleTradingStart);
@@ -220,7 +218,8 @@ public final class AdminServer {
         });
         ArrayNode supported = root.putArray("поддерживаемые_биржи");
         controller.supportedExchanges().forEach(supported::add);
-        root.put("торговля_включена", config.tradingEnabled());
+        ObjectNode trading = root.putObject("торговля_включена");
+        controller.selection().keySet().forEach(exId -> trading.put(exId, controller.params(exId).tradingEnabled()));
         send(ex, 200, root);
     }
 
@@ -286,65 +285,51 @@ public final class AdminServer {
         send(ex, 200, ok("Бот остановлен, выбор бирж/символов сохранён"));
     }
 
-    // ======================= ПАРАМЕТРЫ РИСКА =======================
+    // ======================= ТОРГОВЫЕ ПАРАМЕТРЫ =======================
 
     /**
-     * GET  /risk               — текущие значения
-     * POST /risk?maxPositionQuote=50&maxDailyLossQuote=20&maxSlippagePercent=0.2
-     *            &feeReservePercent=0.2&maxOrdersPerMinute=20&tradingEnabled=true
-     * Любой параметр можно передать отдельно, остальные не меняются.
+     * Торговые параметры каждой биржи (риск, стратегия, размеры стакана/окна цен).
+     *
+     * GET  /exchange/params                        — параметры всех выбранных и запущенных бирж
+     * GET  /exchange/params?exchange=bybit         — одной биржи
+     * POST /exchange/params?exchange=bybit&maxPositionQuote=50&maxDailyLossQuote=20&entryZ=2.5
+     *
+     * Любой параметр можно передать отдельно, остальные не меняются. Значение вне допустимого
+     * диапазона — ошибка 400, и тогда не меняется ничего. Работающая биржа подхватывает новые
+     * значения на следующем тике; bookDepth и priceWindow — после /control/stop и /control/start.
      */
-    private void handleRisk(HttpExchange ex) throws IOException {
+    private void handleExchangeParams(HttpExchange ex) throws IOException {
+        Map<String, String> q = query(ex);
+        String exId = q.get("exchange");
         if ("POST".equalsIgnoreCase(ex.getRequestMethod())) {
-            Map<String, String> q = query(ex);
-            if (q.containsKey("maxPositionQuote")) config.setMaxPositionQuote(Double.parseDouble(q.get("maxPositionQuote")));
-            if (q.containsKey("maxDailyLossQuote")) config.setMaxDailyLossQuote(Double.parseDouble(q.get("maxDailyLossQuote")));
-            if (q.containsKey("maxSlippagePercent")) config.setMaxSlippagePercent(Double.parseDouble(q.get("maxSlippagePercent")));
-            if (q.containsKey("feeReservePercent")) config.setFeeReservePercent(Double.parseDouble(q.get("feeReservePercent")));
-            if (q.containsKey("maxOrdersPerMinute")) config.setMaxOrdersPerMinute(Integer.parseInt(q.get("maxOrdersPerMinute")));
-            if (q.containsKey("tradingEnabled")) config.setTradingEnabled(Boolean.parseBoolean(q.get("tradingEnabled")));
-            controller.persistNow();
-            log.info("Параметры риска изменены через админку: {}", q);
+            if (exId == null || exId.isBlank()) throw new IllegalArgumentException("Не указан обязательный параметр: exchange");
+            Map<String, String> updates = new HashMap<>(q);
+            updates.remove("exchange");
+            var known = com.hft.config.TradingParams.DEFAULTS.toStringMap().keySet();
+            for (String k : updates.keySet()) {
+                if (!known.contains(k)) throw new IllegalArgumentException("Неизвестный параметр: " + k + ". Доступны: " + known);
+            }
+            controller.updateParams(exId, updates);
+            ObjectNode root = paramsNode(exId);
+            boolean restart = controller.active().containsKey(exId)
+                    && updates.keySet().stream().anyMatch(com.hft.config.TradingParams::requiresRestart);
+            if (restart) root.put("внимание", "bookDepth/priceWindow применятся после /control/stop и /control/start");
+            send(ex, 200, root);
+            return;
         }
-
+        if (exId != null && !exId.isBlank()) { send(ex, 200, paramsNode(exId)); return; }
         ObjectNode root = mapper.createObjectNode();
-        root.put("maxPositionQuote", config.maxPositionQuote());
-        root.put("maxDailyLossQuote", config.maxDailyLossQuote());
-        root.put("maxSlippagePercent", config.maxSlippagePercent());
-        root.put("feeReservePercent", config.feeReservePercent());
-        root.put("maxOrdersPerMinute", config.maxOrdersPerMinute());
-        root.put("tradingEnabled", config.tradingEnabled());
+        java.util.Set<String> ids = new java.util.LinkedHashSet<>(controller.selection().keySet());
+        ids.addAll(controller.active().keySet());
+        for (String id : ids) root.set(id, paramsNode(id));
         send(ex, 200, root);
     }
 
-    private void handleStrategyParams(HttpExchange ex) throws IOException {
-        Map<String, String> q = query(ex);
-        ExchangeGateway gw = resolveActive(q);
-        String exId = gw.id();
-        var strategy = gw.strategy();
-
-        // Текущие значения — база, поверх которой применяем то, что прислали
-        var current = controller.strategyParamsFor(exId);
-        double entryZ = q.containsKey("entryZ") ? Double.parseDouble(q.get("entryZ")) : current.entryZ();
-        double exitZ = q.containsKey("exitZ") ? Double.parseDouble(q.get("exitZ")) : current.exitZ();
-        double stopLoss = q.containsKey("stopLoss") ? Double.parseDouble(q.get("stopLoss")) : current.stopLossPercent();
-        double minImb = q.containsKey("minImbalance") ? Double.parseDouble(q.get("minImbalance")) : current.minImbalance();
-        double orderQuote = q.containsKey("orderQuote") ? Double.parseDouble(q.get("orderQuote")) : current.orderQuote();
-
-        var updated = new PersistedState.StrategyParams(entryZ, exitZ, stopLoss, minImb, orderQuote);
-        controller.applyStrategyParams(exId, updated); // применяет к живой стратегии и сохраняет на диск
-
-        ObjectNode currentNode = mapper.createObjectNode();
-        currentNode.put("entryZ", strategy.entryZ());
-        currentNode.put("exitZ", strategy.exitZ());
-        currentNode.put("stopLossPercent", strategy.stopLossPercent());
-        currentNode.put("minImbalance", strategy.minImbalance());
-        currentNode.put("orderQuote", strategy.orderQuote());
-
-        ObjectNode root = mapper.createObjectNode();
-        root.put("биржа", exId);
-        root.set("текущие", currentNode);
-        send(ex, 200, root);
+    private ObjectNode paramsNode(String exId) {
+        ObjectNode n = mapper.createObjectNode();
+        n.put("биржа", exId);
+        n.set("параметры", mapper.valueToTree(controller.params(exId)));
+        return n;
     }
 
     // ======================= ТОРГОВЛЯ =======================
@@ -359,16 +344,15 @@ public final class AdminServer {
     private void handleTradingStop(HttpExchange ex) throws IOException {
         requirePost(ex);
         String target = query(ex).getOrDefault("exchange", "all");
-        controller.stopTrading(target);
+        controller.stopTrading(target, "Остановлено через админку");
         send(ex, 200, ok("Торговля остановлена"));
     }
 
     private void handlePanic(HttpExchange ex) throws IOException {
         requirePost(ex);
-        config.setTradingEnabled(false);
-        controller.persistNow();
-        for (ExchangeGateway gw : controller.resolveTargets(query(ex).getOrDefault("exchange", "all"))) {
-            gw.strategy().disable();
+        String target = query(ex).getOrDefault("exchange", "all");
+        controller.stopTrading(target, "Аварийная остановка через админку");
+        for (ExchangeGateway gw : controller.resolveTargets(target)) {
             gw.orders().panicClose("Аварийная остановка через админку");
         }
         send(ex, 200, ok("Все ордера отменены, торговля остановлена"));
@@ -379,10 +363,10 @@ public final class AdminServer {
     private void handleStatus(HttpExchange ex) throws IOException {
         ObjectNode root = mapper.createObjectNode();
         root.put("бот_запущен", controller.isRunning());
-        root.put("торговля_включена", config.tradingEnabled());
         for (var entry : controller.active().entrySet()) {
             ExchangeGateway gw = entry.getValue();
             ObjectNode node = root.putObject(entry.getKey());
+            node.put("торговля_включена", controller.params(entry.getKey()).tradingEnabled());
             node.put("подключение", gw.isConnected());
             node.put("получено_сообщений", gw.messageCount());
             node.put("kill_switch", gw.risk().isStopped());
