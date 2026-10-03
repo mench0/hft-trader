@@ -9,6 +9,7 @@ import com.hft.model.OrderEnums.TimeInForce;
 import com.hft.model.OrderEnums.Type;
 import com.hft.model.OrderResult;
 import com.hft.rest.ExchangeOrderApi;
+import com.hft.rest.RateLimited;
 import com.hft.store.SymbolFilters;
 import com.hft.util.Numbers;
 import com.hft.util.Signer;
