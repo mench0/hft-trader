@@ -13,6 +13,7 @@ import com.hft.store.SymbolFilters;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.hft.util.BoundedMap;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -20,6 +21,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -51,8 +53,11 @@ public abstract class SignedCexClient implements ExchangeOrderApi {
     protected final PacedLimiter callLimiter;
     protected final PacedLimiter orderLimiter;
 
+    /** Сколько последних ордеров помнить: состояния и соответствие id. Старые вытесняются, иначе карты росли бы всё время работы. */
+    protected static final int MAX_TRACKED_ORDERS = 10_000;
+
     /** Последнее известное состояние ордеров из приватного WS-потока (orderId -> результат). */
-    protected final Map<Long, OrderResult> streamed = new ConcurrentHashMap<>();
+    protected final Map<Long, OrderResult> streamed = BoundedMap.create(MAX_TRACKED_ORDERS);
     /** Приватный WS-канал (ордера/события); null — только REST. */
     protected volatile WsRpcChannel wsChannel;
     /** Исход WS-запроса неизвестен: счётчик для метрик. */
@@ -67,8 +72,15 @@ public abstract class SignedCexClient implements ExchangeOrderApi {
 
     // числовой id интерфейса <-> строковый id биржи
     private static final long ID_BASE = 9_000_000_000_000_000_000L;
-    private final Map<String, Long> toLong = new ConcurrentHashMap<>();
-    private final Map<Long, String> toVenue = new ConcurrentHashMap<>();
+    // обе карты меняются вместе под замком toLong; при вытеснении старого id убирается и обратная запись
+    private final Map<Long, String> toVenue = new HashMap<>();
+    private final Map<String, Long> toLong = new LinkedHashMap<>(256, 0.75f, false) {
+        @Override protected boolean removeEldestEntry(Map.Entry<String, Long> e) {
+            if (size() <= MAX_TRACKED_ORDERS) return false;
+            toVenue.remove(e.getValue());
+            return true;
+        }
+    };
     private final AtomicLong idSeq = new AtomicLong();
 
     protected SignedCexClient(String exchangeId, ExchangeConfig config, Credentials credentials, SymbolFilters filters,
@@ -185,14 +197,19 @@ public abstract class SignedCexClient implements ExchangeOrderApi {
 
     protected long registerId(String venueId) {
         try { return Long.parseLong(venueId); } catch (NumberFormatException ignore) { /* строковый id */ }
-        return toLong.computeIfAbsent(venueId, k -> {
+        synchronized (toLong) {
+            Long known = toLong.get(venueId);
+            if (known != null) return known;
             long n = ID_BASE + idSeq.incrementAndGet();
-            toVenue.put(n, k);
+            toVenue.put(n, venueId);
+            toLong.put(venueId, n);
             return n;
-        });
+        }
     }
 
-    protected String venueId(long id) { return toVenue.getOrDefault(id, Long.toString(id)); }
+    protected String venueId(long id) {
+        synchronized (toLong) { return toVenue.getOrDefault(id, Long.toString(id)); }
+    }
 
     // ------------------------------------------------------------ HTTP
 

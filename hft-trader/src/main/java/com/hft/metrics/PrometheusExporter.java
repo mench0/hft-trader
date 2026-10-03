@@ -17,18 +17,24 @@ import com.hft.store.PriceWindow;
  * data source. Никакой отправки наружу из бота не требуется:
  * prometheus.yml просто указывает scrape_configs -> targets:
  * ["<host бота>:8080"], path: /metrics.
+ *
+ * История хранится только в Prometheus: бот отдаёт текущие значения и ничего не накапливает.
+ * Метрики JVM (heap, GC, потоки) нужны, чтобы видеть в Grafana, что память не растёт.
  */
 public final class PrometheusExporter {
 
     public String render(BotController controller) {
         StringBuilder sb = new StringBuilder(4096);
 
+        jvm(sb);
+
         help(sb, "hft_connected", "1 если WebSocket-соединение с биржей активно");
-        help(sb, "hft_messages_total", "Всего сообщений получено с биржи");
+        help(sb, "hft_trading_enabled", "1 если торговля на бирже включена в параметрах");
+        counter(sb, "hft_messages_total", "Всего сообщений получено с биржи");
         help(sb, "hft_kill_switch", "1 если торговля остановлена риск-менеджером");
-        help(sb, "hft_orders_accepted_total", "Ордеров прошло проверку риск-менеджера");
-        help(sb, "hft_orders_rejected_total", "Ордеров отклонено риск-менеджером");
-        help(sb, "hft_daily_pnl_quote", "Дневной PnL в котируемой валюте");
+        counter(sb, "hft_orders_accepted_total", "Ордеров прошло проверку риск-менеджера");
+        counter(sb, "hft_orders_rejected_total", "Ордеров отклонено риск-менеджером");
+        help(sb, "hft_daily_pnl_quote", "Реализованный PnL за сутки UTC после комиссий, в котируемой валюте");
         help(sb, "hft_open_positions", "Открытых позиций у стратегии");
         help(sb, "hft_strategy_enabled", "1 если стратегия включена");
         help(sb, "hft_order_latency_p50_micros", "Латентность отправки ордера, p50, микросекунды");
@@ -39,12 +45,13 @@ public final class PrometheusExporter {
         help(sb, "hft_spread_percent", "Спред в процентах от середины");
         help(sb, "hft_imbalance", "Дисбаланс стакана от -1 до 1");
         help(sb, "hft_zscore", "Текущее отклонение цены в сигмах от скользящего среднего");
-        help(sb, "hft_tick_count_total", "Сделок получено по инструменту");
+        counter(sb, "hft_tick_count_total", "Сделок получено по инструменту");
 
         for (ExchangeGateway gw : controller.active().values()) {
             String ex = gw.id();
 
             line(sb, "hft_connected", ex, gw.isConnected() ? 1 : 0);
+            line(sb, "hft_trading_enabled", ex, controller.params(ex).tradingEnabled() ? 1 : 0);
             line(sb, "hft_messages_total", ex, gw.messageCount());
             line(sb, "hft_kill_switch", ex, gw.risk().isStopped() ? 1 : 0);
             line(sb, "hft_orders_accepted_total", ex, gw.risk().acceptedCount());
@@ -82,9 +89,33 @@ public final class PrometheusExporter {
         return sb.toString();
     }
 
+    private void jvm(StringBuilder sb) {
+        var heap = java.lang.management.ManagementFactory.getMemoryMXBean().getHeapMemoryUsage();
+        help(sb, "hft_jvm_heap_used_bytes", "Занято heap");
+        sb.append("hft_jvm_heap_used_bytes ").append(heap.getUsed()).append('\n');
+        help(sb, "hft_jvm_heap_max_bytes", "Предел heap (-Xmx)");
+        sb.append("hft_jvm_heap_max_bytes ").append(heap.getMax()).append('\n');
+        long gcCount = 0, gcMillis = 0;
+        for (var gc : java.lang.management.ManagementFactory.getGarbageCollectorMXBeans()) {
+            gcCount += Math.max(0, gc.getCollectionCount());
+            gcMillis += Math.max(0, gc.getCollectionTime());
+        }
+        counter(sb, "hft_jvm_gc_collections_total", "Сборок мусора");
+        sb.append("hft_jvm_gc_collections_total ").append(gcCount).append('\n');
+        counter(sb, "hft_jvm_gc_seconds_total", "Суммарное время сборок мусора, секунды");
+        sb.append("hft_jvm_gc_seconds_total ").append(gcMillis / 1000.0).append('\n');
+        help(sb, "hft_jvm_threads", "Живых потоков");
+        sb.append("hft_jvm_threads ").append(java.lang.management.ManagementFactory.getThreadMXBean().getThreadCount()).append('\n');
+    }
+
     private void help(StringBuilder sb, String name, String description) {
         sb.append("# HELP ").append(name).append(' ').append(description).append('\n');
         sb.append("# TYPE ").append(name).append(" gauge\n");
+    }
+
+    private void counter(StringBuilder sb, String name, String description) {
+        sb.append("# HELP ").append(name).append(' ').append(description).append('\n');
+        sb.append("# TYPE ").append(name).append(" counter\n");
     }
 
     private void line(StringBuilder sb, String name, String exchange, double value) {
