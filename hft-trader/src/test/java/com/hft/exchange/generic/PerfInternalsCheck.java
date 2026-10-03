@@ -23,7 +23,7 @@ public class PerfInternalsCheck {
     ck("fast number parse == Double.parseDouble (" + cases.size() + " cases)", bad == 0);
 
     // LocalBook против эталонной TreeMap на случайных операциях
-    LocalBook lb = new LocalBook();
+    LocalBook lb = new LocalBook(10_000);           // предел больше числа цен — эталон без обрезки
     TreeMap<Double, Double> bids = new TreeMap<>(Collections.reverseOrder()), asks = new TreeMap<>();
     boolean same = true;
     for (int i = 0; i < 100_000 && same; i++) {
@@ -41,6 +41,18 @@ public class PerfInternalsCheck {
       }
     }
     ck("LocalBook == TreeMap reference (100k random ops)", same);
+
+    // предел уровней: память не растёт, лучшие уровни те же, что у эталона
+    LocalBook capped = new LocalBook(30);
+    TreeMap<Double, Double> ref = new TreeMap<>(Collections.reverseOrder());
+    for (int i = 0; i < 200_000; i++) {
+      double p = 1000 + r.nextInt(5000) * 0.5; double q = r.nextInt(100) + 1;
+      capped.applyBid(p, q); ref.put(p, q);
+    }
+    double[] cpx = new double[30], cqx = new double[30];
+    int cn = capped.topBids(cpx, cqx); int ci = 0; boolean top = cn == 30;
+    for (var e : ref.entrySet()) { if (ci == cn) break; if (cpx[ci] != e.getKey() || cqx[ci] != e.getValue()) top = false; ci++; }
+    ck("LocalBook capped: size bounded and best levels kept", capped.bidLevels() <= 30 && top);
 
     // потоковый разбор: строки-числа, числа, объекты {price,size}, {px,sz}
     BookBatch b = new BookBatch(); b.setKnown(List.of("BTC-USDT","BTC","BTC-USD","btc_usdt"));

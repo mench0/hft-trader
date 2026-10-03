@@ -64,11 +64,12 @@ public final class WsBookFeed implements BookFeed {
 
     private static final class SymbolState {
         final String internal;
-        final LocalBook book = new LocalBook();
+        final LocalBook book;
         final double[] bp, bq, ap, aq;
         int crossed;
         SymbolState(String internal, int depth) {
             this.internal = internal;
+            this.book = new LocalBook(LocalBook.levelsFor(depth));
             bp = new double[depth]; bq = new double[depth]; ap = new double[depth]; aq = new double[depth];
         }
     }

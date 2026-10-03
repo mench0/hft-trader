@@ -1,8 +1,10 @@
 package com.hft.exchange.bybit;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonToken;
 import com.hft.config.ExchangeConfig;
+import com.hft.exchange.generic.FastJson;
+import com.hft.exchange.generic.LocalBook;
 import com.hft.engine.TickPipeline;
 import com.hft.metrics.Latency;
 import com.hft.net.AbstractWsFeed;
@@ -10,8 +12,12 @@ import com.hft.store.MarketDataStore;
 import com.hft.store.OrderBook;
 import io.netty.channel.Channel;
 
+import java.io.IOException;
 import java.net.URI;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
@@ -25,13 +31,15 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * Топики:
  *   publicTrade.<symbol>   — сделки
  *   orderbook.50.<symbol>  — стакан на 50 уровней (у Bybit шаг только 1/50/200/500)
+ *
+ * Стакан приходит снимком (type=snapshot), затем изменениями (type=delta): изменения применяются
+ * к локальному {@link LocalBook} символа, в {@link OrderBook} публикуются верхние bookDepth уровней.
  */
 public final class BybitMarketDataFeed extends AbstractWsFeed {
 
     private final ExchangeConfig config;
     private final MarketDataStore store;
     private final TickPipeline pipeline;
-    private final ObjectMapper mapper = new ObjectMapper();
     private final Latency parseLatency = new Latency("[bybit] Парсинг сообщения");
 
     private final double[] bidPrices;
@@ -40,6 +48,8 @@ public final class BybitMarketDataFeed extends AbstractWsFeed {
     private final double[] askQtys;
 
     private final List<String> activeSymbols;
+    /** Локальный стакан каждого символа — пишет только поток WS. */
+    private final Map<String, LocalBook> localBooks = new ConcurrentHashMap<>();
 
     public BybitMarketDataFeed(ExchangeConfig config, MarketDataStore store, TickPipeline pipeline) {
         this.config = config;
@@ -82,78 +92,119 @@ public final class BybitMarketDataFeed extends AbstractWsFeed {
         return "500";
     }
 
+    // Разбор одного сообщения — только поток WS
+    private String msgSymbol;
+    private boolean snapshot, hasBook;
+    private long updateId;
+    // изменения уровней из сообщения: применяются после разбора, когда известен type
+    private double[] lbp = new double[64], lbq = new double[64], lap = new double[64], laq = new double[64];
+    private int lbn, lan;
+
+    /** Потоковый разбор без дерева узлов; сделки публикуются по мере чтения массива data. */
     @Override
     protected void onText(String json, long receivedNanos) {
-        try {
-            JsonNode root = mapper.readTree(json);
-            String topic = root.path("topic").asText("");
-
-            if (topic.startsWith("publicTrade.")) {
-                handleTrade(root, receivedNanos);
-            } else if (topic.startsWith("orderbook.")) {
-                handleDepth(topic, root);
+        try (JsonParser p = FastJson.F.createParser(json)) {
+            msgSymbol = null; snapshot = false; hasBook = false; updateId = 0; lbn = 0; lan = 0;
+            if (p.nextToken() != JsonToken.START_OBJECT) return;
+            while (p.nextToken() == JsonToken.FIELD_NAME) {
+                String f = p.currentName();
+                p.nextToken();
+                switch (f) {
+                    case "type" -> snapshot = FastJson.textIs(p, "snapshot");
+                    case "data" -> {
+                        if (p.currentToken() == JsonToken.START_ARRAY) parseTrades(p, receivedNanos);
+                        else if (p.currentToken() == JsonToken.START_OBJECT) parseBook(p);
+                        else p.skipChildren();
+                    }
+                    default -> p.skipChildren();
+                }
             }
+            if (hasBook && msgSymbol != null) applyBook();
             parseLatency.recordSince(receivedNanos);
         } catch (Exception e) {
             log.error("Ошибка разбора сообщения Bybit", e);
         }
     }
 
-    private void handleTrade(JsonNode root, long receivedNanos) {
-        JsonNode data = root.get("data");
-        if (data == null || !data.isArray()) return;
-        for (JsonNode t : data) {
-            String symbol = t.get("s").asText();
-            double price = t.get("p").asDouble();
-            double qty = t.get("v").asDouble();
-            boolean buyerIsMaker = "Sell".equals(t.get("S").asText());
-            long eventTime = t.get("T").asLong();
-            pipeline.publish(symbol, price, qty, buyerIsMaker, eventTime, receivedNanos);
+    private void parseTrades(JsonParser p, long receivedNanos) throws IOException {
+        while (p.nextToken() == JsonToken.START_OBJECT) {
+            String symbol = null;
+            double price = 0, qty = 0;
+            boolean buyerIsMaker = false;
+            long time = 0;
+            while (p.nextToken() == JsonToken.FIELD_NAME) {
+                String f = p.currentName();
+                p.nextToken();
+                switch (f) {
+                    case "s" -> symbol = symbolOf(p);
+                    case "p" -> price = FastJson.num(p);
+                    case "v" -> qty = FastJson.num(p);
+                    case "S" -> buyerIsMaker = FastJson.textIs(p, "Sell");
+                    case "T" -> time = FastJson.longOf(p, 0);
+                    default -> p.skipChildren();
+                }
+            }
+            if (symbol != null) pipeline.publish(symbol, price, qty, buyerIsMaker, time, receivedNanos);
         }
     }
 
-    private void handleDepth(String topic, JsonNode root) {
-        String symbol = symbolFromTopic(topic);
-        if (symbol == null) return;
+    private void parseBook(JsonParser p) throws IOException {
+        hasBook = true;
+        while (p.nextToken() == JsonToken.FIELD_NAME) {
+            String f = p.currentName();
+            p.nextToken();
+            switch (f) {
+                case "s" -> msgSymbol = symbolOf(p);
+                case "u" -> updateId = FastJson.longOf(p, 0);
+                case "b" -> lbn = levels(p, true);
+                case "a" -> lan = levels(p, false);
+                default -> p.skipChildren();
+            }
+        }
+    }
 
-        OrderBook book = store.book(symbol);
+    private int levels(JsonParser p, boolean bid) throws IOException {
+        if (p.currentToken() != JsonToken.START_ARRAY) { p.skipChildren(); return 0; }
+        int n = 0;
+        while (p.nextToken() == JsonToken.START_ARRAY) {
+            p.nextToken(); double price = FastJson.num(p);
+            p.nextToken(); double q = FastJson.num(p);
+            while (p.nextToken() != JsonToken.END_ARRAY) p.skipChildren();
+            if (bid) {
+                if (n == lbp.length) { lbp = Arrays.copyOf(lbp, n * 2); lbq = Arrays.copyOf(lbq, n * 2); }
+                lbp[n] = price; lbq[n] = q;
+            } else {
+                if (n == lap.length) { lap = Arrays.copyOf(lap, n * 2); laq = Arrays.copyOf(laq, n * 2); }
+                lap[n] = price; laq[n] = q;
+            }
+            n++;
+        }
+        return n;
+    }
+
+    private void applyBook() {
+        OrderBook book = store.book(msgSymbol);
         if (book == null) return;
-
-        JsonNode data = root.get("data");
-        if (data == null) return;
-
-        JsonNode bids = data.get("b");
-        JsonNode asks = data.get("a");
-        if (bids == null || asks == null) return;
-
-        int depth = config.bookDepth();
-        int bn = Math.min(bids.size(), depth);
-        int an = Math.min(asks.size(), depth);
-
-        for (int i = 0; i < bn; i++) {
-            JsonNode lvl = bids.get(i);
-            bidPrices[i] = lvl.get(0).asDouble();
-            bidQtys[i] = lvl.get(1).asDouble();
-        }
-        for (int i = 0; i < an; i++) {
-            JsonNode lvl = asks.get(i);
-            askPrices[i] = lvl.get(0).asDouble();
-            askQtys[i] = lvl.get(1).asDouble();
-        }
-
-        // "snapshot" — полная замена, "delta" — инкремент. Для простоты
-        // обрабатываем оба как снимок: верх стакана обновляется корректно
-        // почти всегда, так как Bybit включает верхние уровни в каждый
-        // delta-пакет. Для точного инкрементального стакана нужно отдельно
-        // учитывать поле "type" и мержить delta по цене вместо перезаписи.
-        long updateId = data.path("u").asLong(0);
-        book.applySnapshot(bidPrices, bidQtys, bn, askPrices, askQtys, an,
-                updateId, System.currentTimeMillis());
+        LocalBook lb = localBooks.computeIfAbsent(msgSymbol, k -> new LocalBook(LocalBook.levelsFor(config.bookDepth())));
+        if (snapshot) lb.clear();
+        for (int i = 0; i < lbn; i++) lb.applyBid(lbp[i], lbq[i]);
+        for (int i = 0; i < lan; i++) lb.applyAsk(lap[i], laq[i]);
+        if (!lb.isReady()) return;                        // delta до первого снимка — ждём снимок
+        int bn = lb.topBids(bidPrices, bidQtys);
+        int an = lb.topAsks(askPrices, askQtys);
+        book.applySnapshot(bidPrices, bidQtys, bn, askPrices, askQtys, an, updateId, System.currentTimeMillis());
     }
 
-    private String symbolFromTopic(String topic) {
-        int dot = topic.lastIndexOf('.');
-        return dot > 0 ? topic.substring(dot + 1).toUpperCase() : null;
+    /** Символ подписки, совпадающий с текущей строкой (без создания новой строки). */
+    private String symbolOf(JsonParser p) throws IOException {
+        char[] c = p.getTextCharacters(); int off = p.getTextOffset(), len = p.getTextLength();
+        for (String s : activeSymbols) {
+            if (s.length() != len) continue;
+            int i = 0;
+            while (i < len && c[off + i] == s.charAt(i)) i++;
+            if (i == len) return s;
+        }
+        return null;
     }
 
     public void addSymbol(String symbol) {
@@ -168,6 +219,7 @@ public final class BybitMarketDataFeed extends AbstractWsFeed {
     public void removeSymbol(String symbol) {
         String s = symbol.toUpperCase();
         if (activeSymbols.remove(s)) {
+            localBooks.remove(s);
             send("{\"op\":\"unsubscribe\",\"args\":[\"publicTrade." + s + "\",\"orderbook."
                     + depthParam() + "." + s + "\"]}");
         }
