@@ -1,0 +1,522 @@
+# HFT Trader
+
+Торговый бот на Java 21 для Binance. Все рыночные данные держатся в оперативной
+памяти, ничего не пишется в базу. Без Spring и других тяжёлых фреймворков —
+весь граф зависимостей собирается вручную в `Main.java`.
+
+## Что внутри
+
+| Слой | Библиотека | Зачем именно она |
+|---|---|---|
+| Сеть | Netty 4.1 | Прямой контроль над event loop, буферами и поведением при разрыве. WebSocket написан на голом Netty, без обёрток |
+| Конвейер | LMAX Disruptor 4 | Кольцевой буфер без блокировок. Объекты `Tick` выделяются один раз и переиспользуются — в горячем пути нет работы для GC |
+| Коллекции | Agrona | Структуры без боксинга от авторов Aeron |
+| Метрики | HdrHistogram | Перцентили p50/p99/p999. Среднее время скрывает всплески |
+| REST | `java.net.http` (JDK) | HTTP/2, пул соединений и keep-alive из коробки, без лишних зависимостей |
+| JSON/YAML | Jackson | Парсинг сообщений биржи и конфигурации |
+| Логи | SLF4J + Logback | Без автоконфигурации фреймворков |
+| Админка | `com.sun.net.httpserver` (JDK) | Для десятка служебных эндпоинтов Jetty не нужен |
+
+## Путь данных
+
+```
+Binance WebSocket
+      │  один комбинированный стрим на все символы
+      │  @trade (сделки) + @depth20@100ms (стакан)
+      ▼
+ MarketDataFeed (Netty)          метка времени ставится до разбора JSON
+      │
+      ▼
+ TickPipeline (Disruptor)        кольцо на 4096 переиспользуемых Tick
+      │
+      ├──► MarketDataHandler ──► MarketDataStore   запись в память
+      │
+      └──► Strategy ──► OrderService ──► RiskManager ──► BinanceRestClient
+```
+
+Обработчики в конвейере идут последовательно: сначала тик попадает в память,
+потом стратегия его видит уже в контексте актуального состояния.
+
+## Хранение в памяти
+
+Всё состояние рынка живёт в `MarketDataStore`:
+
+**`OrderBook`** — стакан на двух парах плоских `double[]` (цены и объёмы
+отдельно). Не `TreeMap`: массивы не аллоцируют объекты при обновлении, лежат
+подряд в памяти и читаются одним кэш-лайном. Что умеет:
+
+- `bestBid()`, `bestAsk()`, `midPrice()` — верх стакана
+- `microPrice()` — середина, взвешенная объёмами. Лучший прогноз следующего
+  движения, чем простой mid
+- `imbalance(levels)` — перевес одной стороны от -1 до +1
+- `estimateBuyPrice(qty)` / `estimateSellPrice(qty)` — проход по стакану:
+  во сколько реально обойдётся рыночный ордер
+- `estimateSlippagePercent(qty, isBuy)` — ожидаемое проскальзывание
+- `findWall(bidSide, threshold)` — поиск крупных заявок
+
+**`PriceWindow`** — кольцевой буфер последних N цен. Среднее и дисперсия
+считаются инкрементально по Уэлфорду, а не пересчётом по всему окну: иначе на
+окне в 1000 элементов это 1000 операций на каждую сделку.
+
+- `zScore(value)`, `currentZScore()` — отклонение в сигмах
+- `changePercent()`, `min()`, `max()`
+
+**`BalanceStore`** — балансы. Нужен, чтобы ордер «на весь баланс» не ходил
+каждый раз в REST (это +50–200 мс и расход лимита запросов).
+
+## Методы ордеров
+
+Все комбинации тип × объём. Через `OrderService`:
+
+```java
+// Лимитные
+orders.buyLimit("BTCUSDT", 0.01, 40000);      // заданный объём
+orders.buyLimitAll("BTCUSDT", 40000);          // на весь баланс USDT
+orders.sellLimit("BTCUSDT", 0.01, 45000);
+orders.sellLimitAll("BTCUSDT", 45000);         // весь доступный BTC
+
+// Рыночные
+orders.buyMarket("BTCUSDT", 0.01);             // заданный объём
+orders.buyMarketAll("BTCUSDT");                // на весь баланс
+orders.sellMarket("BTCUSDT", 0.01);
+orders.sellMarketAll("BTCUSDT");
+
+// Доля баланса
+orders.buyMarketPortion("BTCUSDT", 0.25);      // на четверть баланса
+orders.sellMarketPortion("BTCUSDT", 0.5);      // продать половину позиции
+
+// Пассивный вход по стакану
+orders.buyLimitAtBid("BTCUSDT", 0.01, 0);      // встать на лучший бид
+orders.sellLimitAtAsk("BTCUSDT", 0.01, 1);     // на тик выше лучшего аска
+
+// Отмена
+orders.cancel("BTCUSDT", orderId);
+orders.cancelAll("BTCUSDT");
+orders.panicClose("причина");                   // отменить всё и остановиться
+```
+
+Через билдер `OrderRequest` доступны тонкие настройки:
+
+```java
+orders.execute(
+    OrderRequest.limit("BTCUSDT", Side.BUY, 40000)
+        .quantity(0.01)
+        .immediateOrCancel()   // исполнить что можно, остаток отменить
+);
+
+orders.execute(
+    OrderRequest.limit("BTCUSDT", Side.SELL, 45000)
+        .balancePortion(0.3)   // 30% доступного объёма
+        .fillOrKill()          // только целиком
+);
+```
+
+**Time In Force** для лимитных ордеров:
+- `GTC` — висит в стакане до отмены или исполнения
+- `IOC` — исполнить что получится прямо сейчас, остаток снять. Допускает
+  частичное исполнение
+- `FOK` — целиком или ничего
+
+**Частичное исполнение** видно в `OrderResult`:
+
+```java
+OrderResult r = orders.buyLimit("BTCUSDT", 1.0, 40000);
+r.executedQty();    // сколько реально исполнилось
+r.remainingQty();   // сколько осталось
+r.fillRatio();      // 0.3 = исполнилось 30%
+r.isPartial();      // статус PARTIALLY_FILLED
+```
+
+Как объём «весь баланс» превращается в число: для BUY берутся свободные USDT,
+вычитается резерв под комиссию (`fee-reserve-percent`), делится на цену. Для
+SELL берётся свободный BTC. Затем результат округляется вниз до шага лота
+биржи — `SymbolFilters` знает эти правила, они загружаются при старте из
+`/api/v3/exchangeInfo`. Без такого округления биржа отвечает `Filter failure:
+LOT_SIZE`, и причина неочевидна.
+
+## Проверки перед отправкой
+
+`RiskManager` пропускает ордер, только если:
+
+- kill switch не взведён и торговля включена в конфиге
+- не превышен лимит ордеров в минуту (защита от цикла в стратегии)
+- дневной убыток не достиг предела — иначе kill switch взводится сам
+- данные по символу свежие (стакан не старше 5 секунд)
+- размер позиции в деньгах не больше `max-position-quote`
+- для рыночных ордеров ожидаемое проскальзывание не выше
+  `max-slippage-percent` — считается проходом по реальному стакану
+
+## Запуск
+
+Нужна Java 21 и Maven.
+
+```bash
+mvn clean package
+./run.sh
+```
+
+Бот стартует в **режиме настройки** — никакая биржа ещё не подключена.
+Дальше всё управление идёт через HTTP API (см. ниже) или через отдельный
+проект [hft-admin-panel](../hft-admin-panel) — готовую веб-панель поверх
+этого же API.
+
+Минимальный путь через curl:
+
+```bash
+# 1. Выбрать биржу и тикеры
+curl -X POST "localhost:8080/control/select?exchange=binance&symbols=BTCUSDT,ETHUSDT"
+
+# 2. Поднять WebSocket/REST соединения
+curl -X POST localhost:8080/control/start
+
+# 3. Проверить, что данные идут
+curl localhost:8080/market?exchange=binance
+
+# 4. Включить реальную торговлю (после того как всё проверено)
+curl -X POST "localhost:8080/trading/start?exchange=binance"
+```
+
+Без API-ключей биржи (`BINANCE_API_KEY`/`BINANCE_API_SECRET`,
+`BYBIT_API_KEY`/`BYBIT_API_SECRET`) бот всё равно поднимет соединения и
+будет собирать рыночные данные — они публичные. Не будет работать только
+отправка ордеров.
+
+## Управление на сервере — полный список эндпоинтов
+
+Админка на порту 8080. Если задан `ADMIN_TOKEN`, добавляйте заголовок
+`X-Admin-Token`. CORS открыт для всех источников — так отдельная веб-панель
+может обращаться к боту с любого домена.
+
+### Выбор бирж и тикеров (до старта)
+
+```bash
+# Что поддерживается / что сейчас выбрано
+curl localhost:8080/control/exchanges
+curl localhost:8080/control/status
+
+# Выбрать биржу с тикерами (перезаписывает список для неё)
+curl -X POST "localhost:8080/control/select?exchange=binance&symbols=BTCUSDT,ETHUSDT"
+curl -X POST "localhost:8080/control/select?exchange=bybit&symbols=BTCUSDT"
+
+# Убрать биржу из выбора совсем
+curl -X POST "localhost:8080/control/deselect?exchange=bybit"
+
+# Добавить/убрать один символ у уже выбранной биржи
+curl -X POST "localhost:8080/control/symbols?exchange=binance&add=BNBUSDT"
+curl -X POST "localhost:8080/control/symbols?exchange=binance&remove=BNBUSDT"
+```
+
+Выбор можно менять только пока бот не запущен (`/control/start` ещё не
+вызывался, либо после `/control/stop`).
+
+### Жизненный цикл
+
+```bash
+curl -X POST localhost:8080/control/start   # поднять соединения для выбранных бирж
+curl -X POST localhost:8080/control/stop    # разорвать все соединения, выбор сохраняется
+```
+
+### Торговля (поверх уже поднятых соединений)
+
+```bash
+curl -X POST "localhost:8080/trading/start?exchange=binance"  # или exchange=all
+curl -X POST "localhost:8080/trading/stop?exchange=all"
+curl -X POST "localhost:8080/trading/panic?exchange=all"        # отменить всё и заглушить
+```
+
+### Параметры риска — общие для всех бирж
+
+```bash
+curl localhost:8080/risk
+curl -X POST "localhost:8080/risk?maxPositionQuote=50&maxDailyLossQuote=20&maxSlippagePercent=0.2&feeReservePercent=0.2&maxOrdersPerMinute=20&tradingEnabled=true"
+```
+
+Любой параметр можно передать отдельно — остальные не меняются.
+
+### Параметры стратегии — отдельно по каждой бирже
+
+```bash
+curl "localhost:8080/strategy/params?exchange=binance"
+curl -X POST "localhost:8080/strategy/params?exchange=binance&entryZ=2.5&stopLoss=0.8&orderQuote=50"
+```
+
+### Данные и ручные ордера
+
+```bash
+curl localhost:8080/status
+curl "localhost:8080/market?exchange=binance"
+curl "localhost:8080/balances?exchange=binance"
+
+curl -X POST "localhost:8080/order?exchange=binance&symbol=BTCUSDT&side=BUY&type=MARKET&qty=0.001"
+curl -X POST "localhost:8080/order?exchange=binance&symbol=BTCUSDT&side=BUY&type=LIMIT&qty=0.001&price=40000"
+curl -X POST "localhost:8080/order?exchange=binance&symbol=BTCUSDT&side=SELL&type=MARKET&all=true"
+curl -X POST "localhost:8080/order?exchange=binance&symbol=BTCUSDT&side=BUY&type=MARKET&portion=0.5"
+
+curl -X POST "localhost:8080/cancel-all?exchange=binance&symbol=BTCUSDT"
+```
+
+## Персистентность настроек
+
+Всё, что настраивается через API — выбор бирж и тикеров, параметры риска,
+параметры стратегии по каждой бирже — сохраняется в **SQLite** (`data/state.db`)
+после каждого изменения. При следующем запуске это состояние читается
+автоматически и подменяет собой значения по умолчанию из `application.yml`.
+
+Почему SQLite, а не самодельный JSON-файл:
+- атомарность транзакций обеспечивает сама СУБД (UPSERT в одной транзакции),
+  а не ручной "временный файл + rename"
+- WAL-режим — состояние можно посмотреть напрямую через `sqlite3 data/state.db`,
+  не мешая работе бота
+- если позже понадобится история изменений или несколько профилей
+  конфигурации — это уже готовая база, а не файл, который пришлось бы
+  допиливать вручную
+
+**На производительность бота это не влияет.** Запись в БД происходит только
+в ответ на HTTP-запрос к админке (смена риск-параметров, выбор биржи и т.п.)
+— считанные разы за сессию, а не на каждый тик. Поток Disruptor, который
+обрабатывает рыночные данные и генерирует сигналы, вообще не знает о
+существовании `SqliteStateStore` — обращение к БД происходит исключительно
+в потоке HTTP-сервера админки, полностью отдельно от горячего пути.
+
+Путь к файлу БД можно поменять переменной окружения `STATE_DB`
+(по умолчанию `data/state.db`).
+
+**Автозапуск после рестарта.** По умолчанию после перезапуска процесса бот
+снова встаёт в режим настройки — соединения нужно поднять вручную через
+`/control/start`. Если нужно, чтобы после падения/перезапуска (например,
+рестарт systemd) бот сам поднимался с той конфигурацией, что была до этого:
+
+```bash
+# Включить автозапуск соединений (без автоматической торговли)
+curl -X POST "localhost:8080/control/autostart?enabled=true"
+
+# Включить автозапуск соединений И торговли — использовать осторожно,
+# это значит, что после любого рестарта бот сам начнёт слать ордера
+curl -X POST "localhost:8080/control/autostart?enabled=true&trade=true"
+
+# Выключить автозапуск обратно
+curl -X POST "localhost:8080/control/autostart?enabled=false"
+```
+
+## Метрики для Grafana
+
+Бот отдаёт метрики в текстовом формате Prometheus на `/metrics` — это
+пассивный эндпоинт, сам бот никуда ничего не отправляет. Стандартная схема
+для закрытого контура:
+
+```
+Bot (:8080/metrics) <--- pull --- Prometheus <--- Grafana (data source)
+```
+
+Пример `prometheus.yml`:
+
+```yaml
+scrape_configs:
+  - job_name: 'hft-trader'
+    scrape_interval: 5s
+    static_configs:
+      - targets: ['<host-бота>:8080']
+    # Если задан ADMIN_TOKEN, Prometheus поддерживает это штатно:
+    authorization:
+      credentials: '<тот_же_токен_что_и_ADMIN_TOKEN>'
+    # AdminServer принимает токен и как Authorization: Bearer, и как X-Admin-Token
+```
+
+Метрики, которые отдаются (лейблы `exchange`, где применимо — `symbol`):
+
+- `hft_connected`, `hft_messages_total` — состояние соединения
+- `hft_kill_switch`, `hft_orders_accepted_total`, `hft_orders_rejected_total`
+- `hft_daily_pnl_quote`, `hft_open_positions`, `hft_strategy_enabled`
+- `hft_order_latency_p50_micros`, `hft_order_latency_p99_micros`
+- `hft_best_bid`, `hft_best_ask`, `hft_spread_percent`, `hft_imbalance`, `hft_zscore`, `hft_tick_count_total`
+
+В Grafana дальше — обычный дашборд поверх Prometheus data source: панели
+на PnL по времени (`hft_daily_pnl_quote`), латентность ордеров, z-score по
+инструментам, счётчик отклонённых риск-менеджером ордеров как индикатор
+проблем.
+
+
+
+1. Реализовать REST-клиент под её API, `implements ExchangeOrderApi`
+2. Реализовать WS-фид, `extends AbstractWsFeed` (общий Netty-код уже есть —
+   нужно только описать URL подписки и разбор сообщений)
+3. Собрать оба в классе `XxxExchange implements ExchangeGateway`, по образцу
+   `BinanceExchange`/`BybitExchange`
+4. Добавить `case` в `BotController.createExchange()`
+5. Добавить биржу в `BotController.SUPPORTED_EXCHANGES`
+
+Дальше она сама появится в `/control/exchanges` и станет доступна через API
+и панель без изменений в остальном коде.
+
+## Своя стратегия
+
+Наследуйтесь от `Strategy` и добавьте в конвейер в `Main`:
+
+```java
+public final class MyStrategy extends Strategy {
+
+    public MyStrategy(MarketDataStore market, OrderService orders) {
+        super("моя-стратегия", market, orders);
+    }
+
+    @Override
+    protected void onTick(Tick tick) {
+        OrderBook book = market.book(tick.symbol());
+        PriceWindow window = market.window(tick.symbol());
+        if (book == null || !book.isReady() || !window.isWarmedUp()) return;
+
+        double z = window.currentZScore();
+        double imbalance = book.imbalance(5);
+
+        if (z < -2.0 && imbalance > 0.2) {
+            orders.buyMarket(tick.symbol(), 0.001);
+        }
+    }
+}
+```
+
+`MeanReversionStrategy` в проекте — рабочий пример на z-score с
+подтверждением по стакану, стоп-лоссом и таймаутом позиции. Параметры
+подобраны навскидку: перед реальными деньгами их нужно проверять на истории.
+
+## Что стоит добавить дальше
+
+- **Бэктест на истории.** Сейчас стратегию можно проверить только вживую.
+  Загрузите klines с Binance и прогоните `Strategy` на них
+- **Запись тиков на диск** (Chronicle Queue) — для последующего анализа
+  и отладки стратегий на реальных данных
+- **userDataStream** — WebSocket с событиями по вашему аккаунту. Сейчас
+  балансы обновляются локально и сверяются раз в 5 минут; стрим даст
+  мгновенное уведомление об исполнении ордера
+- **Переподписка WebSocket** при добавлении символа через админку. Сейчас
+  символ регистрируется в памяти, но подписка обновится только при
+  переподключении
+
+## Предостережения
+
+- Начинайте на Testnet. Проверьте, что ордера проходят, объёмы округляются
+  правильно, риск-менеджер отклоняет что должен
+- На реальных деньгах ставьте `max-position-quote` в несколько долларов,
+  пока не убедитесь в поведении бота
+- Задайте `ADMIN_TOKEN` — иначе любой, кто достучится до порта, сможет
+  торговать вашими деньгами
+- Бот пишет `logs/hft-trader.log` и `logs/gc.log` — если начнутся всплески
+  задержки, смотрите второй файл
+
+## Биржи из каталога (paper-режим, формат API не проверен)
+
+`GET /exchanges/catalog` — список: Binance, Bybit (полные адаптеры), OKX, MEXC, Gate, BingX, LBank,
+Hyperliquid, dYdX, Uniswap V2-пулы (PAPER_BLIND), PancakeSwap/Raydium/Orca (пока не реализованы).
+PAPER_BLIND = живой стакан через REST-опрос + бумажные ордера; реальных ордеров отправить нельзя.
+Форматы ответов взяты из документации по памяти и не сверялись с живыми API — сначала прогоните
+`GET /exchanges/request-stats` и сравните стакан с сайтом биржи.
+Пулы Uniswap V2: `UNISWAPV2_POOLS="WETHUSDC=0xPAIR:true:18:6"` (пара:base это token0:dec base:dec quote).
+Виртуальный баланс: `PAPER_START_BALANCE` (по умолчанию 1000).
+
+## Структура бирж (как BinanceExchange)
+
+| Биржа | Класс биржи | REST-клиент | Режим |
+|---|---|---|---|
+| Binance, Bybit | BinanceExchange, BybitExchange | свои клиенты + WS | LIVE (проверено раньше только чтением) |
+| OKX, MEXC, Gate, BingX, LBank | OkxExchange, MexcExchange, GateExchange, BingxExchange, LbankExchange | OkxRestClient, MexcRestClient, GateRestClient, BingxRestClient, LbankRestClient (общий скелет SignedCexClient) | PAPER по умолчанию, LIVE не проверен |
+| Hyperliquid, Uniswap V2 | HyperliquidExchange, UniswapV2Exchange | HyperliquidRestClient (EIP-712 через web3j), UniswapV2Client (свопы через Router02) | PAPER по умолчанию, LIVE не проверен и не собирался с настоящим web3j |
+| dYdX v4 | PaperExchange | нет (нужны Cosmos-транзакции и сгенерированные protobuf-классы) | только PAPER |
+
+LIVE для OKX/MEXC/Gate/BingX включается двумя условиями сразу: `<ID>_API_KEY` + `<ID>_API_SECRET`
+(у OKX ещё `OKX_PASSPHRASE`) и `<ID>_LIVE=true`. Иначе биржа работает в PAPER и реальных ордеров не шлёт.
+Если правила торговли не загрузились, LIVE-старт отменяется. Тесты: src/test/java (простые runner-классы).
+
+### Hyperliquid и Uniswap V2: переменные окружения
+- Hyperliquid: `HYPERLIQUID_API_KEY` = адрес основного аккаунта, `HYPERLIQUID_API_SECRET` = ключ agent-кошелька (без права вывода), `HYPERLIQUID_LIVE=true`.
+- Uniswap V2: `UNISWAPV2_API_KEY` (метка/адрес), `UNISWAPV2_API_SECRET` (ключ горячего кошелька), `UNISWAPV2_LIVE=true`,
+  `UNISWAPV2_ROUTER`, `UNISWAPV2_TOKENS="WETH=0x..:18;USDC=0x..:6"`, `UNISWAPV2_SLIPPAGE_PCT`; GTC-лимиток и отмены на AMM нет.
+- Криптография (secp256k1, keccak, подпись транзакций) — библиотека web3j из pom.xml (класс `Web3jCrypto`); ни её, ни Maven в песочнице не было,
+  поэтому `Web3jCrypto` — единственный непроверенный компилятором файл. Остальной код проверен тестами с подменой крипто-слоя.
+
+## WebSocket-стаканы для остальных бирж
+
+OKX, Gate, BingX, LBank, Hyperliquid и dYdX получают стакан по WebSocket (`WsBookFeed`, WebSocket из JDK,
+без Netty). Форматы подписок и сообщений описаны в `WsDialects` и записаны **по памяти** — против живых
+серверов они не проверялись (сеть сборки закрыта). Перед реальными деньгами запустите бота в paper-режиме
+и убедитесь по `/exchanges/request-stats`, что `ws.messages` и `ws.bookUpdates` растут, а `parseErrors` = 0.
+
+- Режим `hybrid`: WS — основной канал, REST-опрос на паузе, пока WS жив. Если WS молчит дольше 5 с или
+  сдался (15 неудачных подключений подряд), включается REST; когда WS возвращается — опрос снова на паузе.
+  Торговля останавливается, только если сдался и запасной канал.
+- Переподключение: пауза 0.5 с × 2ⁿ (до 30 с), повторная подписка, свежий снимок; тишина дольше порога или
+  5 ошибок разбора подряд — тоже переподключение.
+- Перекрещённый стакан (bid ≥ ask) не публикуется.
+- MEXC остаётся на REST-опросе: его спотовый WS — protobuf.
+- Ордера по WS не отправляются (как и у Binance): только REST. Приватные каналы (исполнения, балансы) не реализованы.
+- Свой адрес WS: `<ID>_WS_URL`.
+
+## Что идёт по WebSocket, а что по REST/RPC
+
+Принцип: сокет — всегда, где он есть; REST — только когда сокет не готов или у биржи его нет.
+
+| Биржа | Стакан | Ордера/отмены | Исполнения | Баланс | Остаётся на REST |
+|---|---|---|---|---|---|
+| Binance, Bybit | WS | REST | — | REST | ордера, баланс |
+| OKX | WS | WS (`order`, `cancel-order`, `batch-cancel-orders`) | WS `orders` | WS `account` | правила (`instruments`), список открытых ордеров на старте |
+| Gate | WS | WS API (`spot.order_place` и др.) | WS `spot.orders` | WS `spot.balances` | правила |
+| Hyperliquid | WS | WS `post` | WS `orderUpdates`, `userFills` | info по WS `post` | — (REST только запасной) |
+| Uniswap V2 | WS-RPC: `eth_subscribe` на `Sync` + первый `eth_call` | JSON-RPC по сокету ноды | чтение по сокету | `eth_call` по сокету | HTTP — запасной |
+| BingX, LBank | WS | REST (торгового WS нет) | REST | REST | всё приватное |
+| MEXC | REST (WS отдаёт protobuf) | REST | REST | REST | всё |
+| dYdX | WS | только paper (нужен Cosmos RPC) | — | — | — |
+
+Безопасность ордеров по WS (`WsRpcChannel`):
+- сокет не готов (нет соединения/логина) — запрос не отправлялся, идём в REST;
+- запрос ушёл, ответа нет — исход неизвестен, вслепую не повторяем:
+  OKX и Gate выясняют судьбу ордера по `clOrdId`/`text` через REST; Hyperliquid повторяет **тот же подписанный запрос с тем же nonce**
+  (биржа дубликат не исполнит); JSON-RPC повторяется по HTTP (чтения идемпотентны, `eth_sendRawTransaction` с тем же raw даёт тот же хеш);
+- бизнес-ошибка биржи по WS — это ответ, а не сбой: на REST не уходим;
+- пять неверных логинов подряд отключают WS-канал (остаётся REST);
+- отключить WS-торговлю: `<ID>_WS_TRADE=false`.
+
+Лимиты: ордера по WS идут через тот же `PacedLimiter`, что и REST; баланс, пришедший по сокету, сверяется с REST раз в 5 минут.
+Форматы приватных WS-сообщений (особенно Gate и Hyperliquid `post`) записаны по памяти и не проверялись на живых биржах:
+на первом запуске смотрите `/exchanges/request-stats` — поля `ws.ready`, `ws.parseErrors`, `ws.lastError`, `wsFallbacks`.
+
+## Устройство классов бирж
+
+`OkxExchange`, `GateExchange`, `HyperliquidExchange`, `MexcExchange`, `BingxExchange`, `LbankExchange`, `UniswapV2Exchange`
+и `PaperExchange` (dYdX) собраны так же, как `BybitExchange`: свои `MarketDataStore`, `BalanceStore`, `SymbolFilters`,
+REST-клиент, `RiskManager`, `OrderService`, конвейер `TickPipeline` (Disruptor) и фид, явные `start()`/`stop()`.
+Общие мелочи (режим LIVE/PAPER, стартовый бумажный баланс, сборка WS+REST-фида, остановка при потере данных) — в `ExchangeSupport`.
+`start()` в LIVE: поднять WS-каналы → загрузить правила (без них старт падает) → баланс → конвейер → фид.
+
+По документации WS-торговли нет у MEXC (ордера только `POST/DELETE /api/v3/order`) и в документации BingX; у обеих есть
+только приватные потоки через `listenKey` (получается по REST). Если у вас есть ссылки на WS-эндпоинты ордеров этих бирж или LBank —
+пришлите, добавлю по ним.
+
+## Производительность: что исправлено
+
+| Было | Стало |
+|---|---|
+| Стратегия ждала биржу в потоке конвейера (REST до 10 с, паузы лимитера, дочитывание статуса) — тики всех символов стояли | `OrderExecutor`: стратегия ставит задачу и сразу возвращается; по символу одновременно не больше одного ордера; символы параллельно (пул 4) |
+| `OrderBook` писался сетевым потоком и читался стратегией без синхронизации — можно было увидеть смесь двух снимков | `StampedLock`: запись под блокировкой, чтение оптимистичное (без блокировки, с проверкой версии); `readTop()` и `copyTo()` — согласованные снимки; тест: 4 млн чтений под нагрузкой, 0 рваных |
+| Разбор WS деревом Jackson, `TreeMap<Double,Double>`, новый `Tick` и массивы на каждое сообщение | Потоковый разбор (Jackson streaming) в переиспользуемый буфер, числа без строк (точный быстрый разбор, сверен с `Double.parseDouble` на 200 тыс. случаев), стакан на отсортированных массивах примитивов, тик сразу в кольцо Disruptor |
+| Отправка в WS под блокировкой с `join()` — pong из потока чтения мог остановить приём | `WsSender`: отправки выстроены цепочкой future, никто не ждёт; переполнение очереди — сброс сокета |
+| REST-запас включался через 5 с по таймеру; стратегия торговала по опросу | Переключение по событию от WS, ожидание 2 с; пока данные с опроса — новых входов нет (`isRealtime=false`), выходы разрешены |
+| Один лимитер на ордера и фоновые запросы; отказ лимитера «съедал» слот | Ордера и фон (балансы, статусы, правила) — разные лимитеры; при отказе слот не занимается |
+
+Что осталось по природе: Uniswap — цена раз в блок (~12 с) и газ; у MEXC, BingX, LBank ордера только по REST.
+
+## Подбор тикеров под стратегии
+
+При старте (`Main` → `controller.discovery().start()`) и затем раз в `DISCOVERY_REFRESH_MIN` минут (15):
+
+1. Со всех бирж берётся сводка 24ч — по одному публичному запросу на биржу (`MarketSources`).
+2. Сводки прогоняются через профили стратегий (`Profiles`):
+   - **mean-reversion** (торгует в боте): оборот ≥ `DISCOVERY_MR_MIN_VOLUME` (1 млн), спред ≤ 0.1%, диапазон 1–25%,
+     не тренд; лучшие `DISCOVERY_BACKTEST_PER_EXCHANGE` (8) на биржу прогоняются по 500 минутным свечам
+     теми же правилами (`MeanReversionBacktest`, параметры стратегии этой биржи из админки, taker-комиссия с двух сторон);
+   - **cross-exchange-arb** и **spread-capture** — только сканеры.
+3. Результат — `GET /discovery` (под каждой стратегией: тикеры, вердикт, причины, метрики, бэктест; статус бирж);
+   `POST /discovery/refresh` — пересчитать сейчас.
+
+Лимиты: свои мягкие паузы на биржу, свечи — не больше `DISCOVERY_KLINE_BUDGET` (12) запросов на биржу за прогон,
+пауза 2 мин после 429/418/403. Сводки и свечи берутся по REST: это редкий снимок, а не поток.
+Биржи — `DISCOVERY_EXCHANGES` (по умолчанию все), котировки — `DISCOVERY_QUOTES` (USDT,USDC,USD).
+Форматы публичных API записаны по памяти и проверены только на фейковом сервере; ошибка одной биржи видна в статусе и не мешает остальным.

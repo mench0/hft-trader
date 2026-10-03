@@ -1,0 +1,230 @@
+package com.hft.discovery;
+
+import com.hft.exchange.catalog.ExchangeCatalog;
+import com.hft.exchange.catalog.ExchangeInfo;
+
+import java.util.*;
+import java.util.function.Function;
+
+/** Профили стратегий: по каким условиям каждая из них выбирает тикеры. */
+public final class Profiles {
+
+    private Profiles() {}
+
+    static double takerPct(String ex) { return ExchangeCatalog.find(ex).map(ExchangeInfo::takerFeePct).orElse(0.1); }
+    static double makerPct(String ex) { return ExchangeCatalog.find(ex).map(ExchangeInfo::makerFeePct).orElse(0.1); }
+
+    static double envD(String name, double def) {
+        String v = System.getenv(name);
+        try { return v == null || v.isBlank() ? def : Double.parseDouble(v.trim()); } catch (NumberFormatException e) { return def; }
+    }
+
+    static String pct(double v) { return Double.isNaN(v) ? "—" : String.format(Locale.ROOT, "%.3f%%", v); }
+    static String money(double v) {
+        if (Double.isNaN(v)) return "—";
+        if (v >= 1e9) return String.format(Locale.ROOT, "%.2f млрд", v / 1e9);
+        if (v >= 1e6) return String.format(Locale.ROOT, "%.2f млн", v / 1e6);
+        if (v >= 1e3) return String.format(Locale.ROOT, "%.1f тыс", v / 1e3);
+        return String.format(Locale.ROOT, "%.0f", v);
+    }
+    /** Округление до 4 знаков; NaN/бесконечность -> null (в JSON — null, а не строка "NaN"). */
+    static Double r4(double v) { return Double.isFinite(v) ? Math.round(v * 1e4) / 1e4 : null; }
+
+    static Map<String, Object> metrics(TickerSnapshot t) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("last", Double.isFinite(t.last()) ? t.last() : null);
+        m.put("quoteVolume24h", r4(t.quoteVolume24h()));
+        m.put("spreadPct", r4(t.spreadPct()));
+        m.put("rangePct", r4(t.rangePct()));
+        m.put("changePct", r4(t.changePct()));
+        m.put("perp", t.perp());
+        return m;
+    }
+
+    // ═════════════════════════ Mean reversion (торгует в боте) ═════════════════════════
+
+    public static final class MeanReversion implements StrategyProfile {
+        private final Function<String, MeanReversionBacktest.Params> paramsFor;
+        private final double minVolume = envD("DISCOVERY_MR_MIN_VOLUME", 1_000_000);
+        private final double maxSpread = 0.1;               // тот же порог, что в MeanReversionStrategy
+        private final int perExchange = (int) envD("DISCOVERY_BACKTEST_PER_EXCHANGE", 8);
+
+        /** @param paramsFor параметры стратегии конкретной биржи (из админки) или null — по умолчанию */
+        public MeanReversion(Function<String, MeanReversionBacktest.Params> paramsFor) { this.paramsFor = paramsFor; }
+
+        static MeanReversionBacktest.Params defaults() { return new MeanReversionBacktest.Params(2.0, 0.3, 0.5, 30, 60); }
+
+        public String id() { return "mean-reversion"; }
+        public String title() { return "Возврат к среднему (mean reversion)"; }
+        public String description() {
+            return "Покупает, когда цена ушла ниже скользящего среднего на entryZ сигм, продаёт при возврате. "
+                    + "Нужны ликвидность, узкий спред и ход цены «пилой», а не трендом. Отбор по сводке 24ч, "
+                    + "затем прогон тех же правил по последним минутным свечам с комиссией.";
+        }
+        public boolean executable() { return true; }
+        public List<String> criteria() {
+            return List.of("оборот за 24ч ≥ " + money(minVolume),
+                    "спред ≤ " + maxSpread + "% (как в стратегии)",
+                    "дневной диапазон 1–25%",
+                    "|изменение за 24ч| ≤ 70% диапазона (не тренд)",
+                    "бэктест по 1-мин свечам: ≥ 3 сделок и плюс после комиссий");
+        }
+
+        public List<Candidate> screen(Map<String, List<TickerSnapshot>> byExchange, ClosesProvider closes) {
+            List<Candidate> out = new ArrayList<>();
+            for (var e : byExchange.entrySet()) {
+                String ex = e.getKey();
+                double fee = takerPct(ex);
+                MeanReversionBacktest.Params p = Optional.ofNullable(paramsFor == null ? null : paramsFor.apply(ex)).orElse(defaults());
+                record Pre(TickerSnapshot t, double score, List<String> reasons) {}
+                List<Pre> pass = new ArrayList<>();
+                for (TickerSnapshot t : e.getValue()) {
+                    if (!(t.last() > 0) || !(t.quoteVolume24h() >= minVolume)) continue;
+                    List<String> why = new ArrayList<>();
+                    why.add("оборот " + money(t.quoteVolume24h()));
+                    double sp = t.spreadPct(), range = t.rangePct(), ch = t.changePct();
+                    if (!Double.isNaN(sp) && sp > maxSpread) continue;
+                    why.add(Double.isNaN(sp) ? "спред неизвестен (сводка без bid/ask)" : "спред " + pct(sp));
+                    if (!Double.isNaN(range) && (range < 1.0 || range > 25)) continue;
+                    if (!Double.isNaN(range)) why.add("диапазон " + pct(range));
+                    double trend = Double.isNaN(range) || Double.isNaN(ch) || range == 0 ? 0.3 : Math.abs(ch) / range;
+                    if (trend > 0.7) continue;
+                    if (!Double.isNaN(ch)) why.add("изменение " + pct(ch));
+                    double s = Math.log10(t.quoteVolume24h())
+                            * (Double.isNaN(range) ? 1 : Math.min(range, 10) / ((Double.isNaN(sp) ? 0.05 : sp) + 2 * fee))
+                            * (1 - trend);
+                    pass.add(new Pre(t, s, why));
+                }
+                pass.sort((a, b) -> Double.compare(b.score(), a.score()));
+                for (int i = 0; i < pass.size(); i++) {
+                    Pre pr = pass.get(i);
+                    Map<String, Object> m = metrics(pr.t());
+                    List<String> why = new ArrayList<>(pr.reasons());
+                    if (i >= perExchange) {
+                        if (i < perExchange * 3)
+                            out.add(new Candidate(ex, pr.t().symbol(), false, "под вопросом", pr.score() * 0.01, add(why, "бэктест не запускался (вне лимита запросов)"), m, null));
+                        continue;
+                    }
+                    double[] c = closes.closes(pr.t(), 500);
+                    if (c == null || c.length < p.window() + 20) {
+                        out.add(new Candidate(ex, pr.t().symbol(), false, "под вопросом", pr.score() * 0.01, add(why, "нет минутных свечей для бэктеста"), m, null));
+                        continue;
+                    }
+                    MeanReversionBacktest.Result r = MeanReversionBacktest.run(c, p, fee);
+                    Map<String, Object> bt = new LinkedHashMap<>();
+                    bt.put("bars", r.bars());
+                    bt.put("trades", r.trades());
+                    bt.put("winRatePct", r4(r.winRate()));
+                    bt.put("netPct", r4(r.netPct()));
+                    bt.put("avgTradePct", r4(r.avgTradePct()));
+                    bt.put("maxDrawdownPct", r4(r.maxDrawdownPct()));
+                    bt.put("feePctPerSide", fee);
+                    boolean ok = r.trades() >= 3 && r.netPct() > 0;
+                    why.add(String.format(Locale.ROOT, "бэктест %d мин: сделок %d, в плюс %.0f%%, итог %s после комиссий",
+                            r.bars(), r.trades(), r.winRate(), pct(r.netPct())));
+                    if (r.trades() < 3) why.add("слишком мало сигналов");
+                    else if (r.netPct() <= 0) why.add("правила стратегии на этих свечах в минусе");
+                    double score = ok ? r.netPct() * Math.sqrt(r.trades()) + 1 : r.netPct();
+                    out.add(new Candidate(ex, pr.t().symbol(), ok, ok ? "подходит" : "не подходит", score, why, m, bt));
+                }
+            }
+            return sort(out);
+        }
+    }
+
+    // ═════════════════════════ Межбиржевой арбитраж (сканер) ═════════════════════════
+
+    public static final class CrossExchange implements StrategyProfile {
+        public String id() { return "cross-exchange-arb"; }
+        public String title() { return "Межбиржевой арбитраж"; }
+        public String description() {
+            return "Один и тот же тикер дешевле на одной бирже, чем дороже продаётся на другой, с учётом taker-комиссий обеих. "
+                    + "Только сканер: автоматического исполнения в боте нет. Цены сводок снимаются с разницей в секунды — "
+                    + "это повод посмотреть на живые стаканы, а не сигнал. Нужны деньги на обеих биржах, переводы не учитываются.";
+        }
+        public boolean executable() { return false; }
+        public List<String> criteria() {
+            return List.of("тикер есть минимум на двух биржах (спот со спотом, перп с перпом)",
+                    "у обеих бирж в сводке есть bid/ask",
+                    "чистая разница после двух комиссий > 0 (показываем и близкие, до −0.2%)",
+                    "разница > 5% отбрасывается: скорее всего это разные токены с одним тикером");
+        }
+        public List<Candidate> screen(Map<String, List<TickerSnapshot>> byExchange, ClosesProvider closes) {
+            Map<String, List<TickerSnapshot>> bySymbol = new HashMap<>();
+            for (var l : byExchange.values())
+                for (TickerSnapshot t : l)
+                    if (t.bid() > 0 && t.ask() > 0 && t.ask() >= t.bid() && t.quoteVolume24h() >= 50_000)
+                        bySymbol.computeIfAbsent(t.symbol() + (t.perp() ? ":perp" : ""), k -> new ArrayList<>()).add(t);
+            List<Candidate> out = new ArrayList<>();
+            for (var e : bySymbol.entrySet()) {
+                List<TickerSnapshot> l = e.getValue();
+                if (l.size() < 2) continue;
+                TickerSnapshot buy = null, sell = null;
+                for (TickerSnapshot t : l) {
+                    if (buy == null || t.ask() < buy.ask()) buy = t;
+                    if (sell == null || t.bid() > sell.bid()) sell = t;
+                }
+                if (buy.exchange().equals(sell.exchange())) continue;
+                double gross = (sell.bid() - buy.ask()) / buy.ask() * 100.0;
+                if (Math.abs(gross) > 5) continue;
+                double net = gross - takerPct(buy.exchange()) - takerPct(sell.exchange());
+                if (net < -0.2) continue;
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("buyExchange", buy.exchange());
+                m.put("buyAsk", buy.ask());
+                m.put("sellExchange", sell.exchange());
+                m.put("sellBid", sell.bid());
+                m.put("grossPct", r4(gross));
+                m.put("netPct", r4(net));
+                m.put("minVolume24h", r4(Math.min(buy.quoteVolume24h(), sell.quoteVolume24h())));
+                m.put("perp", buy.perp());
+                boolean ok = net > 0;
+                List<String> why = List.of("купить на " + buy.exchange() + " по " + buy.ask() + ", продать на " + sell.exchange() + " по " + sell.bid(),
+                        "до комиссий " + pct(gross) + ", после " + pct(net),
+                        "меньший оборот из двух " + money(Math.min(buy.quoteVolume24h(), sell.quoteVolume24h())));
+                out.add(new Candidate(buy.exchange() + "→" + sell.exchange(), buy.symbol(), ok, ok ? "подходит" : "близко", net, why, m, null));
+            }
+            return sort(out);
+        }
+    }
+
+    // ═════════════════════════ Сбор широкого спреда (сканер) ═════════════════════════
+
+    public static final class SpreadCapture implements StrategyProfile {
+        public String id() { return "spread-capture"; }
+        public String title() { return "Сбор широкого спреда (маркет-мейкинг на неликвиде)"; }
+        public String description() {
+            return "Лимитки с обеих сторон внутри широкого спреда на малоликвидных парах: спред должен покрывать две maker-комиссии "
+                    + "с запасом. Только сканер: автоматического маркет-мейкинга в боте нет. Риск — застрять с позицией при движении цены.";
+        }
+        public boolean executable() { return false; }
+        public List<String> criteria() {
+            return List.of("спред ≥ 2×maker-комиссия + 0.1% и ≤ 3%", "оборот за 24ч от 50 тыс до 5 млн", "у биржи в сводке есть bid/ask");
+        }
+        public List<Candidate> screen(Map<String, List<TickerSnapshot>> byExchange, ClosesProvider closes) {
+            List<Candidate> out = new ArrayList<>();
+            for (var e : byExchange.entrySet()) {
+                double maker = makerPct(e.getKey());
+                for (TickerSnapshot t : e.getValue()) {
+                    double sp = t.spreadPct(), vol = t.quoteVolume24h();
+                    if (Double.isNaN(sp) || !(vol >= 50_000) || vol > 5_000_000) continue;
+                    double edge = sp - 2 * maker;
+                    if (edge < 0.1 || sp > 3) continue;
+                    Map<String, Object> m = metrics(t);
+                    m.put("edgePct", r4(edge));
+                    m.put("makerFeePct", maker);
+                    out.add(new Candidate(e.getKey(), t.symbol(), true, "подходит", edge * Math.log10(vol),
+                            List.of("спред " + pct(sp) + ", после двух maker-комиссий остаётся " + pct(edge), "оборот " + money(vol)), m, null));
+                }
+            }
+            return sort(out);
+        }
+    }
+
+    static List<String> add(List<String> l, String s) { l.add(s); return l; }
+
+    static List<Candidate> sort(List<Candidate> l) {
+        l.sort(Comparator.comparing(Candidate::suitable).reversed().thenComparing(Comparator.comparingDouble(Candidate::score).reversed()));
+        return l.size() > 60 ? new ArrayList<>(l.subList(0, 60)) : l;
+    }
+}
