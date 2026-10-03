@@ -8,7 +8,7 @@ import com.hft.store.PriceWindow;
 
 /**
  * Отдаёт торговые метрики в текстовом формате Prometheus exposition.
- *
+ * <p>
  * Почему Prometheus, а не прямая отправка в Grafana: Grafana сама не
  * принимает метрики — она рисует дашборды поверх источника данных
  * (Prometheus, InfluxDB, Graphite и т.д.). Стандартный путь для закрытого
