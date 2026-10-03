@@ -6,6 +6,11 @@
         <sourceOutputDir name="target/generated-sources/annotations" />
         <sourceTestOutputDir name="target/generated-test-sources/test-annotations" />
         <outputRelativeToContentRoot value="true" />
+      </profile>
+      <profile name="Annotation profile for hft-trader" enabled="true">
+        <sourceOutputDir name="hft-trader/target/generated-sources/annotations" />
+        <sourceTestOutputDir name="hft-trader/target/generated-test-sources/test-annotations" />
+        <outputRelativeToContentRoot value="true" />
         <module name="hft-trader" />
       </profile>
     </annotationProcessing>
