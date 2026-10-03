@@ -84,7 +84,6 @@ public final class LocalBook {
     double bestAsk() { return ap[0]; }
 
     int bidLevels() { return bn; }
-    int askLevels() { return an; }
 
     /** Верхние уровни в переданные массивы; возвращает число скопированных уровней. */
     public int topBids(double[] px, double[] qty) { int k = Math.min(px.length, bn); System.arraycopy(bp, 0, px, 0, k); System.arraycopy(bq, 0, qty, 0, k); return k; }

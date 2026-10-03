@@ -14,7 +14,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.Consumer;
 
 /**
  * Приватный WebSocket биржи (или JSON-RPC-сокет ноды): запросы с ответом по id, логин,
@@ -41,7 +40,6 @@ public final class WsRpcChannel {
         public static Msg loginOk() { return new Msg(Kind.LOGIN_OK, null, null, null); }
         public static Msg reply(String id, String text) { return new Msg(Kind.REPLY, id, text, null); }
         public static Msg event(String text) { return new Msg(Kind.EVENT, null, text, null); }
-        public static Msg pong(String reply) { return new Msg(Kind.IGNORE, null, null, reply); }
     }
 
     public interface Protocol {

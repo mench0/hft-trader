@@ -100,7 +100,6 @@ public final class PriceWindow {
     }
 
     public int size() { return size; }
-    public boolean isFull() { return size == capacity; }
 
     /** Окно должно заполниться хотя бы наполовину, иначе статистика недостоверна. */
     public boolean isWarmedUp() { return size >= capacity / 2; }

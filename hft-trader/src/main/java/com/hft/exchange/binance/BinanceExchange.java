@@ -104,17 +104,6 @@ public final class BinanceExchange implements ExchangeGateway {
     public List<String> symbols() { return feed.activeSymbols(); }
 
     @Override
-    public void addSymbol(String symbol) {
-        market.register(symbol);
-        feed.addSymbol(symbol);
-    }
-
-    @Override
-    public void removeSymbol(String symbol) {
-        feed.removeSymbol(symbol);
-    }
-
-    @Override
     public MarketDataStore marketData() { return market; }
 
     @Override
@@ -129,12 +118,8 @@ public final class BinanceExchange implements ExchangeGateway {
     @Override
     public MeanReversionStrategy strategy() { return strategy; }
 
-    // Дополнительные геттеры, специфичные для Binance — нужны админке
-    // для расширенной диагностики поверх общего интерфейса ExchangeGateway
-    public MarketDataHandler dataHandler() { return dataHandler; }
     public BinanceMarketDataFeed feed() { return feed; }
     public TickPipeline pipeline() { return pipeline; }
-    public BinanceRestClient rest() { return rest; }
 
     /** Периодические фоновые задачи для этой биржи — вызывается из Main через scheduler. */
     public void syncTime() {

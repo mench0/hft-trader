@@ -7,8 +7,6 @@ import java.util.Map;
 public interface BookFeed {
     void start();
     void stop();
-    void addSymbol(String symbol);
-    void removeSymbol(String symbol);
     List<String> activeSymbols();
     boolean isConnected();
 

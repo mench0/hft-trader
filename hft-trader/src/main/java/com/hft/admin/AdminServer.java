@@ -290,7 +290,7 @@ public final class AdminServer {
     /**
      * Торговые параметры каждой биржи (риск, стратегия, размеры стакана/окна цен).
      *
-     * GET  /exchange/params                        — параметры всех выбранных и запущенных бирж
+     * GET  /exchange/params                        — параметры выбранных, запущенных и уже настроенных бирж
      * GET  /exchange/params?exchange=bybit         — одной биржи
      * POST /exchange/params?exchange=bybit&maxPositionQuote=50&maxDailyLossQuote=20&entryZ=2.5
      *
@@ -321,6 +321,7 @@ public final class AdminServer {
         ObjectNode root = mapper.createObjectNode();
         java.util.Set<String> ids = new java.util.LinkedHashSet<>(controller.selection().keySet());
         ids.addAll(controller.active().keySet());
+        ids.addAll(new java.util.TreeSet<>(controller.configuredExchanges()));
         for (String id : ids) root.set(id, paramsNode(id));
         send(ex, 200, root);
     }

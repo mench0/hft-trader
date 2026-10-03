@@ -207,24 +207,6 @@ public final class BybitMarketDataFeed extends AbstractWsFeed {
         return null;
     }
 
-    public void addSymbol(String symbol) {
-        String s = symbol.toUpperCase();
-        if (!activeSymbols.contains(s)) {
-            activeSymbols.add(s);
-            send("{\"op\":\"subscribe\",\"args\":[\"publicTrade." + s + "\",\"orderbook."
-                    + depthParam() + "." + s + "\"]}");
-        }
-    }
-
-    public void removeSymbol(String symbol) {
-        String s = symbol.toUpperCase();
-        if (activeSymbols.remove(s)) {
-            localBooks.remove(s);
-            send("{\"op\":\"unsubscribe\",\"args\":[\"publicTrade." + s + "\",\"orderbook."
-                    + depthParam() + "." + s + "\"]}");
-        }
-    }
-
     public List<String> activeSymbols() { return List.copyOf(activeSymbols); }
     public Latency parseLatency() { return parseLatency; }
 }

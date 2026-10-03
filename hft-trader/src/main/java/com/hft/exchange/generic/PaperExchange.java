@@ -96,19 +96,6 @@ public final class PaperExchange implements ExchangeGateway, RequestStatsSource 
     public List<String> symbols() { return feed.activeSymbols(); }
 
     @Override
-    public void addSymbol(String symbol) {
-        String s = symbol.toUpperCase();
-        ExchangeSupport.putDefaultFilter(filters, s);
-        market.register(s);
-        feed.addSymbol(s);
-    }
-
-    @Override
-    public void removeSymbol(String symbol) {
-        feed.removeSymbol(symbol);
-    }
-
-    @Override
     public MarketDataStore marketData() { return market; }
 
     @Override

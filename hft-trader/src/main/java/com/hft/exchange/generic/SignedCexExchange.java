@@ -133,24 +133,6 @@ public final class SignedCexExchange implements ExchangeGateway, RequestStatsSou
     public List<String> symbols() { return feed.activeSymbols(); }
 
     @Override
-    public void addSymbol(String symbol) {
-        String s = symbol.toUpperCase();
-        if (rest != null) {
-            try { rest.loadFilters(List.of(s)); }
-            catch (Exception e) { throw new IllegalStateException("Не удалось загрузить правила для " + s + ": " + e.getMessage()); }
-        } else {
-            ExchangeSupport.putDefaultFilter(filters, s);
-        }
-        market.register(s);
-        feed.addSymbol(s);
-    }
-
-    @Override
-    public void removeSymbol(String symbol) {
-        feed.removeSymbol(symbol);
-    }
-
-    @Override
     public MarketDataStore marketData() { return market; }
 
     @Override

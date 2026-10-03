@@ -53,10 +53,6 @@ public class WsFeedCheck {
       srv.conns.get(0).ping();
       ck("jdk auto-pong", await(() -> srv.pongs.get() >= 1, 3000));
       // добавление символа на лету
-      r.feed().addSymbol("ETHUSDT");
-      ck("okx addSymbol subscribes", await(() -> srv.received.stream().anyMatch(t -> t.contains("ETH-USDT")), 3000));
-      r.feed().removeSymbol("ETHUSDT");
-      ck("okx removeSymbol unsubscribes", await(() -> srv.received.stream().anyMatch(t -> t.contains("\"unsubscribe\"") && t.contains("ETH-USDT")), 3000));
       r.feed().stop();
     }
 

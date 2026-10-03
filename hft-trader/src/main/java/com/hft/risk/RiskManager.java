@@ -180,5 +180,4 @@ public final class RiskManager {
     public long rejectedCount() { return rejectedCount.get(); }
     public long acceptedCount() { return acceptedCount.get(); }
     public String lastRejectReason() { return lastRejectReason; }
-    public int ordersThisMinute() { return ordersThisMinute.get(); }
 }

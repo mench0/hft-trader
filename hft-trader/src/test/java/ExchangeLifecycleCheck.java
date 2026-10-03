@@ -30,10 +30,6 @@ public class ExchangeLifecycleCheck {
       ck("okx symbols", gw.symbols().equals(List.of("BTCUSDT")));
       // тики дошли через конвейер до окна цен
       ck("okx tick pipeline reached price window", await(() -> gw.marketData().stats("BTCUSDT").tickCount() > 0, 5000));
-      gw.addSymbol("ETHUSDT");
-      ck("okx addSymbol", gw.symbols().contains("ETHUSDT") && await(() -> ws.received.stream().anyMatch(t -> t.contains("ETH-USDT")), 3000));
-      gw.removeSymbol("ETHUSDT");
-      ck("okx removeSymbol", !gw.symbols().contains("ETHUSDT"));
       ck("okx accessors", gw.orders()!=null && gw.risk()!=null && gw.strategy()!=null);
       gw.syncBalances();
       gw.stop();

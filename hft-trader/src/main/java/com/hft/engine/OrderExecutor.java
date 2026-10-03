@@ -61,8 +61,6 @@ public final class OrderExecutor {
 
     public boolean isBusy(String symbol) { return inFlight.contains(symbol); }
 
-    public int inFlight() { return inFlight.size(); }
-
     /** Дождаться, пока все поставленные задачи завершатся (не дольше timeoutMs). */
     public boolean drain(long timeoutMs) {
         long until = System.currentTimeMillis() + timeoutMs;

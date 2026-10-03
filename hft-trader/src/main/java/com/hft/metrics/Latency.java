@@ -1,7 +1,6 @@
 package com.hft.metrics;
 
 import org.HdrHistogram.Histogram;
-import org.slf4j.Logger;
 
 /**
  * Замер латентности по перцентилям.
@@ -31,21 +30,8 @@ public final class Latency {
         record(System.nanoTime() - startNanos);
     }
 
-    public void log(Logger logger) {
-        if (histogram.getTotalCount() == 0) return;
-        logger.info("{} (мкс): p50={} p99={} p999={} max={} n={}",
-                name,
-                histogram.getValueAtPercentile(50) / 1000,
-                histogram.getValueAtPercentile(99) / 1000,
-                histogram.getValueAtPercentile(99.9) / 1000,
-                histogram.getMaxValue() / 1000,
-                histogram.getTotalCount());
-    }
-
     public long p50Micros() { return histogram.getValueAtPercentile(50) / 1000; }
     public long p99Micros() { return histogram.getValueAtPercentile(99) / 1000; }
-    public long p999Micros() { return histogram.getValueAtPercentile(99.9) / 1000; }
-    public long maxMicros() { return histogram.getMaxValue() / 1000; }
     public long count() { return histogram.getTotalCount(); }
 
     public void reset() {

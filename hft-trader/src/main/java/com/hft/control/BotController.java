@@ -164,6 +164,9 @@ public final class BotController {
                 .orElse(d);
     }
 
+    /** Биржи, для которых параметры уже задавались. */
+    public java.util.Set<String> configuredExchanges() { return java.util.Set.copyOf(settings.keySet()); }
+
     private TradingSettings settingsFor(String exchangeId) {
         return settings.computeIfAbsent(exchangeId, id -> new TradingSettings(defaultsFor(id)));
     }

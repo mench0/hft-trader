@@ -159,28 +159,6 @@ public final class WsBookFeed implements BookFeed {
         if (thread != null) thread.interrupt();
     }
 
-    @Override public void addSymbol(String s) {
-        if (symbols.contains(s)) return;
-        register(s);
-        String v = venueOf(s);
-        BookBatch cb = currentBatch;
-        if (cb != null) cb.setKnown(venueToInternal.keySet());
-        WsSender snd = sender;
-        if (v != null && open && snd != null) for (String m : dialect.subscribe(List.of(v), cfg.bookDepth())) snd.send(m);
-    }
-
-    @Override public void removeSymbol(String s) {
-        symbols.remove(s);
-        String v = venueOf(s);
-        if (v == null) return;
-        venueToInternal.remove(v);
-        states.remove(v);
-        BookBatch cb = currentBatch;
-        if (cb != null) cb.setKnown(venueToInternal.keySet());
-        WsSender snd = sender;
-        if (open && snd != null) for (String m : dialect.unsubscribe(List.of(v), cfg.bookDepth())) snd.send(m);
-    }
-
     @Override public List<String> activeSymbols() { return List.copyOf(symbols); }
 
     @Override public boolean isConnected() {

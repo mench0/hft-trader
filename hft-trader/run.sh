@@ -33,9 +33,8 @@ JVM_OPTS=(
 mkdir -p logs
 
 echo "Запуск. Конфигурация:"
-echo "  TRADING_ENABLED=${TRADING_ENABLED:-из application.yml}"
-echo "  TRADING_SYMBOLS=${TRADING_SYMBOLS:-из application.yml}"
-echo "  EXCHANGE_TESTNET=${EXCHANGE_TESTNET:-из application.yml}"
+echo "  ADMIN_PORT=${ADMIN_PORT:-из application.yml или 8080}"
+echo "  Торговые параметры бирж — через админку (/exchange/params), хранятся в ${STATE_DB:-data/state.db}"
 echo ""
 
 exec java "${JVM_OPTS[@]}" -jar "$JAR" "$@"

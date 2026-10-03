@@ -56,11 +56,6 @@ public final class BalanceStore {
         return System.currentTimeMillis() - lastSyncMs;
     }
 
-    /** Балансы старше maxAgeMs считаются протухшими — нужна пересинхронизация. */
-    public boolean isStale(long maxAgeMs) {
-        return ageMs() > maxAgeMs;
-    }
-
     public Map<String, Double> snapshot() {
         return Map.copyOf(free);
     }

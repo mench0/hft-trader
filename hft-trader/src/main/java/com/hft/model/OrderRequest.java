@@ -90,16 +90,6 @@ public final class OrderRequest {
         return this;
     }
 
-    /** Сокращение: исполнить что можно сразу, остаток отменить. */
-    public OrderRequest immediateOrCancel() {
-        return timeInForce(TimeInForce.IOC);
-    }
-
-    /** Сокращение: исполнить целиком или отменить. */
-    public OrderRequest fillOrKill() {
-        return timeInForce(TimeInForce.FOK);
-    }
-
     // ---------- Геттеры ----------
 
     public String symbol() { return symbol; }

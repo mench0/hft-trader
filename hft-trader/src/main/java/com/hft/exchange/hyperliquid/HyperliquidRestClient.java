@@ -7,7 +7,6 @@ import com.hft.config.ExchangeConfig;
 import com.hft.crypto.EvmCrypto;
 import com.hft.crypto.Web3jCrypto;
 import com.hft.model.OrderEnums.Side;
-import com.hft.model.OrderEnums.TimeInForce;
 import com.hft.model.OrderEnums.Type;
 import com.hft.model.OrderResult;
 import com.hft.rest.ApiException;

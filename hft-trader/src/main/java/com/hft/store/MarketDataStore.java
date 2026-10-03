@@ -1,7 +1,6 @@
 package com.hft.store;
 
 import com.hft.model.Tick;
-import org.agrona.collections.Object2ObjectHashMap;
 
 import java.util.Collections;
 import java.util.Map;
@@ -40,35 +39,10 @@ public final class MarketDataStore {
     /** Статистика по одному символу. Mutable, обновляется на каждом тике. */
     public static final class SymbolStats {
         volatile double lastPrice;
-        volatile double lastQty;
         volatile long tickCount;
-        volatile long lastTickMs;
-        volatile double volumeBuy;   // объём агрессивных покупок
-        volatile double volumeSell;  // объём агрессивных продаж
 
         public double lastPrice() { return lastPrice; }
-        public double lastQty() { return lastQty; }
         public long tickCount() { return tickCount; }
-        public long lastTickMs() { return lastTickMs; }
-        public double volumeBuy() { return volumeBuy; }
-        public double volumeSell() { return volumeSell; }
-
-        /**
-         * Дельта объёма: покупки минус продажи.
-         * Положительная — давление вверх, отрицательная — вниз.
-         */
-        public double volumeDelta() { return volumeBuy - volumeSell; }
-
-        /** Доля покупок в общем объёме: 0.5 = равновесие. */
-        public double buyRatio() {
-            double total = volumeBuy + volumeSell;
-            return total == 0 ? 0.5 : volumeBuy / total;
-        }
-
-        void reset() {
-            volumeBuy = 0;
-            volumeSell = 0;
-        }
     }
 
     /** Регистрация инструмента. Вызывается на старте для каждого символа. */
@@ -94,15 +68,7 @@ public final class MarketDataStore {
         SymbolStats st = stats.get(symbol);
         if (st != null) {
             st.lastPrice = tick.price();
-            st.lastQty = tick.quantity();
             st.tickCount++;
-            st.lastTickMs = tick.exchangeTimeMs();
-            // buyerIsMaker == true означает, что агрессором был продавец
-            if (tick.buyerIsMaker()) {
-                st.volumeSell += tick.quantity();
-            } else {
-                st.volumeBuy += tick.quantity();
-            }
         }
     }
 
@@ -134,11 +100,6 @@ public final class MarketDataStore {
         }
         SymbolStats st = stats(symbol);
         return st != null ? st.lastPrice : Double.NaN;
-    }
-
-    /** Сброс счётчиков объёма — вызывать периодически, например раз в минуту. */
-    public void resetVolumeCounters() {
-        stats.values().forEach(SymbolStats::reset);
     }
 
     /** Есть ли по символу свежие данные (стакан не старше maxAgeMs). */

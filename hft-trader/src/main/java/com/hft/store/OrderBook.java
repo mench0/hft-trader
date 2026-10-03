@@ -100,14 +100,12 @@ public final class OrderBook {
         System.arraycopy(askQtys, 0, into.askQtys, 0, an);
         into.bidCount = bn;
         into.askCount = an;
-        into.updateMs = lastUpdateMs;
     }
 
     /** Переиспользуемый буфер уровней. */
     public static final class Levels {
         public double[] bidPrices = new double[0], bidQtys = new double[0], askPrices = new double[0], askQtys = new double[0];
         public int bidCount, askCount;
-        public long updateMs;
 
         void ensure(int n) {
             if (bidPrices.length >= n) return;
@@ -158,14 +156,6 @@ public final class OrderBook {
         try { return midRaw(); } finally { lock.unlockRead(st); }
     }
 
-    public double spread() {
-        long st = lock.tryOptimisticRead();
-        double r = spreadRaw();
-        if (lock.validate(st)) return r;
-        st = lock.readLock();
-        try { return spreadRaw(); } finally { lock.unlockRead(st); }
-    }
-
     /** Спред в процентах от mid — так удобнее сравнивать разные инструменты. */
     public double spreadPercent() {
         long st = lock.tryOptimisticRead();
@@ -193,22 +183,6 @@ public final class OrderBook {
         try { return imbalanceRaw(levels); } finally { lock.unlockRead(st); }
     }
 
-    public double bidVolume(int levels) {
-        long st = lock.tryOptimisticRead();
-        double r = volumeRaw(bidQtys, bidCount, levels);
-        if (lock.validate(st)) return r;
-        st = lock.readLock();
-        try { return volumeRaw(bidQtys, bidCount, levels); } finally { lock.unlockRead(st); }
-    }
-
-    public double askVolume(int levels) {
-        long st = lock.tryOptimisticRead();
-        double r = volumeRaw(askQtys, askCount, levels);
-        if (lock.validate(st)) return r;
-        st = lock.readLock();
-        try { return volumeRaw(askQtys, askCount, levels); } finally { lock.unlockRead(st); }
-    }
-
     /** Средняя цена рыночной покупки qty — проход по аскам. NaN, если стакана не хватило. */
     public double estimateBuyPrice(double qty) {
         long st = lock.tryOptimisticRead();
@@ -218,15 +192,6 @@ public final class OrderBook {
         try { return walkRaw(askPrices, askQtys, askCount, qty); } finally { lock.unlockRead(st); }
     }
 
-    /** Средняя цена рыночной продажи qty — проход по бидам. */
-    public double estimateSellPrice(double qty) {
-        long st = lock.tryOptimisticRead();
-        double r = walkRaw(bidPrices, bidQtys, bidCount, qty);
-        if (lock.validate(st)) return r;
-        st = lock.readLock();
-        try { return walkRaw(bidPrices, bidQtys, bidCount, qty); } finally { lock.unlockRead(st); }
-    }
-
     /** Ожидаемое проскальзывание рыночного ордера в процентах от mid. */
     public double estimateSlippagePercent(double qty, boolean isBuy) {
         long st = lock.tryOptimisticRead();
@@ -234,15 +199,6 @@ public final class OrderBook {
         if (lock.validate(st)) return r;
         st = lock.readLock();
         try { return slippageRaw(qty, isBuy); } finally { lock.unlockRead(st); }
-    }
-
-    /** Уровень с объёмом больше threshold× среднего ("стена") или NaN. */
-    public double findWall(boolean bidSide, double threshold) {
-        long st = lock.tryOptimisticRead();
-        double r = wallRaw(bidSide, threshold);
-        if (lock.validate(st)) return r;
-        st = lock.readLock();
-        try { return wallRaw(bidSide, threshold); } finally { lock.unlockRead(st); }
     }
 
     public int bidCount() {
@@ -267,14 +223,6 @@ public final class OrderBook {
         if (lock.validate(st)) return r;
         st = lock.readLock();
         try { return lastUpdateMs; } finally { lock.unlockRead(st); }
-    }
-
-    public long lastUpdateId() {
-        long st = lock.tryOptimisticRead();
-        long r = lastUpdateId;
-        if (lock.validate(st)) return r;
-        st = lock.readLock();
-        try { return lastUpdateId; } finally { lock.unlockRead(st); }
     }
 
     public boolean isReady() {
@@ -307,14 +255,6 @@ public final class OrderBook {
         if (lock.validate(st)) return r;
         st = lock.readLock();
         try { return level >= 0 && level < askCount ? askPrices[level] : Double.NaN; } finally { lock.unlockRead(st); }
-    }
-
-    public double askQtyAt(int level) {
-        long st = lock.tryOptimisticRead();
-        double r = level >= 0 && level < askCount ? askQtys[level] : 0;
-        if (lock.validate(st)) return r;
-        st = lock.readLock();
-        try { return level >= 0 && level < askCount ? askQtys[level] : 0; } finally { lock.unlockRead(st); }
     }
 
     public String symbol() { return symbol; }
@@ -358,12 +298,6 @@ public final class OrderBook {
         return total == 0 ? 0 : (bidVol - askVol) / total;
     }
 
-    private double volumeRaw(double[] qtys, int count, int levels) {
-        double sum = 0;
-        for (int i = 0, n = Math.min(Math.min(levels, depth), count); i < n; i++) sum += qtys[i];
-        return sum;
-    }
-
     private double walkRaw(double[] prices, double[] qtys, int count, double qty) {
         double remaining = qty, cost = 0;
         for (int i = 0, n = Math.min(count, depth); i < n && remaining > 0; i++) {
@@ -381,18 +315,6 @@ public final class OrderBook {
         double exec = isBuy ? walkRaw(askPrices, askQtys, askCount, qty) : walkRaw(bidPrices, bidQtys, bidCount, qty);
         if (Double.isNaN(exec)) return Double.NaN;
         return Math.abs(exec - mid) / mid * 100.0;
-    }
-
-    private double wallRaw(boolean bidSide, double threshold) {
-        double[] qtys = bidSide ? bidQtys : askQtys;
-        double[] prices = bidSide ? bidPrices : askPrices;
-        int count = Math.min(bidSide ? bidCount : askCount, depth);
-        if (count < 3) return Double.NaN;
-        double avg = 0;
-        for (int i = 0; i < count; i++) avg += qtys[i];
-        avg /= count;
-        for (int i = 0; i < count; i++) if (qtys[i] > avg * threshold) return prices[i];
-        return Double.NaN;
     }
 
     @Override

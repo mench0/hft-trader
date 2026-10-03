@@ -102,17 +102,6 @@ public final class BybitExchange implements ExchangeGateway {
     public List<String> symbols() { return feed.activeSymbols(); }
 
     @Override
-    public void addSymbol(String symbol) {
-        market.register(symbol);
-        feed.addSymbol(symbol);
-    }
-
-    @Override
-    public void removeSymbol(String symbol) {
-        feed.removeSymbol(symbol);
-    }
-
-    @Override
     public MarketDataStore marketData() { return market; }
 
     @Override

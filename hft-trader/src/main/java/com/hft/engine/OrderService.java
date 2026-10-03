@@ -104,33 +104,6 @@ public final class OrderService {
         return execute(OrderRequest.market(symbol, Side.SELL).balancePortion(portion));
     }
 
-    /**
-     * Лимитный ордер по лучшей цене стакана — пассивный вход.
-     * offsetTicks сдвигает цену вглубь стакана: 0 — встать на лучшую цену,
-     * 1 — на тик хуже (выше шанс постоять в очереди, но не перебить).
-     */
-    public OrderResult buyLimitAtBid(String symbol, double qty, int offsetTicks) {
-        OrderBook book = market.book(symbol);
-        if (book == null || !book.isReady()) {
-            return failed(symbol, Side.BUY, "Нет данных стакана");
-        }
-        SymbolFilters.Filter f = filters.get(symbol);
-        double tick = f != null ? f.tickSize() : 0;
-        double price = book.bestBid() - tick * offsetTicks;
-        return buyLimit(symbol, qty, price);
-    }
-
-    public OrderResult sellLimitAtAsk(String symbol, double qty, int offsetTicks) {
-        OrderBook book = market.book(symbol);
-        if (book == null || !book.isReady()) {
-            return failed(symbol, Side.SELL, "Нет данных стакана");
-        }
-        SymbolFilters.Filter f = filters.get(symbol);
-        double tick = f != null ? f.tickSize() : 0;
-        double price = book.bestAsk() + tick * offsetTicks;
-        return sellLimit(symbol, qty, price);
-    }
-
     // ======================= ОСНОВНОЙ МЕТОД =======================
 
     /**

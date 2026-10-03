@@ -35,8 +35,7 @@ public final class BinanceMarketDataFeed extends AbstractWsFeed {
     private final double[] askPrices;
     private final double[] askQtys;
 
-    // Символы, на которые подписаны прямо сейчас. Изменяется через
-    // addSymbol/removeSymbol, применяется при следующем (пере)подключении.
+    // Символы, на которые подписаны.
     private final List<String> activeSymbols;
 
     public BinanceMarketDataFeed(ExchangeConfig config, MarketDataStore store, TickPipeline pipeline) {
@@ -171,19 +170,6 @@ public final class BinanceMarketDataFeed extends AbstractWsFeed {
             if (i == len) return s;
         }
         return null;
-    }
-
-    /** Добавить символ в подписку. Подписка обновится при следующем реконнекте. */
-    public void addSymbol(String symbol) {
-        String s = symbol.toUpperCase();
-        if (!activeSymbols.contains(s)) {
-            activeSymbols.add(s);
-            log.info("Символ {} добавлен, применится при переподключении", s);
-        }
-    }
-
-    public void removeSymbol(String symbol) {
-        activeSymbols.remove(symbol.toUpperCase());
     }
 
     public List<String> activeSymbols() { return List.copyOf(activeSymbols); }
