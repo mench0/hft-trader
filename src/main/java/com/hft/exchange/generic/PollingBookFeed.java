@@ -97,8 +97,6 @@ public final class PollingBookFeed implements BookFeed {
         if (thread != null) thread.interrupt();
     }
 
-    @Override public void addSymbol(String s) { if (!symbols.contains(s)) symbols.add(s); }
-    @Override public void removeSymbol(String s) { symbols.remove(s); }
     @Override public List<String> activeSymbols() { return List.copyOf(symbols); }
 
     @Override public boolean isConnected() {

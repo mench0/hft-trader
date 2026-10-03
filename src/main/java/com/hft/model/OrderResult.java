@@ -35,16 +35,6 @@ public record OrderResult(
         return "REJECTED".equals(status) || "EXPIRED".equals(status);
     }
 
-    /** Остаток, который не исполнился. */
-    public double remainingQty() {
-        return requestedQty - executedQty;
-    }
-
-    /** Доля исполнения: 1.0 = полностью, 0.3 = исполнилось 30%. */
-    public double fillRatio() {
-        return requestedQty > 0 ? executedQty / requestedQty : 0;
-    }
-
     @Override
     public String toString() {
         return String.format("Order[%d] %s %s %s: %.8f/%.8f @ %.2f (%.1f ms)",

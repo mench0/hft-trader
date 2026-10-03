@@ -19,10 +19,7 @@
         <slf4j.version>2.0.13</slf4j.version>
         <logback.version>1.5.6</logback.version>
         <hdrhistogram.version>2.2.2</hdrhistogram.version>
-        <agrona.version>1.21.1</agrona.version>
         <disruptor.version>4.0.0</disruptor.version>
-        <chronicle.map.version>3.25ea6</chronicle.map.version>
-        <junit.version>5.10.2</junit.version>
     </properties>
 
     <dependencies>
@@ -56,13 +53,6 @@
             <version>${disruptor.version}</version>
         </dependency>
 
-        <!-- Agrona: коллекции без боксинга и аллокаций (Object2ObjectHashMap,
-             Long2ObjectHashMap и пр.), off-heap буферы. От авторов Aeron. -->
-        <dependency>
-            <groupId>org.agrona</groupId>
-            <artifactId>agrona</artifactId>
-            <version>${agrona.version}</version>
-        </dependency>
 
         <!-- ===== МЕТРИКИ ЛАТЕНТНОСТИ ===== -->
         <!-- HdrHistogram: перцентили без аллокаций на запись.
@@ -92,13 +82,6 @@
             <version>3.46.1.0</version>
         </dependency>
 
-        <!-- ===== ТЕСТЫ ===== -->
-        <dependency>
-            <groupId>org.junit.jupiter</groupId>
-            <artifactId>junit-jupiter</artifactId>
-            <version>${junit.version}</version>
-            <scope>test</scope>
-        </dependency>
             <!-- Криптография для Hyperliquid и AMM: secp256k1, keccak, подпись транзакций. Своей криптографии в проекте нет. -->
         <dependency>
             <groupId>org.web3j</groupId>

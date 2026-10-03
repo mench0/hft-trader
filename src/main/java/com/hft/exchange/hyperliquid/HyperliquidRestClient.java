@@ -7,7 +7,6 @@ import com.hft.config.ExchangeConfig;
 import com.hft.crypto.EvmCrypto;
 import com.hft.crypto.Web3jCrypto;
 import com.hft.model.OrderEnums.Side;
-import com.hft.model.OrderEnums.TimeInForce;
 import com.hft.model.OrderEnums.Type;
 import com.hft.model.OrderResult;
 import com.hft.rest.ApiException;
@@ -20,6 +19,7 @@ import com.hft.util.MsgPack;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.hft.util.BoundedMap;
 import java.io.ByteArrayOutputStream;
 import java.math.BigDecimal;
 import java.math.MathContext;
@@ -325,8 +325,8 @@ public final class HyperliquidRestClient extends SignedCexClient {
     private volatile String wsUrlOverride;
     private final AtomicLong wsSeq = new AtomicLong();
     private record Upd(String symbol, Side side, double orig, double left, String status, double limitPx) {}
-    private final Map<Long, Upd> updates = new ConcurrentHashMap<>();
-    private final Map<Long, double[]> fills = new ConcurrentHashMap<>();   // oid -> {объём, объём*цена}
+    private final Map<Long, Upd> updates = BoundedMap.create(MAX_TRACKED_ORDERS);
+    private final Map<Long, double[]> fills = BoundedMap.create(MAX_TRACKED_ORDERS);   // oid -> {объём, объём*цена}
 
     public void setWsUrl(String url) { this.wsUrlOverride = url; }
 

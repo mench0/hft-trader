@@ -10,9 +10,9 @@ import java.io.IOException;
  * Помощники потокового разбора JSON (Jackson streaming) для горячего пути WS-фидов:
  * без дерева узлов и без строк на каждое число.
  */
-final class FastJson {
+public final class FastJson {
 
-    static final JsonFactory F = new JsonFactory();
+    public static final JsonFactory F = new JsonFactory();
 
     private FastJson() {}
 
@@ -21,7 +21,7 @@ final class FastJson {
     private static final long MAX_EXACT = 1L << 53;
 
     /** Число из текущего токена (строка "123.45" или число 123.45). */
-    static double num(JsonParser p) throws IOException {
+    public static double num(JsonParser p) throws IOException {
         JsonToken t = p.currentToken();
         if (t != JsonToken.VALUE_STRING && t != JsonToken.VALUE_NUMBER_INT && t != JsonToken.VALUE_NUMBER_FLOAT)
             throw new IllegalArgumentException("ожидалось число, получено " + t);
@@ -30,7 +30,7 @@ final class FastJson {
         return d;
     }
 
-    static long longOf(JsonParser p, long def) throws IOException {
+    public static long longOf(JsonParser p, long def) throws IOException {
         JsonToken t = p.currentToken();
         if (t == JsonToken.VALUE_NUMBER_INT) return p.getLongValue();
         if (t == JsonToken.VALUE_STRING) {
@@ -47,7 +47,7 @@ final class FastJson {
      * Быстрый разбор десятичной записи: до 18 значащих цифр и до 22 знаков после точки считаются
      * точно (мантисса < 2^53 и точная степень десяти — результат округлён корректно), остальное — Double.parseDouble.
      */
-    static double parse(char[] c, int off, int len) {
+    public static double parse(char[] c, int off, int len) {
         int i = off, end = off + len;
         if (i >= end) throw new NumberFormatException("пусто");
         boolean neg = false;
@@ -78,7 +78,7 @@ final class FastJson {
 
     private static double slow(char[] c, int off, int len) { return Double.parseDouble(new String(c, off, len)); }
 
-    static boolean textIs(JsonParser p, String s) throws IOException {
+    public static boolean textIs(JsonParser p, String s) throws IOException {
         if (p.currentToken() != JsonToken.VALUE_STRING) return false;
         int len = p.getTextLength();
         if (len != s.length()) return false;
@@ -87,7 +87,7 @@ final class FastJson {
         return true;
     }
 
-    static boolean equals(char[] c, int len, String s) {
+    public static boolean equals(char[] c, int len, String s) {
         if (len != s.length()) return false;
         for (int i = 0; i < len; i++) if (c[i] != s.charAt(i)) return false;
         return true;
@@ -121,7 +121,7 @@ final class FastJson {
     }
 
     /** Строка текущего значения (только для редких сообщений: ошибки, id). */
-    static String text(JsonParser p) throws IOException {
+    public static String text(JsonParser p) throws IOException {
         JsonToken t = p.currentToken();
         if (t == JsonToken.START_OBJECT || t == JsonToken.START_ARRAY) {
             // вложенный объект — вернём его как есть (для сообщений об ошибке)

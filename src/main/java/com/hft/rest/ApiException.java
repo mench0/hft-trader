@@ -14,7 +14,6 @@ public final class ApiException extends RuntimeException implements RateLimited 
     }
 
     public int httpStatus() { return httpStatus; }
-    public String code() { return code; }
 
     @Override
     public boolean isRateLimit() { return rateLimit || httpStatus == 429 || httpStatus == 418; }

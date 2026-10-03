@@ -26,7 +26,7 @@ public class WsTradeCheck {
   static boolean near(double a,double b){ return Math.abs(a-b)<1e-9*Math.max(1,Math.abs(b)); }
   static ObjectMapper m = new ObjectMapper();
   static JsonNode j(String s){ try { return m.readTree(s); } catch(Exception e){ throw new RuntimeException(e); } }
-  static ExchangeConfig cfg(String id, String url, String sym){ return new ExchangeConfig(id,true,false,url,"",5000,List.of(sym),20,100); }
+  static ExchangeConfig cfg(String id, String url, String sym){ return new ExchangeConfig(id, false,url,"",5000,List.of(sym),20,100); }
   static SymbolFilters filt(String sym){ var f=new SymbolFilters(); f.put(sym, new SymbolFilters.Filter(0.0001,1e9,0.0001,0,1e9,0.01,1)); return f; }
   static Credentials cr = new Credentials("KEY","SECRET");
 
@@ -288,7 +288,7 @@ public class WsTradeCheck {
         }
       };
       ExchangeInfo info = ExchangeCatalog.find("uniswapv2").get();
-      var cf = new ExchangeConfig("uniswapv2", true, false, "", ws.url(), 5000, List.of("WETHUSDC"), 20, 100);
+      var cf = new ExchangeConfig("uniswapv2", false, "", ws.url(), 5000, List.of("WETHUSDC"), 20, 100);
       var mk = new MarketDataStore(20, 100); mk.register("WETHUSDC");
       var feed = new WsBookFeed(info, cf, WsDialects.uniswap("WETHUSDC="+pair+":true:18:6"), mk, (sy,px,q,bm,ts,rn) -> {}, s -> {}, () -> {});
       feed.start();

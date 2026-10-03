@@ -11,7 +11,6 @@ import java.net.URI;
 import java.net.http.HttpRequest;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -255,6 +254,4 @@ public final class Dialects {
         }
     }
 
-    /** Для тестов: отдать как есть. */
-    public static String describe(double[] a) { return Arrays.toString(a); }
 }

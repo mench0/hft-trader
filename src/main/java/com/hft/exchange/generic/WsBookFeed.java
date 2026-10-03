@@ -64,11 +64,12 @@ public final class WsBookFeed implements BookFeed {
 
     private static final class SymbolState {
         final String internal;
-        final LocalBook book = new LocalBook();
+        final LocalBook book;
         final double[] bp, bq, ap, aq;
         int crossed;
         SymbolState(String internal, int depth) {
             this.internal = internal;
+            this.book = new LocalBook(LocalBook.levelsFor(depth));
             bp = new double[depth]; bq = new double[depth]; ap = new double[depth]; aq = new double[depth];
         }
     }
@@ -156,28 +157,6 @@ public final class WsBookFeed implements BookFeed {
         WebSocket w = socket;
         if (w != null) w.abort();
         if (thread != null) thread.interrupt();
-    }
-
-    @Override public void addSymbol(String s) {
-        if (symbols.contains(s)) return;
-        register(s);
-        String v = venueOf(s);
-        BookBatch cb = currentBatch;
-        if (cb != null) cb.setKnown(venueToInternal.keySet());
-        WsSender snd = sender;
-        if (v != null && open && snd != null) for (String m : dialect.subscribe(List.of(v), cfg.bookDepth())) snd.send(m);
-    }
-
-    @Override public void removeSymbol(String s) {
-        symbols.remove(s);
-        String v = venueOf(s);
-        if (v == null) return;
-        venueToInternal.remove(v);
-        states.remove(v);
-        BookBatch cb = currentBatch;
-        if (cb != null) cb.setKnown(venueToInternal.keySet());
-        WsSender snd = sender;
-        if (open && snd != null) for (String m : dialect.unsubscribe(List.of(v), cfg.bookDepth())) snd.send(m);
     }
 
     @Override public List<String> activeSymbols() { return List.copyOf(symbols); }

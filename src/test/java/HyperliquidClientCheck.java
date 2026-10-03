@@ -43,7 +43,7 @@ public class HyperliquidClientCheck {
       byte[] bt = resp.getBytes(); ex.sendResponseHeaders(200, bt.length); ex.getResponseBody().write(bt); ex.close(); });
     srv.start(); String url="http://127.0.0.1:"+srv.getAddress().getPort();
     var f = new SymbolFilters(); var tc = new TC();
-    var c = new HyperliquidRestClient(new ExchangeConfig("hyperliquid",true,false,url,"",5000,List.of("BTCUSDC"),20,100),
+    var c = new HyperliquidRestClient(new ExchangeConfig("hyperliquid", false,url,"",5000,List.of("BTCUSDC"),20,100),
         new Credentials("0xAbC0000000000000000000000000000000000001","key"), f, tc);
     c.loadFilters(List.of("BTCUSDC"));
     ck("filters step", Math.abs(f.get("BTCUSDC").stepSize()-1e-5)<1e-12 && f.get("BTCUSDC").minNotional()==10.0);

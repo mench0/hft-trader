@@ -46,7 +46,8 @@ public final class SqliteStateStore {
 
     private final Path dbPath;
     private final String jdbcUrl;
-    private final ObjectMapper mapper = new ObjectMapper();
+    private final ObjectMapper mapper = new ObjectMapper()
+            .configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
     public SqliteStateStore() {
         String path = System.getenv().getOrDefault("STATE_DB", "data/state.db");

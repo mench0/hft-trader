@@ -41,10 +41,7 @@ public interface ExchangeGateway {
     /** Символы, которые эта биржа сейчас слушает. */
     List<String> symbols();
 
-    /** Добавить символ в подписку. Реализация сама решает, нужен ли реконнект. */
-    void addSymbol(String symbol);
 
-    void removeSymbol(String symbol);
 
     /** Рыночные данные именно этой биржи. */
     MarketDataStore marketData();

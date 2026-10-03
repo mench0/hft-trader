@@ -138,13 +138,17 @@ LOT_SIZE`, и причина неочевидна.
 
 `RiskManager` пропускает ордер, только если:
 
-- kill switch не взведён и торговля включена в конфиге
-- не превышен лимит ордеров в минуту (защита от цикла в стратегии)
-- дневной убыток не достиг предела — иначе kill switch взводится сам
-- данные по символу свежие (стакан не старше 5 секунд)
-- размер позиции в деньгах не больше `max-position-quote`
+- kill switch не взведён и торговля включена в параметрах биржи (`tradingEnabled`)
+- не превышен лимит ордеров в минуту `maxOrdersPerMinute` (защита от цикла в стратегии)
+- дневной убыток не достиг `maxDailyLossQuote` — иначе kill switch взводится сам.
+  Считается реализованный результат закрытых позиций после комиссий (`takerFeePercent`),
+  счётчик обнуляется в 00:00 UTC
+- данные по символу свежие (стакан не старше `maxDataAgeMs`)
+- размер позиции в деньгах не больше `maxPositionQuote`
 - для рыночных ордеров ожидаемое проскальзывание не выше
-  `max-slippage-percent` — считается проходом по реальному стакану
+  `maxSlippagePercent` — считается проходом по реальному стакану
+
+Все лимиты задаются для каждой биржи отдельно, см. «Торговые параметры».
 
 ## Запуск
 
@@ -224,21 +228,40 @@ curl -X POST "localhost:8080/trading/stop?exchange=all"
 curl -X POST "localhost:8080/trading/panic?exchange=all"        # отменить всё и заглушить
 ```
 
-### Параметры риска — общие для всех бирж
+### Торговые параметры — отдельно по каждой бирже
+
+Все торговые настройки (риск, стратегия, размеры стакана) задаются только здесь,
+в `application.yml` их нет. Хранятся в SQLite и переживают рестарт.
 
 ```bash
-curl localhost:8080/risk
-curl -X POST "localhost:8080/risk?maxPositionQuote=50&maxDailyLossQuote=20&maxSlippagePercent=0.2&feeReservePercent=0.2&maxOrdersPerMinute=20&tradingEnabled=true"
+curl localhost:8080/exchange/params                      # все выбранные/настроенные биржи
+curl "localhost:8080/exchange/params?exchange=bybit"     # одна биржа
+curl -X POST "localhost:8080/exchange/params?exchange=bybit&maxPositionQuote=50&maxDailyLossQuote=20&entryZ=2.5"
 ```
 
-Любой параметр можно передать отдельно — остальные не меняются.
+Любой параметр можно передать отдельно — остальные не меняются. Значение вне
+допустимого диапазона или неизвестный параметр — ошибка 400, и не меняется ничего.
+Работающая биржа подхватывает новые значения на следующем тике, без перезапуска;
+`bookDepth` и `priceWindow` — после `/control/stop` и `/control/start`.
 
-### Параметры стратегии — отдельно по каждой бирже
-
-```bash
-curl "localhost:8080/strategy/params?exchange=binance"
-curl -X POST "localhost:8080/strategy/params?exchange=binance&entryZ=2.5&stopLoss=0.8&orderQuote=50"
-```
+| Параметр | По умолчанию | Что это |
+|---|---|---|
+| `tradingEnabled` | false | торговля на бирже разрешена (также `/trading/start`/`stop`) |
+| `maxPositionQuote` | 100 | максимальный размер ордера в котируемой валюте |
+| `maxDailyLossQuote` | 50 | дневной лимит убытка, после него kill switch |
+| `maxSlippagePercent` | 0.3 | предел ожидаемого проскальзывания рыночного ордера, % |
+| `feeReservePercent` | 0.2 | резерв под комиссию при ордере «на весь баланс», % |
+| `takerFeePercent` | из каталога биржи | комиссия тейкера для расчёта PnL, % |
+| `maxOrdersPerMinute` | 30 | лимит ордеров в минуту |
+| `maxDataAgeMs` | 5000 | старше — ордер отклоняется (нет свежих данных) |
+| `entryZ` / `exitZ` | 2.0 / 0.3 | пороги входа/выхода по z-score |
+| `stopLossPercent` | 0.5 | стоп-лосс, % |
+| `minImbalance` / `imbalanceLevels` | 0.15 / 5 | минимальный перевес бидов и по скольким уровням он считается |
+| `orderQuote` | 20 | размер сделки стратегии в котируемой валюте |
+| `maxBookAgeMs` | 2000 | вход только по стакану не старше |
+| `maxSpreadPercent` | 0.1 | не входить при спреде шире, % |
+| `positionTimeoutMs` | 3600000 | закрыть позицию по таймауту |
+| `bookDepth` / `priceWindow` | 20 / 1000 | глубина стакана и окно цен (после перезапуска биржи) |
 
 ### Данные и ручные ордера
 
@@ -257,10 +280,11 @@ curl -X POST "localhost:8080/cancel-all?exchange=binance&symbol=BTCUSDT"
 
 ## Персистентность настроек
 
-Всё, что настраивается через API — выбор бирж и тикеров, параметры риска,
-параметры стратегии по каждой бирже — сохраняется в **SQLite** (`data/state.db`)
-после каждого изменения. При следующем запуске это состояние читается
-автоматически и подменяет собой значения по умолчанию из `application.yml`.
+Всё, что настраивается через API — выбор бирж и тикеров, торговые параметры
+каждой биржи — сохраняется в **SQLite** (`data/state.db`) после каждого
+изменения и читается автоматически при следующем запуске. В `application.yml`
+остаются только порт и токен админки и адреса бирж (`testnet`, `rest-url`,
+`ws-url`, `recv-window-ms`).
 
 Почему SQLite, а не самодельный JSON-файл:
 - атомарность транзакций обеспечивает сама СУБД (UPSERT в одной транзакции),
@@ -324,11 +348,17 @@ scrape_configs:
 
 Метрики, которые отдаются (лейблы `exchange`, где применимо — `symbol`):
 
-- `hft_connected`, `hft_messages_total` — состояние соединения
+- `hft_jvm_heap_used_bytes`, `hft_jvm_heap_max_bytes`, `hft_jvm_gc_collections_total`,
+  `hft_jvm_gc_seconds_total`, `hft_jvm_threads` — контроль памяти и пауз GC
+- `hft_connected`, `hft_messages_total`, `hft_trading_enabled` — состояние соединения и торговли
 - `hft_kill_switch`, `hft_orders_accepted_total`, `hft_orders_rejected_total`
 - `hft_daily_pnl_quote`, `hft_open_positions`, `hft_strategy_enabled`
 - `hft_order_latency_p50_micros`, `hft_order_latency_p99_micros`
 - `hft_best_bid`, `hft_best_ask`, `hft_spread_percent`, `hft_imbalance`, `hft_zscore`, `hft_tick_count_total`
+
+Бот хранит только текущее состояние, необходимое для торговли (стакан фиксированной
+глубины, окно цен, последние 10 000 ордеров); историю хранит Prometheus. Логи
+ротируются: файл до 100 МБ, 7 дней, всего не больше 1 ГБ.
 
 В Grafana дальше — обычный дашборд поверх Prometheus data source: панели
 на PnL по времени (`hft_daily_pnl_quote`), латентность ордеров, z-score по
@@ -341,8 +371,9 @@ scrape_configs:
 2. Реализовать WS-фид, `extends AbstractWsFeed` (общий Netty-код уже есть —
    нужно только описать URL подписки и разбор сообщений)
 3. Собрать оба в классе `XxxExchange implements ExchangeGateway`, по образцу
-   `BinanceExchange`/`BybitExchange`
-4. Добавить `case` в `BotController.createExchange()`
+   `BinanceExchange`/`BybitExchange` (клиенту на `SignedCexClient` отдельный класс
+   не нужен — хватает `SignedCexExchange`)
+4. Добавить `case` в `ExchangeFactory.create()`
 5. Добавить биржу в `BotController.SUPPORTED_EXCHANGES`
 
 Дальше она сама появится в `/control/exchanges` и станет доступна через API
@@ -388,15 +419,12 @@ public final class MyStrategy extends Strategy {
 - **userDataStream** — WebSocket с событиями по вашему аккаунту. Сейчас
   балансы обновляются локально и сверяются раз в 5 минут; стрим даст
   мгновенное уведомление об исполнении ордера
-- **Переподписка WebSocket** при добавлении символа через админку. Сейчас
-  символ регистрируется в памяти, но подписка обновится только при
-  переподключении
 
 ## Предостережения
 
 - Начинайте на Testnet. Проверьте, что ордера проходят, объёмы округляются
   правильно, риск-менеджер отклоняет что должен
-- На реальных деньгах ставьте `max-position-quote` в несколько долларов,
+- На реальных деньгах ставьте `maxPositionQuote` в несколько долларов,
   пока не убедитесь в поведении бота
 - Задайте `ADMIN_TOKEN` — иначе любой, кто достучится до порта, сможет
   торговать вашими деньгами

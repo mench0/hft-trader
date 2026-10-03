@@ -6,9 +6,8 @@ import java.util.Map;
 /**
  * Всё состояние, которое должно сохраняться между перезапусками процесса.
  *
- * Без этого файла при рестарте приложение снова стартовало бы с чистого
- * application.yml, и любая настройка, сделанная через админку (выбор бирж,
- * тикеров, параметры риска, параметры стратегии), терялась бы.
+ * Без этого при рестарте любая настройка, сделанная через админку (выбор бирж,
+ * тикеров, торговые параметры каждой биржи), терялась бы.
  */
 public record PersistedState(
         /** Биржа -> список тикеров, как было выбрано через /control/select. */
@@ -22,26 +21,8 @@ public record PersistedState(
          *  (эквивалент вызова /trading/start после /control/start). */
         boolean autoTrade,
 
-        RiskSnapshot risk,
-
-        /** Биржа -> последние применённые параметры стратегии на ней. */
-        Map<String, StrategyParams> strategyParams
-) {
-
-    public record RiskSnapshot(
-            double maxPositionQuote,
-            double maxDailyLossQuote,
-            double maxSlippagePercent,
-            double feeReservePercent,
-            int maxOrdersPerMinute,
-            boolean tradingEnabled
-    ) {}
-
-    public record StrategyParams(
-            double entryZ,
-            double exitZ,
-            double stopLossPercent,
-            double minImbalance,
-            double orderQuote
-    ) {}
-}
+        /** Биржа -> торговые параметры ({@link com.hft.config.TradingParams#toStringMap()}).
+         *  Хранятся как ключ-значение: новый параметр в будущей версии получит значение
+         *  по умолчанию, а не сломает чтение старого состояния. */
+        Map<String, Map<String, String>> trading
+) {}

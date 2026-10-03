@@ -20,7 +20,7 @@ public class WsFeedCheck {
 
   static Rig rig(String id, String url, List<String> syms, long stale, long backoff) {
     ExchangeInfo info = ExchangeCatalog.find(id).get();
-    var cfg = new ExchangeConfig(id, true, false, "", url, 5000, syms, 20, 100);
+    var cfg = new ExchangeConfig(id, false, "", url, 5000, syms, 20, 100);
     var m = new MarketDataStore(20, 100); syms.forEach(m::register);
     var books = new AtomicInteger(); var gu = new AtomicInteger(); var ticks = new AtomicInteger();
     var f = new WsBookFeed(info, cfg, WsDialects.forExchange(id).get(), m, (sy,px,q,bm,ts,rn) -> ticks.incrementAndGet(), s -> books.incrementAndGet(), gu::incrementAndGet).tune(stale, backoff);
@@ -53,10 +53,6 @@ public class WsFeedCheck {
       srv.conns.get(0).ping();
       ck("jdk auto-pong", await(() -> srv.pongs.get() >= 1, 3000));
       // добавление символа на лету
-      r.feed().addSymbol("ETHUSDT");
-      ck("okx addSymbol subscribes", await(() -> srv.received.stream().anyMatch(t -> t.contains("ETH-USDT")), 3000));
-      r.feed().removeSymbol("ETHUSDT");
-      ck("okx removeSymbol unsubscribes", await(() -> srv.received.stream().anyMatch(t -> t.contains("\"unsubscribe\"") && t.contains("ETH-USDT")), 3000));
       r.feed().stop();
     }
 
@@ -229,7 +225,7 @@ public class WsFeedCheck {
     try (var srv = new MiniWsServer()) {
       srv.onText = (c, t) -> { if (t.contains("\"subscribe\"")) c.text("{\"arg\":{\"channel\":\"books\",\"instId\":\"BTC-USDT\"},\"action\":\"snapshot\",\"data\":[{\"asks\":[[\"101\",\"1\"]],\"bids\":[[\"99\",\"1\"]],\"ts\":\"1\"}]}"); };
       var info = ExchangeCatalog.find("okx").get();
-      var cfg = new ExchangeConfig("okx", true, false, rest, srv.url(), 5000, List.of("BTCUSDT"), 20, 100);
+      var cfg = new ExchangeConfig("okx", false, rest, srv.url(), 5000, List.of("BTCUSDT"), 20, 100);
       var m = new MarketDataStore(20, 100); m.register("BTCUSDT");
       var h = new HybridBookFeed(info, cfg, WsDialects.forExchange("okx").get(), Dialects.forExchange("okx"), m, (sy,px,q,bm,ts,rn) -> {}, s -> {}, () -> {}).grace(500);
       h.start();

@@ -18,14 +18,13 @@ import com.hft.store.SymbolFilters;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.hft.util.BoundedMap;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.math.RoundingMode;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Uniswap V2 и совместимые (PancakeSwap V2, SushiSwap): свопы через Router02. Не проверялся на живой сети.
@@ -57,7 +56,7 @@ public final class UniswapV2Client extends SignedCexClient {
     private final String router;
     private final double slippage;
     private final Map<String, Token> tokens = new LinkedHashMap<>();
-    private final Map<Long, OrderResult> results = new ConcurrentHashMap<>();
+    private final Map<Long, OrderResult> results = BoundedMap.create(MAX_TRACKED_ORDERS);
     private volatile long chainId = -1;
 
     public UniswapV2Client(ExchangeConfig config, Credentials credentials, SymbolFilters filters) {

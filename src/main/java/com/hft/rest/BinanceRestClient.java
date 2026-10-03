@@ -191,11 +191,6 @@ public final class BinanceRestClient implements ExchangeOrderApi {
         return placeOrder(symbol, Side.SELL, Type.MARKET, qty, 0, null, 0);
     }
 
-    /** Рыночная продажа на заданную сумму в котируемой валюте. */
-    public OrderResult sellMarketForQuote(String symbol, double quoteAmount) throws Exception {
-        return placeOrder(symbol, Side.SELL, Type.MARKET, 0, 0, null, quoteAmount);
-    }
-
     /**
      * Базовый метод размещения. Остальные — обёртки над ним.
      *

@@ -1,6 +1,6 @@
 package com.hft.engine;
 
-import com.hft.config.AppConfig;
+import com.hft.config.TradingSettings;
 import com.hft.metrics.Latency;
 import com.hft.model.OrderEnums.Side;
 import com.hft.model.OrderEnums.TimeInForce;
@@ -36,18 +36,20 @@ public final class OrderService {
     private final BalanceStore balances;
     private final SymbolFilters filters;
     private final RiskManager risk;
-    private final AppConfig config;
+    private final TradingSettings settings;
+
+    public RiskManager risk() { return risk; }
 
     private final Latency orderLatency = new Latency("Латентность ордера");
 
     public OrderService(ExchangeOrderApi rest, MarketDataStore market, BalanceStore balances,
-                        SymbolFilters filters, RiskManager risk, AppConfig config) {
+                        SymbolFilters filters, RiskManager risk, TradingSettings settings) {
         this.rest = rest;
         this.market = market;
         this.balances = balances;
         this.filters = filters;
         this.risk = risk;
-        this.config = config;
+        this.settings = settings;
     }
 
     // ======================= УДОБНЫЕ МЕТОДЫ =======================
@@ -102,33 +104,6 @@ public final class OrderService {
         return execute(OrderRequest.market(symbol, Side.SELL).balancePortion(portion));
     }
 
-    /**
-     * Лимитный ордер по лучшей цене стакана — пассивный вход.
-     * offsetTicks сдвигает цену вглубь стакана: 0 — встать на лучшую цену,
-     * 1 — на тик хуже (выше шанс постоять в очереди, но не перебить).
-     */
-    public OrderResult buyLimitAtBid(String symbol, double qty, int offsetTicks) {
-        OrderBook book = market.book(symbol);
-        if (book == null || !book.isReady()) {
-            return failed(symbol, Side.BUY, "Нет данных стакана");
-        }
-        SymbolFilters.Filter f = filters.get(symbol);
-        double tick = f != null ? f.tickSize() : 0;
-        double price = book.bestBid() - tick * offsetTicks;
-        return buyLimit(symbol, qty, price);
-    }
-
-    public OrderResult sellLimitAtAsk(String symbol, double qty, int offsetTicks) {
-        OrderBook book = market.book(symbol);
-        if (book == null || !book.isReady()) {
-            return failed(symbol, Side.SELL, "Нет данных стакана");
-        }
-        SymbolFilters.Filter f = filters.get(symbol);
-        double tick = f != null ? f.tickSize() : 0;
-        double price = book.bestAsk() + tick * offsetTicks;
-        return sellLimit(symbol, qty, price);
-    }
-
     // ======================= ОСНОВНОЙ МЕТОД =======================
 
     /**
@@ -165,7 +140,6 @@ public final class OrderService {
             // 5. Обновление локальных балансов
             if (result.executedQty() > 0) {
                 applyToBalances(result);
-                risk.onOrderFilled(result, refPrice);
             }
 
             log.info("{} -> {}", request, result);
@@ -196,7 +170,7 @@ public final class OrderService {
         String[] assets = BalanceStore.splitSymbol(request.symbol());
         String base = assets[0];
         String quote = assets[1];
-        double reserve = 1.0 - config.feeReservePercent() / 100.0;
+        double reserve = 1.0 - settings.get().feeReservePercent() / 100.0;
 
         double qty;
         if (request.side() == Side.BUY) {

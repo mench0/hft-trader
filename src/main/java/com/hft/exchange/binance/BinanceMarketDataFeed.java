@@ -1,7 +1,8 @@
 package com.hft.exchange.binance;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonToken;
+import com.hft.exchange.generic.FastJson;
 import com.hft.config.ExchangeConfig;
 import com.hft.engine.TickPipeline;
 import com.hft.metrics.Latency;
@@ -9,6 +10,7 @@ import com.hft.net.AbstractWsFeed;
 import com.hft.store.MarketDataStore;
 import com.hft.store.OrderBook;
 
+import java.io.IOException;
 import java.net.URI;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -26,7 +28,6 @@ public final class BinanceMarketDataFeed extends AbstractWsFeed {
     private final ExchangeConfig config;
     private final MarketDataStore store;
     private final TickPipeline pipeline;
-    private final ObjectMapper mapper = new ObjectMapper();
     private final Latency parseLatency = new Latency("[binance] Парсинг сообщения");
 
     private final double[] bidPrices;
@@ -34,8 +35,7 @@ public final class BinanceMarketDataFeed extends AbstractWsFeed {
     private final double[] askPrices;
     private final double[] askQtys;
 
-    // Символы, на которые подписаны прямо сейчас. Изменяется через
-    // addSymbol/removeSymbol, применяется при следующем (пере)подключении.
+    // Символы, на которые подписаны.
     private final List<String> activeSymbols;
 
     public BinanceMarketDataFeed(ExchangeConfig config, MarketDataStore store, TickPipeline pipeline) {
@@ -72,17 +72,38 @@ public final class BinanceMarketDataFeed extends AbstractWsFeed {
         return "20";
     }
 
+    // Разбор одного сообщения — только поток WS, поэтому поля можно переиспользовать
+    private String msgSymbol;          // символ из "stream" (для стакана) или "s" (для сделки)
+    private boolean isTrade, hasBook;
+    private double tradePrice, tradeQty;
+    private boolean buyerIsMaker;
+    private long tradeTime, updateId;
+    private int bn, an;
+
+    /**
+     * Потоковый разбор без дерева узлов: числа читаются прямо из буфера парсера ({@link FastJson#num}),
+     * символ сопоставляется с подпиской без создания строки. Порядок полей не важен.
+     */
     @Override
     protected void onText(String json, long receivedNanos) {
-        try {
-            JsonNode root = mapper.readTree(json);
-            JsonNode data = root.has("data") ? root.get("data") : root;
-            String stream = root.path("stream").asText("");
-
-            if (stream.contains("@trade") || "trade".equals(data.path("e").asText())) {
-                handleTrade(data, receivedNanos);
-            } else if (stream.contains("@depth") || data.has("bids")) {
-                handleDepth(stream, data);
+        try (JsonParser p = FastJson.F.createParser(json)) {
+            msgSymbol = null; isTrade = false; hasBook = false; bn = 0; an = 0; updateId = 0;
+            if (p.nextToken() != JsonToken.START_OBJECT) return;
+            while (p.nextToken() == JsonToken.FIELD_NAME) {
+                String f = p.currentName();
+                p.nextToken();
+                switch (f) {
+                    case "stream" -> { String s = symbolFromStream(p); if (s != null) msgSymbol = s; }
+                    case "data" -> { if (p.currentToken() == JsonToken.START_OBJECT) parseData(p); else p.skipChildren(); }
+                    default -> parseField(f, p);           // несоставное сообщение (без обёртки stream/data)
+                }
+            }
+            if (msgSymbol == null) return;
+            if (isTrade) {
+                pipeline.publish(msgSymbol, tradePrice, tradeQty, buyerIsMaker, tradeTime, receivedNanos);
+            } else if (hasBook) {
+                OrderBook book = store.book(msgSymbol);
+                if (book != null) book.applySnapshot(bidPrices, bidQtys, bn, askPrices, askQtys, an, updateId, System.currentTimeMillis());
             }
             parseLatency.recordSince(receivedNanos);
         } catch (Exception e) {
@@ -90,62 +111,65 @@ public final class BinanceMarketDataFeed extends AbstractWsFeed {
         }
     }
 
-    private void handleTrade(JsonNode d, long receivedNanos) {
-        String symbol = d.get("s").asText();
-        double price = d.get("p").asDouble();
-        double qty = d.get("q").asDouble();
-        boolean buyerIsMaker = d.get("m").asBoolean();
-        long eventTime = d.get("T").asLong();
-        pipeline.publish(symbol, price, qty, buyerIsMaker, eventTime, receivedNanos);
-    }
-
-    private void handleDepth(String stream, JsonNode d) {
-        String symbol = symbolFromStream(stream);
-        if (symbol == null) return;
-
-        OrderBook book = store.book(symbol);
-        if (book == null) return;
-
-        JsonNode bids = d.has("bids") ? d.get("bids") : d.get("b");
-        JsonNode asks = d.has("asks") ? d.get("asks") : d.get("a");
-        if (bids == null || asks == null) return;
-
-        int depth = config.bookDepth();
-        int bn = Math.min(bids.size(), depth);
-        int an = Math.min(asks.size(), depth);
-
-        for (int i = 0; i < bn; i++) {
-            JsonNode lvl = bids.get(i);
-            bidPrices[i] = lvl.get(0).asDouble();
-            bidQtys[i] = lvl.get(1).asDouble();
-        }
-        for (int i = 0; i < an; i++) {
-            JsonNode lvl = asks.get(i);
-            askPrices[i] = lvl.get(0).asDouble();
-            askQtys[i] = lvl.get(1).asDouble();
-        }
-
-        long updateId = d.path("lastUpdateId").asLong(0);
-        book.applySnapshot(bidPrices, bidQtys, bn, askPrices, askQtys, an,
-                updateId, System.currentTimeMillis());
-    }
-
-    private String symbolFromStream(String stream) {
-        int at = stream.indexOf('@');
-        return at > 0 ? stream.substring(0, at).toUpperCase() : null;
-    }
-
-    /** Добавить символ в подписку. Подписка обновится при следующем реконнекте. */
-    public void addSymbol(String symbol) {
-        String s = symbol.toUpperCase();
-        if (!activeSymbols.contains(s)) {
-            activeSymbols.add(s);
-            log.info("Символ {} добавлен, применится при переподключении", s);
+    private void parseData(JsonParser p) throws IOException {
+        while (p.nextToken() == JsonToken.FIELD_NAME) {
+            String f = p.currentName();
+            p.nextToken();
+            parseField(f, p);
         }
     }
 
-    public void removeSymbol(String symbol) {
-        activeSymbols.remove(symbol.toUpperCase());
+    private void parseField(String f, JsonParser p) throws IOException {
+        switch (f) {
+            case "e" -> isTrade = FastJson.textIs(p, "trade");
+            case "s" -> { String s = symbolOf(p.getTextCharacters(), p.getTextOffset(), p.getTextLength(), false); if (s != null) msgSymbol = s; }
+            case "p" -> tradePrice = FastJson.num(p);
+            case "q" -> tradeQty = FastJson.num(p);
+            case "m" -> buyerIsMaker = p.currentToken() == JsonToken.VALUE_TRUE;
+            case "T" -> tradeTime = FastJson.longOf(p, 0);
+            case "lastUpdateId" -> updateId = FastJson.longOf(p, 0);
+            case "bids", "b" -> { hasBook = true; bn = levels(p, bidPrices, bidQtys); }
+            case "asks", "a" -> { hasBook = true; an = levels(p, askPrices, askQtys); }
+            default -> p.skipChildren();
+        }
+    }
+
+    /** [[цена, объём], ...] в массивы; уровни глубже bookDepth пропускаются. */
+    private static int levels(JsonParser p, double[] px, double[] qty) throws IOException {
+        if (p.currentToken() != JsonToken.START_ARRAY) { p.skipChildren(); return 0; }
+        int n = 0;
+        while (p.nextToken() == JsonToken.START_ARRAY) {
+            p.nextToken(); double price = FastJson.num(p);
+            p.nextToken(); double q = FastJson.num(p);
+            while (p.nextToken() != JsonToken.END_ARRAY) p.skipChildren();
+            if (n < px.length) { px[n] = price; qty[n] = q; n++; }
+        }
+        return n;
+    }
+
+    /** "btcusdt@depth20@100ms" -> "BTCUSDT" из подписки (без новой строки). */
+    private String symbolFromStream(JsonParser p) throws IOException {
+        char[] c = p.getTextCharacters(); int off = p.getTextOffset(), len = p.getTextLength();
+        int at = 0;
+        while (at < len && c[off + at] != '@') at++;
+        boolean trade = at < len && len - at == 6 && c[off + at + 1] == 't';   // "@trade"
+        if (trade) isTrade = true;
+        return symbolOf(c, off, at, true);
+    }
+
+    /** Символ подписки, совпадающий с c[off..off+len) (без учёта регистра, если ignoreCase). */
+    private String symbolOf(char[] c, int off, int len, boolean ignoreCase) {
+        for (String s : activeSymbols) {
+            if (s.length() != len) continue;
+            int i = 0;
+            for (; i < len; i++) {
+                char x = c[off + i];
+                if (ignoreCase && x >= 'a' && x <= 'z') x -= 32;
+                if (x != s.charAt(i)) break;
+            }
+            if (i == len) return s;
+        }
+        return null;
     }
 
     public List<String> activeSymbols() { return List.copyOf(activeSymbols); }

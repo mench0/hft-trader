@@ -1,6 +1,6 @@
 package com.hft.exchange.bybit;
 
-import com.hft.config.AppConfig;
+import com.hft.config.TradingSettings;
 import com.hft.config.Credentials;
 import com.hft.config.ExchangeConfig;
 import com.hft.engine.MarketDataHandler;
@@ -42,7 +42,7 @@ public final class BybitExchange implements ExchangeGateway {
     private final TickPipeline pipeline;
     private final BybitMarketDataFeed feed;
 
-    public BybitExchange(ExchangeConfig config, AppConfig appConfig) {
+    public BybitExchange(ExchangeConfig config, TradingSettings settings) {
         this.config = config;
         this.credentials = Credentials.fromEnv(config.id());
 
@@ -52,11 +52,11 @@ public final class BybitExchange implements ExchangeGateway {
         config.symbols().forEach(market::register);
 
         this.rest = new BybitRestClient(config, credentials, filters);
-        this.risk = new RiskManager(appConfig, market, config.id());
-        this.orderService = new OrderService(rest, market, balances, filters, risk, appConfig);
+        this.risk = new RiskManager(settings, market, config.id());
+        this.orderService = new OrderService(rest, market, balances, filters, risk, settings);
 
         this.dataHandler = new MarketDataHandler(market);
-        this.strategy = new MeanReversionStrategy(market, orderService, "bybit");
+        this.strategy = new MeanReversionStrategy(market, orderService, "bybit", settings);
         this.pipeline = new TickPipeline(dataHandler, strategy);
         this.feed = new BybitMarketDataFeed(config, market, pipeline);
 
@@ -100,17 +100,6 @@ public final class BybitExchange implements ExchangeGateway {
 
     @Override
     public List<String> symbols() { return feed.activeSymbols(); }
-
-    @Override
-    public void addSymbol(String symbol) {
-        market.register(symbol);
-        feed.addSymbol(symbol);
-    }
-
-    @Override
-    public void removeSymbol(String symbol) {
-        feed.removeSymbol(symbol);
-    }
 
     @Override
     public MarketDataStore marketData() { return market; }

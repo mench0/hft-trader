@@ -96,8 +96,6 @@ public final class HybridBookFeed implements BookFeed {
         }
     }
 
-    @Override public void addSymbol(String s) { ws.addSymbol(s); poll.addSymbol(s); }
-    @Override public void removeSymbol(String s) { ws.removeSymbol(s); poll.removeSymbol(s); }
     @Override public List<String> activeSymbols() { return poll.activeSymbols(); }
     @Override public boolean isConnected() { return ws.isConnected() || poll.isConnected(); }
     @Override public boolean isRealtime() { return ws.isRealtime(); }
