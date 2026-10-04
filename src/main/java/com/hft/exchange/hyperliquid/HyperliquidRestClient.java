@@ -72,7 +72,7 @@ public final class HyperliquidRestClient extends SignedCexClient {
     }
 
     public HyperliquidRestClient(ExchangeConfig config, Credentials credentials, SymbolFilters filters, EvmCrypto crypto) {
-        super("hyperliquid", config, credentials, filters, 5, 5);
+        super("hyperliquid", config, credentials, filters);
         this.crypto = crypto;
         this.account = credentials.isPresent() ? credentials.apiKey().toLowerCase() : "";
         this.source = config.testnet() ? "b" : "a";

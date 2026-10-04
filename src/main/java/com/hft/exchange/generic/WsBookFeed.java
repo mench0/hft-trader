@@ -2,6 +2,7 @@ package com.hft.exchange.generic;
 
 import com.hft.config.ExchangeConfig;
 import com.hft.exchange.catalog.ExchangeInfo;
+import com.hft.rest.RateBudget;
 import com.hft.rest.WsSender;
 import com.hft.store.MarketDataStore;
 import org.slf4j.Logger;
@@ -210,8 +211,11 @@ public final class WsBookFeed implements BookFeed {
     private void connectAndServe() throws Exception {
         CompletableFuture<Void> closed = new CompletableFuture<>();
         Listener listener = new Listener(closed);
+        RateBudget budget = RateBudget.of(info.id());
+        budget.acquire(RateBudget.Kind.WS_CONNECT, 1, 60_000);   // лимит подключений на IP
         WebSocket w = http.newWebSocketBuilder().connectTimeout(Duration.ofSeconds(5))
-                .buildAsync(URI.create(url()), listener).get(10, TimeUnit.SECONDS);
+                .buildAsync(URI.create(dialect.connectUrl(url(), cfg.restUrl().isBlank() ? info.restUrl() : cfg.restUrl())), listener)
+                .get(10, TimeUnit.SECONDS);
         socket = w;
         WsSender snd = new WsSender(w, 1000);
         sender = snd;
@@ -226,7 +230,10 @@ public final class WsBookFeed implements BookFeed {
             currentBatch = listener.batch;
             if (!venues.isEmpty()) {
                 CompletableFuture<?> last = null;
-                for (String m : dialect.subscribe(venues, cfg.bookDepth())) last = snd.send(m);
+                for (String m : dialect.subscribe(venues, cfg.bookDepth())) {
+                    budget.acquire(RateBudget.Kind.WS_MESSAGE, 1, 60_000);   // лимит исходящих сообщений
+                    last = snd.send(m);
+                }
                 last.get(10, TimeUnit.SECONDS);                // подписка ушла (без блокировки потока чтения)
             }
             long lastPing = System.currentTimeMillis();
@@ -289,9 +296,12 @@ public final class WsBookFeed implements BookFeed {
                 st.crossed = 0;
                 st.book.clear();
                 WsSender snd = sender;
-                if (snd != null) {
-                    for (String m : dialect.unsubscribe(List.of(b.venue), cfg.bookDepth())) snd.send(m);
-                    for (String m : dialect.subscribe(List.of(b.venue), cfg.bookDepth())) snd.send(m);
+                List<String> unsub = dialect.unsubscribe(List.of(b.venue), cfg.bookDepth());
+                List<String> sub = dialect.subscribe(List.of(b.venue), cfg.bookDepth());
+                // поток чтения не ждёт: нет бюджета на сообщения — переподпишемся на следующем перекрещивании
+                if (snd != null && RateBudget.of(info.id()).tryAcquire(RateBudget.Kind.WS_MESSAGE, unsub.size() + sub.size())) {
+                    for (String m : unsub) snd.send(m);
+                    for (String m : sub) snd.send(m);
                 }
             }
             return;

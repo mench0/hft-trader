@@ -39,6 +39,8 @@ public final class Dialects {
             case "hyperliquid" -> new Hyperliquid();
             case "dydx" -> new Dydx();
             case "uniswapv2" -> new UniswapV2();
+            case "kucoin" -> new Kucoin();
+            case "aster" -> new Aster();
             default -> throw new IllegalArgumentException("Нет диалекта для биржи: " + id);
         };
     }
@@ -106,6 +108,34 @@ public final class Dialects {
             JsonNode r = JSON.readTree(body);
             return book(levels(r.get("bids"), null, null, true, MAX),
                     levels(r.get("asks"), null, null, false, MAX), System.currentTimeMillis());
+        }
+    }
+
+    /** GET /api/v1/market/orderbook/level2_20?symbol=BTC-USDT -> {code:"200000",data:{time,bids,asks}} */
+    static final class Kucoin implements BookDialect {
+        public HttpRequest request(String b, String s, int d) {
+            return get(b + "/api/v1/market/orderbook/" + (d <= 20 ? "level2_20" : "level2_100") + "?symbol=" + base(s) + "-" + quote(s));
+        }
+        public ParsedBook parse(String body, String s) throws Exception {
+            JsonNode r = JSON.readTree(body);
+            if (!"200000".equals(r.path("code").asText())) throw new IllegalStateException("KuCoin: " + body);
+            JsonNode d = r.get("data");
+            return book(levels(d.get("bids"), null, null, true, MAX),
+                    levels(d.get("asks"), null, null, false, MAX), d.path("time").asLong(System.currentTimeMillis()));
+        }
+    }
+
+    /** Aster спот: GET /api/v3/depth?symbol=BTCUSDT&limit=20 -> {lastUpdateId,E?,bids,asks} (формат Binance) */
+    static final class Aster implements BookDialect {
+        public HttpRequest request(String b, String s, int d) {
+            int limit = d <= 5 ? 5 : d <= 10 ? 10 : d <= 20 ? 20 : d <= 50 ? 50 : 100;
+            return get(b + "/api/v3/depth?symbol=" + s + "&limit=" + limit);
+        }
+        public ParsedBook parse(String body, String s) throws Exception {
+            JsonNode r = JSON.readTree(body);
+            if (r.has("code") && r.path("code").asInt(0) < 0) throw new IllegalStateException("Aster: " + body);
+            return book(levels(r.get("bids"), null, null, true, MAX),
+                    levels(r.get("asks"), null, null, false, MAX), r.path("E").asLong(System.currentTimeMillis()));
         }
     }
 

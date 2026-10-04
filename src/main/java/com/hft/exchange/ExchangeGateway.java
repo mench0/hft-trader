@@ -1,6 +1,6 @@
 package com.hft.exchange;
 
-import com.hft.engine.MeanReversionStrategy;
+import com.hft.engine.StrategySet;
 import com.hft.engine.OrderService;
 import com.hft.risk.RiskManager;
 import com.hft.store.BalanceStore;
@@ -56,7 +56,8 @@ public interface ExchangeGateway {
     RiskManager risk();
 
     /** Стратегия, работающая на этой бирже. Одна и та же логика может крутиться на нескольких биржах параллельно. */
-    MeanReversionStrategy strategy();
+    /** Все стратегии биржи (возврат к среднему, треугольный и статистический арбитраж). */
+    StrategySet strategy();
 
     /** Периодическая пересинхронизация балансов с биржей — вызывается планировщиком из Main. */
     void syncBalances();

@@ -194,6 +194,7 @@ public final class WsRpcChannel {
     private void serve() throws Exception {
         CompletableFuture<Void> closed = new CompletableFuture<>();
         Listener l = new Listener(closed);
+        RateBudget.of(name).acquire(RateBudget.Kind.WS_CONNECT, 1, 60_000);   // лимит подключений на IP
         WebSocket w = http.newWebSocketBuilder().connectTimeout(Duration.ofSeconds(5))
                 .buildAsync(URI.create(protocol.url()), l).get(10, TimeUnit.SECONDS);
         socket = w;
@@ -203,7 +204,7 @@ public final class WsRpcChannel {
         try {
             List<String> login = protocol.login();
             if (login.isEmpty()) afterLogin(w);
-            else for (String m : login) sender.send(m);
+            else for (String m : login) { RateBudget.of(name).acquire(RateBudget.Kind.WS_MESSAGE, 1, 60_000); sender.send(m); }
 
             long lastPing = System.currentTimeMillis();
             long loginDeadline = lastPing + 10_000;
@@ -227,7 +228,12 @@ public final class WsRpcChannel {
     private void afterLogin(WebSocket w) throws Exception {
         loggedIn = true;
         loginFailures = 0;
-        for (String m : protocol.subscriptions()) sender.send(m);
+        for (String m : protocol.subscriptions()) {
+            // после логина вызывается из потока чтения — ждать нельзя; сообщений здесь единицы
+            if (!RateBudget.of(name).tryAcquire(RateBudget.Kind.WS_MESSAGE, 1))
+                log.warn("[{}] WS: бюджет сообщений исчерпан, подписка отправляется сверх него", name);
+            sender.send(m);
+        }
     }
 
     private void noteLoginFailure() {

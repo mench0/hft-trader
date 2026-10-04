@@ -61,6 +61,7 @@ public final class MeanReversionStrategy extends Strategy {
 
     @Override
     protected void onTick(Tick tick) {
+        if (!settings.get().meanReversionEnabled()) return;
         String symbol = tick.symbol();
 
         PriceWindow window = market.window(symbol);

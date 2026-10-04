@@ -1,5 +1,6 @@
 package com.hft.net;
 
+import com.hft.rest.RateBudget;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.*;
 import io.netty.channel.nio.NioEventLoopGroup;
@@ -62,6 +63,7 @@ public abstract class AbstractWsFeed {
     }
 
     private void connect() throws Exception {
+        RateBudget.of(name()).acquire(RateBudget.Kind.WS_CONNECT, 1, 60_000);   // лимит подключений на IP
         URI uri = buildUri();
         int port = uri.getPort() > 0 ? uri.getPort() : 443;
         SslContext ssl = SslContextBuilder.forClient().build();
@@ -131,6 +133,9 @@ public abstract class AbstractWsFeed {
     protected final void send(String text) {
         Channel ch = channel;
         if (ch != null && ch.isActive()) {
+            // поток Netty ждать не должен; сообщения здесь — редкие подписки
+            if (!RateBudget.of(name()).tryAcquire(RateBudget.Kind.WS_MESSAGE, 1))
+                log.warn("[{}] WS: бюджет сообщений исчерпан, сообщение отправляется сверх него", name());
             ch.writeAndFlush(new TextWebSocketFrame(text));
         }
     }

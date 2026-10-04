@@ -43,7 +43,7 @@ public final class LbankRestClient extends SignedCexClient {
     private static final String ALNUM = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
     public LbankRestClient(ExchangeConfig config, Credentials credentials, SymbolFilters filters) {
-        super("lbank", config, credentials, filters, 5, 4);
+        super("lbank", config, credentials, filters);
     }
 
     static String pair(String symbol) {

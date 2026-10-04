@@ -31,7 +31,7 @@ public final class BingxRestClient extends SignedCexClient {
     private static final Logger log = LoggerFactory.getLogger(BingxRestClient.class);
 
     public BingxRestClient(ExchangeConfig config, Credentials credentials, SymbolFilters filters) {
-        super("bingx", config, credentials, filters, 5, 4);
+        super("bingx", config, credentials, filters);
     }
 
     static String sym(String symbol) {

@@ -4,7 +4,7 @@ import com.hft.config.Credentials;
 import com.hft.config.ExchangeConfig;
 import com.hft.config.TradingSettings;
 import com.hft.engine.MarketDataHandler;
-import com.hft.engine.MeanReversionStrategy;
+import com.hft.engine.StrategySet;
 import com.hft.engine.OrderService;
 import com.hft.engine.TickPipeline;
 import com.hft.exchange.ExchangeGateway;
@@ -53,7 +53,7 @@ public final class SignedCexExchange implements ExchangeGateway, RequestStatsSou
     private final OrderService orderService;
 
     private final MarketDataHandler dataHandler;
-    private final MeanReversionStrategy strategy;
+    private final StrategySet strategy;
     private final TickPipeline pipeline;
     private final BookFeed feed;
     private volatile long lastRestSyncMs = System.currentTimeMillis();
@@ -78,8 +78,8 @@ public final class SignedCexExchange implements ExchangeGateway, RequestStatsSou
         this.orderService = new OrderService(api, market, balances, filters, risk, settings);
 
         this.dataHandler = new MarketDataHandler(market);
-        this.strategy = new MeanReversionStrategy(market, orderService, info.id(), settings);
-        this.pipeline = new TickPipeline(dataHandler, strategy);
+        this.strategy = new StrategySet(market, orderService, info.id(), settings);
+        this.pipeline = new TickPipeline(dataHandler, strategy.handlers());
         this.feed = ExchangeSupport.newFeed(info, config, market, pipeline, paper, this::onFeedGaveUp);
         strategy.setRealtimeSource(feed::isRealtime);          // на REST-запасе новых входов нет
 
@@ -145,7 +145,7 @@ public final class SignedCexExchange implements ExchangeGateway, RequestStatsSou
     public RiskManager risk() { return risk; }
 
     @Override
-    public MeanReversionStrategy strategy() { return strategy; }
+    public StrategySet strategy() { return strategy; }
 
     public BookFeed feed() { return feed; }
 
@@ -171,7 +171,7 @@ public final class SignedCexExchange implements ExchangeGateway, RequestStatsSou
         m.put("mode", rest != null ? "LIVE" : "PAPER");
         m.put("marketData", feed.stats());
         m.put("realtime", feed.isRealtime());
-        m.put("orderExecutor", strategy.executor().stats());
+        m.put("strategies", strategy.stats());
         if (rest != null) m.put("orders", rest.stats());
         return m;
     }

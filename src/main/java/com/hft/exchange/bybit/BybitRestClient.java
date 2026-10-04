@@ -10,6 +10,7 @@ import com.hft.model.OrderEnums.Type;
 import com.hft.model.OrderResult;
 import com.hft.rest.ExchangeOrderApi;
 import com.hft.rest.RateLimited;
+import com.hft.rest.RateBudget;
 import com.hft.store.SymbolFilters;
 import com.hft.util.Numbers;
 import com.hft.util.Signer;
@@ -297,10 +298,20 @@ public final class BybitRestClient implements ExchangeOrderApi {
         return send(req);
     }
 
+    /** Общий бюджет запросов Bybit: X-Bapi-Limit-Status / Reset-Timestamp подтягивают счёт к счёту биржи. */
+    private final RateBudget budget = RateBudget.of("bybit");
+
     private JsonNode send(HttpRequest req) throws Exception {
+        String path = req.uri().getPath();
+        boolean order = path.startsWith("/v5/order/create") || path.startsWith("/v5/order/cancel");
+        RateBudget.Kind kind = order ? RateBudget.Kind.ORDER
+                : req.headers().firstValue("X-BAPI-API-KEY").isPresent() ? RateBudget.Kind.PRIVATE : RateBudget.Kind.PUBLIC;
+        budget.acquire(kind, 1, order ? 1000 : 3000);
         HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
+        budget.onResponse(resp.statusCode(), resp.headers());
         JsonNode json = mapper.readTree(resp.body());
         int retCode = json.path("retCode").asInt(-1);
+        if (retCode == 10006 || retCode == 10018) budget.onLimitError("retCode " + retCode);
         if (resp.statusCode() >= 400 || retCode != 0) {
             throw new ExchangeException(resp.statusCode(), retCode, json.path("retMsg").asText(resp.body()));
         }

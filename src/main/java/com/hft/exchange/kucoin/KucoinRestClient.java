@@ -1,0 +1,163 @@
+package com.hft.exchange.kucoin;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.hft.config.Credentials;
+import com.hft.config.ExchangeConfig;
+import com.hft.model.OrderEnums.Side;
+import com.hft.model.OrderEnums.Type;
+import com.hft.model.OrderResult;
+import com.hft.rest.ApiException;
+import com.hft.rest.SignedCexClient;
+import com.hft.store.BalanceStore;
+import com.hft.store.SymbolFilters;
+import com.hft.util.Hmac;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.net.http.HttpRequest;
+import java.util.HashSet;
+import java.util.Set;
+
+/**
+ * KuCoin спот, REST API v1/v2. Не проверялся на живой бирже.
+ *
+ *  - подпись: KC-API-SIGN = base64(HMAC-SHA256(secret, timestamp + METHOD + путь?query + тело)),
+ *    KC-API-PASSPHRASE — тоже HMAC (версия ключа 2), нужен KUCOIN_PASSPHRASE;
+ *  - ответ {"code":"200000","data":...}; 429000 — превышен лимит;
+ *  - символы с дефисом: BTCUSDT -> BTC-USDT;
+ *  - orderId строковый — наружу числовой псевдоним.
+ */
+public final class KucoinRestClient extends SignedCexClient {
+
+    private static final Logger log = LoggerFactory.getLogger(KucoinRestClient.class);
+
+    private final String passphrase;
+
+    public KucoinRestClient(ExchangeConfig config, Credentials credentials, SymbolFilters filters) {
+        super("kucoin", config, credentials, filters);
+        String p = System.getenv("KUCOIN_PASSPHRASE");
+        if (credentials.isPresent() && (p == null || p.isBlank())) {
+            throw new IllegalStateException("KuCoin требует KUCOIN_PASSPHRASE (фраза, заданная при создании API-ключа)");
+        }
+        this.passphrase = p == null ? "" : p.trim();
+    }
+
+    /** BTCUSDT -> BTC-USDT */
+    static String venue(String symbol) {
+        String[] bq = BalanceStore.splitSymbol(symbol.toUpperCase());
+        return bq[0] + "-" + bq[1];
+    }
+
+    // ------------------------------------------------------------ HTTP
+
+    private JsonNode publicGet(String pathAndQuery) throws Exception {
+        return exec(req(baseUrl + pathAndQuery).GET().build(), false);
+    }
+
+    JsonNode signed(String method, String pathAndQuery, String body, boolean order) throws Exception {
+        credentials.require();
+        String ts = String.valueOf(System.currentTimeMillis());
+        String sign = Hmac.sha256Base64(credentials.apiSecret(), ts + method + pathAndQuery + body);
+        HttpRequest r = req(baseUrl + pathAndQuery)
+                .header("KC-API-KEY", credentials.apiKey())
+                .header("KC-API-SIGN", sign)
+                .header("KC-API-TIMESTAMP", ts)
+                .header("KC-API-PASSPHRASE", Hmac.sha256Base64(credentials.apiSecret(), passphrase))
+                .header("KC-API-KEY-VERSION", "2")
+                .header("Content-Type", "application/json")
+                .method(method, body.isEmpty() ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofString(body))
+                .build();
+        return exec(r, order);
+    }
+
+    @Override
+    protected void checkError(int http, JsonNode body) {
+        String code = body.path("code").asText("");
+        if (http == 429 || code.equals("429000")) throw new ApiException(http, "429000", body.path("msg").asText("слишком часто"), true);
+        if (http >= 400 || !code.isEmpty() && !code.equals("200000")) {
+            throw new ApiException(http, code.isEmpty() ? "?" : code, body.path("msg").asText(body.toString()), false);
+        }
+    }
+
+    // ------------------------------------------------------------ ордера
+
+    @Override
+    protected OrderResult placeRaw(Order o) throws Exception {
+        ObjectNode b = mapper.createObjectNode()
+                .put("clientOid", o.clientId())
+                .put("side", o.side() == Side.BUY ? "buy" : "sell")
+                .put("symbol", venue(o.symbol()));
+        if (o.type() == Type.MARKET) {
+            b.put("type", "market");
+            if (o.qtyIsQuote()) b.put("funds", plain(o.qty(), 8));
+            else b.put("size", plain(o.qty(), filters.quantityScale(o.symbol())));
+        } else {
+            b.put("type", "limit")
+             .put("timeInForce", o.tif().name())
+             .put("size", plain(o.qty(), filters.quantityScale(o.symbol())))
+             .put("price", plain(o.price(), filters.priceScale(o.symbol())));
+        }
+        JsonNode r = signed("POST", "/api/v1/orders", b.toString(), true);
+        String id = r.path("data").path("orderId").asText("");
+        if (id.isEmpty()) throw new ApiException(200, "NO_ID", "нет orderId в ответе: " + r, false);
+        return new OrderResult(registerId(id), o.clientId(), o.symbol(), o.side(), "NEW", o.qtyIsQuote() ? 0 : o.qty(), 0, 0, 0);
+    }
+
+    @Override
+    public OrderResult orderStatus(String symbol, long orderId) throws Exception {
+        return fromOrder(signed("GET", "/api/v1/orders/" + venueId(orderId), "", false).path("data"), orderId, symbol.toUpperCase());
+    }
+
+    /** isActive — ордер в стакане; cancelExist — был отменён (возможно, после частичного исполнения). */
+    static OrderResult fromOrder(JsonNode o, long id, String symbol) {
+        double exec = d(o, "dealSize"), funds = d(o, "dealFunds");
+        boolean active = o.path("isActive").asBoolean(false), cancelled = o.path("cancelExist").asBoolean(false);
+        String status = active ? (exec > 0 ? "PARTIALLY_FILLED" : "NEW") : cancelled ? "CANCELED" : "FILLED";
+        Side side = "sell".equals(o.path("side").asText()) ? Side.SELL : Side.BUY;
+        return new OrderResult(id, o.path("clientOid").asText(""), symbol, side, status, d(o, "size"), exec, exec > 0 ? funds / exec : 0, 0);
+    }
+
+    @Override
+    public void cancelOrder(String symbol, long orderId) throws Exception {
+        signed("DELETE", "/api/v1/orders/" + venueId(orderId), "", true);
+        log.info("[kucoin] ордер {} по {} отменён", orderId, symbol);
+    }
+
+    @Override
+    public int cancelAll(String symbol) throws Exception {
+        JsonNode r = signed("DELETE", "/api/v1/orders?symbol=" + venue(symbol), "", true);
+        int n = r.path("data").path("cancelledOrderIds").size();
+        log.info("[kucoin] отменено {} ордеров по {}", n, symbol);
+        return n;
+    }
+
+    // ------------------------------------------------------------ правила и баланс
+
+    @Override
+    public void loadFilters(Iterable<String> symbols) throws Exception {
+        Set<String> want = new HashSet<>();
+        for (String s : symbols) want.add(venue(s));
+        int loaded = 0;
+        for (JsonNode s : publicGet("/api/v2/symbols").path("data")) {
+            String v = s.path("symbol").asText();
+            if (!want.contains(v)) continue;
+            double minFunds = d(s, "minFunds");
+            filters.put(v.replace("-", ""), new SymbolFilters.Filter(
+                    d(s, "baseMinSize"), d(s, "baseMaxSize") > 0 ? d(s, "baseMaxSize") : Double.MAX_VALUE, d(s, "baseIncrement"),
+                    0, 0, d(s, "priceIncrement"), minFunds > 0 ? minFunds : Math.max(d(s, "quoteMinSize"), 1.0)));
+            loaded++;
+        }
+        if (loaded == 0) throw new IllegalStateException("KuCoin: правила торговли не найдены");
+        log.info("[kucoin] правила загружены для {} символов", loaded);
+    }
+
+    @Override
+    public void loadBalances(BalanceStore store) throws Exception {
+        for (JsonNode a : signed("GET", "/api/v1/accounts?type=trade", "", false).path("data")) {
+            double free = d(a, "available"), locked = d(a, "holds");
+            if (free > 0 || locked > 0) store.set(a.path("currency").asText(), free, locked);
+        }
+        store.markSynced();
+    }
+}

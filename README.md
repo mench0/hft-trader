@@ -262,6 +262,52 @@ curl -X POST "localhost:8080/exchange/params?exchange=bybit&maxPositionQuote=50&
 | `maxSpreadPercent` | 0.1 | не входить при спреде шире, % |
 | `positionTimeoutMs` | 3600000 | закрыть позицию по таймауту |
 | `bookDepth` / `priceWindow` | 20 / 1000 | глубина стакана и окно цен (после перезапуска биржи) |
+| `meanReversionEnabled` / `triangularEnabled` / `statArbEnabled` | true / false / false | какие стратегии работают на бирже (на лету) |
+| `triHomeAsset` | USDT | валюта, с которой начинается и где заканчивается треугольный круг |
+| `triMinProfitPercent` | 0.15 | минимальная чистая прибыль круга после трёх комиссий, % |
+| `triOrderQuote` | 20 | размер круга в `triHomeAsset` |
+| `triMaxBookAgeMs` / `triCooldownMs` | 1000 / 3000 | свежесть всех трёх стаканов; пауза перед повтором того же круга |
+| `triUnwindOnFail` | true | нога не исполнилась — продать остаток обратно в `triHomeAsset` |
+| `statArbPairs` | пусто | пары `A/B,C/D`; пусто — все пары выбранных символов с одной котируемой валютой (до 15) |
+| `statArbWindow` / `statArbSampleMs` | 300 / 1000 | окно в отсчётах и шаг отсчётов по времени |
+| `statArbEntryZ` / `statArbExitZ` / `statArbStopZ` | 2.0 / 0.5 / 4.0 | вход, выход и стоп по z-score спреда |
+| `statArbMinCorrelation` | 0.6 | корреляция доходностей пары не ниже |
+| `statArbOrderQuote` / `statArbMaxHoldMs` | 20 / 3600000 | размер позиции; закрыть по таймауту |
+
+## Стратегии
+
+Все три работают на каждой бирже одновременно, каждая включается своим параметром. Состояние —
+`GET /strategies?exchange=binance` (треугольники, пары с z-score, позиции, результат).
+
+**Возврат к среднему** — лонг, когда цена ушла ниже скользящего среднего на `entryZ` сигм.
+
+**Треугольный арбитраж** — круг `USDT → A → B → USDT` внутри одной биржи (например, BTCUSDT, ETHBTC,
+ETHUSDT — в выборе должны быть все три символа). На каждом тике круг пересчитывается в обе стороны по
+лучшим ценам с тремя комиссиями тейкера; размер ограничен `triOrderQuote` и половиной объёма лучших
+уровней. При чистой прибыли ≥ `triMinProfitPercent` — три рыночных ордера подряд вне потока конвейера;
+количество для следующей ноги берётся по фактическому изменению баланса.
+Риски: ноги последовательные, а не атомарные; на ликвидных биржах такие расхождения забирают за
+миллисекунды участники с меньшей задержкой.
+
+**Статистический арбитраж** — пары связанных активов. Раз в `statArbSampleMs` берутся середины стаканов,
+по окну оценивается β (регрессия ln A на ln B) и z-score спреда `ln A − β·ln B`; пары с корреляцией
+доходностей ниже порога не торгуются. На споте шорт невозможен, поэтому покупается дешёвая нога
+(z ≤ −entry — A, z ≥ entry — B) и продаётся при возврате спреда, по стопу или таймауту. Это не
+рыночно-нейтральная позиция: для неё нужен шорт дорогой ноги (фьючерсы или маржа).
+
+## Лимиты запросов
+
+Один бюджет на биржу на весь процесс: торговый клиент, REST-опрос стакана, подбор тикеров и
+WebSocket тратят один и тот же лимит, как его считает биржа (на IP или ключ). Лимиты — по документации
+бирж с запасом 20% (`RateLimits`), отдельно на публичные запросы, приватные, ордера, сообщения и
+подключения WebSocket; у Binance, Aster, KuCoin и Hyperliquid учитывается вес запроса.
+
+- Ответ 429/418/403 или код лимита в теле останавливает **все** запросы к этой бирже на время из
+  `Retry-After` (иначе 10 с / 2 мин / 1 мин); повтор в течение 5 минут — пауза вдвое дольше.
+- Заголовки биржи подтягивают наш счёт к её счёту: `X-MBX-USED-WEIGHT-1M`, `X-MBX-ORDER-COUNT-*`
+  (Binance, Aster), `X-Bapi-Limit-Status` (Bybit), `X-Gate-RateLimit-*` (Gate), `gw-ratelimit-*` (KuCoin).
+- Если ждать разрешения пришлось бы слишком долго, запрос не отправляется (ошибка `LOCAL`), а не висит.
+- Лимиты рассчитаны на обычный (не VIP) аккаунт.
 
 ### Данные и ручные ордера
 
@@ -348,6 +394,10 @@ scrape_configs:
 
 Метрики, которые отдаются (лейблы `exchange`, где применимо — `symbol`):
 
+- `hft_rate_used_ratio{bucket}`, `hft_rate_limited_total`, `hft_rate_local_rejects_total`,
+  `hft_rate_waited_ms_total`, `hft_rate_blocked_ms` — лимиты запросов по каждой бирже
+- `hft_tri_opportunities_total`, `hft_tri_executed_total`, `hft_tri_failed_total`, `hft_tri_pnl_quote`,
+  `hft_statarb_positions`, `hft_statarb_trades_total`, `hft_statarb_pnl_quote`, `hft_statarb_zscore{pair}`
 - `hft_jvm_heap_used_bytes`, `hft_jvm_heap_max_bytes`, `hft_jvm_gc_collections_total`,
   `hft_jvm_gc_seconds_total`, `hft_jvm_threads` — контроль памяти и пауз GC
 - `hft_connected`, `hft_messages_total`, `hft_trading_enabled` — состояние соединения и торговли
@@ -430,6 +480,18 @@ public final class MyStrategy extends Strategy {
   торговать вашими деньгами
 - Бот пишет `logs/hft-trader.log` и `logs/gc.log` — если начнутся всплески
   задержки, смотрите второй файл
+
+## KuCoin и Aster
+
+- **KuCoin** — спот: стакан по WebSocket (`level2Depth50`; адрес и токен выдаёт `POST /api/v1/bullet-public`
+  перед каждым подключением) + REST-запас, ордера через REST. Нужны `KUCOIN_API_KEY`, `KUCOIN_API_SECRET`,
+  `KUCOIN_PASSPHRASE`, для реальных ордеров `KUCOIN_LIVE=true`.
+- **Aster** — спот, API v3 (`sapi.asterdex.com/api/v3`, формат Binance): стакан по WebSocket
+  (`depth20@100ms`) + REST-запас, ордера через REST с подписью EIP-712 кошельком-агентом.
+  `ASTER_API_KEY` — адрес основного кошелька (user), `ASTER_API_SECRET` — приватный ключ API-кошелька
+  (signer, без права вывода), `ASTER_LIVE=true`.
+
+Обе не проверялись на живой бирже (из среды разработки биржи недоступны): начинайте с PAPER и малых сумм.
 
 ## Биржи из каталога (paper-режим, формат API не проверен)
 

@@ -345,8 +345,18 @@ public final class BinanceRestClient implements ExchangeOrderApi {
         return send(req);
     }
 
+    /** Общий бюджет запросов Binance: вес по документации, заголовки X-MBX-* подтягивают счёт к счёту биржи. */
+    private final RateBudget budget = RateBudget.of("binance");
+
     private JsonNode send(HttpRequest req) throws Exception {
+        String path = req.uri().getPath();
+        boolean order = path.equals("/api/v3/order") && !"GET".equals(req.method())
+                || path.equals("/api/v3/openOrders") && "DELETE".equals(req.method());
+        RateBudget.Kind kind = order ? RateBudget.Kind.ORDER
+                : req.headers().firstValue("X-MBX-APIKEY").isPresent() ? RateBudget.Kind.PRIVATE : RateBudget.Kind.PUBLIC;
+        budget.acquire(kind, RateLimits.weight("binance", req.method(), path, req.uri().getRawQuery()), order ? 1000 : 3000);
         HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
+        budget.onResponse(resp.statusCode(), resp.headers());
         if (resp.statusCode() >= 400) {
             throw new ExchangeException(resp.statusCode(), resp.body());
         }

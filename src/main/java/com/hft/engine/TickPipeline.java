@@ -30,8 +30,12 @@ public final class TickPipeline {
     private final Disruptor<Tick> disruptor;
     private final RingBuffer<Tick> ring;
 
+    /**
+     * first обрабатывает тик раньше всех (запись в MarketDataStore), остальные — после него и параллельно
+     * между собой: стратегия не должна увидеть тик, который ещё не записан в окно цен.
+     */
     @SafeVarargs
-    public TickPipeline(EventHandler<Tick>... handlers) {
+    public TickPipeline(EventHandler<Tick> first, EventHandler<Tick>... after) {
         ThreadFactory tf = r -> {
             Thread t = new Thread(r, "tick-pipeline");
             t.setDaemon(true);
@@ -46,7 +50,8 @@ public final class TickPipeline {
                 new YieldingWaitStrategy()
         );
 
-        disruptor.handleEventsWith(handlers);
+        var group = disruptor.handleEventsWith(first);
+        if (after.length > 0) group.then(after);
         this.ring = disruptor.getRingBuffer();
     }
 

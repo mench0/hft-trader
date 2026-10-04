@@ -66,7 +66,7 @@ public final class UniswapV2Client extends SignedCexClient {
 
     public UniswapV2Client(ExchangeConfig config, Credentials credentials, SymbolFilters filters, EvmCrypto crypto,
                            String router, String tokenSpec, String slippagePct) {
-        super("uniswapv2", config, credentials, filters, 4, 1);
+        super("uniswapv2", config, credentials, filters);
         this.crypto = crypto;
         if (router == null || router.isBlank()) throw new IllegalStateException("Задайте UNISWAPV2_ROUTER (адрес Router02)");
         this.router = router.toLowerCase();

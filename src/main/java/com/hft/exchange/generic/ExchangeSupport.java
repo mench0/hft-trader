@@ -2,7 +2,7 @@ package com.hft.exchange.generic;
 
 import com.hft.config.Credentials;
 import com.hft.config.ExchangeConfig;
-import com.hft.engine.MeanReversionStrategy;
+import com.hft.engine.StrategySet;
 import com.hft.engine.OrderService;
 import com.hft.engine.TickPipeline;
 import com.hft.exchange.catalog.ExchangeInfo;
@@ -66,7 +66,7 @@ public final class ExchangeSupport {
     }
 
     /** Источник данных потерян: снять заявки, закрыть позиции, остановить стратегию и торговлю. */
-    public static void feedGaveUp(String id, BookFeed feed, OrderService orders, MeanReversionStrategy strategy, RiskManager risk) {
+    public static void feedGaveUp(String id, BookFeed feed, OrderService orders, StrategySet strategy, RiskManager risk) {
         log.error("[{}] данные потеряны — отменяю заявки, закрываю позиции, останавливаю торговлю", id);
         for (String s : feed.activeSymbols()) {
             try { orders.cancelAll(s); } catch (Exception e) { log.warn("[{}] cancelAll {}: {}", id, s, e.toString()); }

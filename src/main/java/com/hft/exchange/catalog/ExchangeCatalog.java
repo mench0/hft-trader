@@ -48,6 +48,12 @@ public final class ExchangeCatalog {
         add(new ExchangeInfo("hyperliquid", "Hyperliquid", Kind.PERP_DEX, Adapter.LIVE_UNVERIFIED,
                 "https://api.hyperliquid.xyz", 5, 0.015, 0.045, "USDC", "BTCUSDC (монета BTC, перп)",
                 "Перпы: стакан, ордера, info-запросы (WS post) и исполнения по WebSocket, REST — запасной. Ордера подписываются agent-ключом (EIP-712) через web3j. HYPERLIQUID_API_KEY = адрес аккаунта, _SECRET = ключ agent-кошелька без права вывода. Лимит адреса: 1 действие на $1 оборота."));
+        add(new ExchangeInfo("kucoin", "KuCoin", Kind.CEX_TIER1, Adapter.LIVE_UNVERIFIED,
+                "https://api.kucoin.com", 10, 0.10, 0.10, "USDT", "BTCUSDT",
+                "Спот: стакан по WebSocket (level2Depth50, адрес и токен через bullet-public) + REST-запас, ордера через REST. Нужен KUCOIN_PASSPHRASE. Лимиты — пулы весов (публичный 2000/30 с, спот 4000/30 с)."));
+        add(new ExchangeInfo("aster", "Aster", Kind.ORDERBOOK_DEX, Adapter.LIVE_UNVERIFIED,
+                "https://sapi.asterdex.com", 5, 0.10, 0.10, "USDT", "BTCUSDT",
+                "Спот, API v3 в формате Binance: стакан по WebSocket (depth20@100ms) + REST-запас, ордера через REST с подписью EIP-712 кошельком-агентом. ASTER_API_KEY = адрес основного кошелька, ASTER_API_SECRET = ключ API-кошелька (signer) без права вывода. Комиссии указаны по умолчанию, проверьте тариф."));
         add(new ExchangeInfo("dydx", "dYdX v4", Kind.PERP_DEX, Adapter.PAPER_BLIND,
                 "https://indexer.dydx.trade", 5, 0.01, 0.05, "USD", "BTCUSD (рынок BTC-USD, перп)",
                 "Перпы, только paper, стакан по WebSocket (v4_orderbook) + REST-запас: ордера требуют Cosmos-транзакций (protobuf, gRPC) — не реализовано."));

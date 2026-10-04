@@ -161,7 +161,8 @@ public class WsTradeCheck {
       String login = ws.received.stream().filter(t -> t.contains("spot.login")).findFirst().get();
       String ts = j(login).path("payload").path("timestamp").asText();
       ck("gate login sign", j(login).path("payload").path("signature").asText().equals(Hmac.sha512Hex("SECRET", "api\nspot.login\n\n"+ts)) && j(login).path("payload").path("api_key").asText().equals("KEY"));
-      ck("gate subscribe auth", ws.received.stream().anyMatch(t -> t.contains("spot.orders") && t.contains("\"event\":\"subscribe\"") && t.contains("BTC_USDT") && t.contains("\"KEY\":\"KEY\"")));
+      // подписка уходит сразу после подтверждения логина — ждём её, а не смотрим мгновенно
+      ck("gate subscribe auth", await(() -> ws.received.stream().anyMatch(t -> t.contains("spot.orders") && t.contains("\"event\":\"subscribe\"") && t.contains("BTC_USDT") && t.contains("\"KEY\":\"KEY\"")), 2000));
       ck("gate balance stream", await(() -> near(store.free("USDT"),90) && near(store.locked("USDT"),10) && c.balancesStreamed(), 3000));
 
       OrderResult r = c.buyLimit("BTCUSDT", 0.5, 100, TimeInForce.GTC);

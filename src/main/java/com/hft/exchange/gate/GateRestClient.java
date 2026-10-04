@@ -38,7 +38,7 @@ public final class GateRestClient extends SignedCexClient {
     private static final String API = "/api/v4";
 
     public GateRestClient(ExchangeConfig config, Credentials credentials, SymbolFilters filters) {
-        super("gate", config, credentials, filters, 5, 5);
+        super("gate", config, credentials, filters);
     }
 
     static String pair(String symbol) {
