@@ -38,6 +38,14 @@ public final class PrometheusExporter {
         help(sb, "hft_daily_pnl_quote", "Реализованный PnL за сутки UTC после комиссий, в котируемой валюте");
         help(sb, "hft_open_positions", "Открытых позиций у стратегии");
         help(sb, "hft_strategy_enabled", "1 если стратегия включена");
+        counter(sb, "hft_tri_opportunities_total", "Найдено прибыльных кругов треугольного арбитража (с учётом комиссий)");
+        counter(sb, "hft_tri_executed_total", "Исполнено кругов треугольного арбитража");
+        counter(sb, "hft_tri_failed_total", "Прерванных кругов (нога не исполнилась)");
+        help(sb, "hft_tri_pnl_quote", "Результат треугольного арбитража с запуска, в базовой валюте круга");
+        help(sb, "hft_statarb_positions", "Открытых позиций статистического арбитража");
+        counter(sb, "hft_statarb_trades_total", "Закрытых сделок статистического арбитража");
+        help(sb, "hft_statarb_pnl_quote", "Результат статистического арбитража с запуска");
+        help(sb, "hft_statarb_zscore", "z-score спреда пары");
         help(sb, "hft_order_latency_p50_micros", "Латентность отправки ордера, p50, микросекунды");
         help(sb, "hft_order_latency_p99_micros", "Латентность отправки ордера, p99, микросекунды");
 
@@ -60,6 +68,20 @@ public final class PrometheusExporter {
             line(sb, "hft_daily_pnl_quote", ex, gw.risk().dailyPnl());
             line(sb, "hft_open_positions", ex, gw.strategy().openPositions());
             line(sb, "hft_strategy_enabled", ex, gw.strategy().isEnabled() ? 1 : 0);
+            var tri = gw.strategy().triangular();
+            line(sb, "hft_tri_opportunities_total", ex, tri.opportunities());
+            line(sb, "hft_tri_executed_total", ex, tri.executedCount());
+            line(sb, "hft_tri_failed_total", ex, tri.failedCount());
+            line(sb, "hft_tri_pnl_quote", ex, tri.totalPnl());
+            var sa = gw.strategy().statArb();
+            line(sb, "hft_statarb_positions", ex, sa.openPositions());
+            line(sb, "hft_statarb_trades_total", ex, sa.tradesCount());
+            line(sb, "hft_statarb_pnl_quote", ex, sa.totalPnl());
+            for (var pair : sa.zScores().entrySet()) {
+                if (Double.isNaN(pair.getValue())) continue;
+                sb.append("hft_statarb_zscore{exchange=\"").append(ex).append("\",pair=\"").append(pair.getKey()).append("\"} ")
+                  .append(formatNumber(pair.getValue())).append('\n');
+            }
 
             var latency = gw.orders().latency();
             if (latency.count() > 0) {

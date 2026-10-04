@@ -3,7 +3,7 @@ package com.hft.exchange.generic;
 import com.hft.config.TradingSettings;
 import com.hft.config.ExchangeConfig;
 import com.hft.engine.MarketDataHandler;
-import com.hft.engine.MeanReversionStrategy;
+import com.hft.engine.StrategySet;
 import com.hft.engine.OrderService;
 import com.hft.engine.TickPipeline;
 import com.hft.exchange.ExchangeGateway;
@@ -41,7 +41,7 @@ public final class PaperExchange implements ExchangeGateway, RequestStatsSource 
     private final OrderService orderService;
 
     private final MarketDataHandler dataHandler;
-    private final MeanReversionStrategy strategy;
+    private final StrategySet strategy;
     private final TickPipeline pipeline;
     private final BookFeed feed;
 
@@ -61,8 +61,8 @@ public final class PaperExchange implements ExchangeGateway, RequestStatsSource 
         this.orderService = new OrderService(paper, market, balances, filters, risk, settings);
 
         this.dataHandler = new MarketDataHandler(market);
-        this.strategy = new MeanReversionStrategy(market, orderService, info.id(), settings);
-        this.pipeline = new TickPipeline(dataHandler, strategy);
+        this.strategy = new StrategySet(market, orderService, info.id(), settings);
+        this.pipeline = new TickPipeline(dataHandler, strategy.handlers());
         this.feed = ExchangeSupport.newFeed(info, config, market, pipeline, paper, this::onFeedGaveUp);
         strategy.setRealtimeSource(feed::isRealtime);          // на REST-запасе новых входов нет
     }
@@ -108,7 +108,7 @@ public final class PaperExchange implements ExchangeGateway, RequestStatsSource 
     public RiskManager risk() { return risk; }
 
     @Override
-    public MeanReversionStrategy strategy() { return strategy; }
+    public StrategySet strategy() { return strategy; }
 
     public BookFeed feed() { return feed; }
 
@@ -127,7 +127,7 @@ public final class PaperExchange implements ExchangeGateway, RequestStatsSource 
         m.put("mode", "PAPER");
         m.put("marketData", feed.stats());
         m.put("realtime", feed.isRealtime());
-        m.put("orderExecutor", strategy.executor().stats());
+        m.put("strategies", strategy.stats());
         return m;
     }
 

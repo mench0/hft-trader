@@ -83,6 +83,7 @@ public final class AdminServer {
 
         // Параметры — всё, что можно менять без пересборки
         route("/exchange/params", this::handleExchangeParams);
+        route("/strategies", this::handleStrategies);
 
         // Торговля поверх уже запущенных подключений
         route("/trading/start", this::handleTradingStart);
@@ -331,6 +332,15 @@ public final class AdminServer {
         n.put("биржа", exId);
         n.set("параметры", mapper.valueToTree(controller.params(exId)));
         return n;
+    }
+
+    /** GET /strategies?exchange=binance — состояние стратегий: треугольники, пары и их z-score, позиции, результат. */
+    private void handleStrategies(HttpExchange ex) throws IOException {
+        ExchangeGateway gw = resolveActive(query(ex));
+        ObjectNode root = mapper.createObjectNode();
+        root.put("биржа", gw.id());
+        root.set("стратегии", mapper.valueToTree(gw.strategy().stats()));
+        send(ex, 200, root);
     }
 
     // ======================= ТОРГОВЛЯ =======================

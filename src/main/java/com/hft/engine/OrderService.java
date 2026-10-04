@@ -40,6 +40,8 @@ public final class OrderService {
 
     public RiskManager risk() { return risk; }
 
+    public BalanceStore balances() { return balances; }
+
     private final Latency orderLatency = new Latency("Латентность ордера");
 
     public OrderService(ExchangeOrderApi rest, MarketDataStore market, BalanceStore balances,

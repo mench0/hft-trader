@@ -4,7 +4,7 @@ import com.hft.config.TradingSettings;
 import com.hft.config.Credentials;
 import com.hft.config.ExchangeConfig;
 import com.hft.engine.MarketDataHandler;
-import com.hft.engine.MeanReversionStrategy;
+import com.hft.engine.StrategySet;
 import com.hft.engine.OrderService;
 import com.hft.engine.TickPipeline;
 import com.hft.exchange.ExchangeGateway;
@@ -38,7 +38,7 @@ public final class BybitExchange implements ExchangeGateway {
     private final OrderService orderService;
 
     private final MarketDataHandler dataHandler;
-    private final MeanReversionStrategy strategy;
+    private final StrategySet strategy;
     private final TickPipeline pipeline;
     private final BybitMarketDataFeed feed;
 
@@ -56,8 +56,8 @@ public final class BybitExchange implements ExchangeGateway {
         this.orderService = new OrderService(rest, market, balances, filters, risk, settings);
 
         this.dataHandler = new MarketDataHandler(market);
-        this.strategy = new MeanReversionStrategy(market, orderService, "bybit", settings);
-        this.pipeline = new TickPipeline(dataHandler, strategy);
+        this.strategy = new StrategySet(market, orderService, "bybit", settings);
+        this.pipeline = new TickPipeline(dataHandler, strategy.handlers());
         this.feed = new BybitMarketDataFeed(config, market, pipeline);
 
         if (!credentials.isPresent()) {
@@ -114,7 +114,7 @@ public final class BybitExchange implements ExchangeGateway {
     public RiskManager risk() { return risk; }
 
     @Override
-    public MeanReversionStrategy strategy() { return strategy; }
+    public StrategySet strategy() { return strategy; }
 
     public BybitMarketDataFeed feed() { return feed; }
 
