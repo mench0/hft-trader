@@ -18,23 +18,23 @@ import java.util.*;
  */
 public final class MarketSources {
 
+    /** Утилитный класс — экземпляры не создаются. */
     private MarketSources() {}
 
     /** Котируемые валюты, которые берём в подбор. */
-    static final List<String> QUOTES = quotes();
+    static volatile List<String> QUOTES = List.of("USDT", "USDC", "USD");
 
-    private static List<String> quotes() {
-        String env = System.getenv("DISCOVERY_QUOTES");
-        if (env == null || env.isBlank()) return List.of("USDT", "USDC", "USD");
-        List<String> out = new ArrayList<>();
-        for (String q : env.split(",")) if (!q.isBlank()) out.add(q.trim().toUpperCase());
-        return out;
+    /** Задать котируемые валюты подбора (из настроек процесса, discoveryQuotes). */
+    public static void setQuotes(List<String> quotes) {
+        if (!quotes.isEmpty()) QUOTES = List.copyOf(quotes);
     }
 
+    /** Биржи, для которых есть источник сводок. */
     public static List<String> supported() {
         return List.of("binance", "bybit", "okx", "gate", "mexc", "bingx", "lbank", "kucoin", "aster", "hyperliquid", "dydx");
     }
 
+    /** Источник сводок биржи по адресу из каталога; пусто — источника нет. */
     public static Optional<MarketSource> create(String id) {
         String base = switch (id) {
             case "binance" -> "https://api.binance.com";
@@ -44,6 +44,7 @@ public final class MarketSources {
         return create(id, base);
     }
 
+    /** Источник сводок биржи по заданному адресу (тесты, прокси). */
     public static Optional<MarketSource> create(String id, String baseUrl) {
         double rps = ExchangeCatalog.find(id).map(i -> Math.max(0.5, Math.min(2.0, i.maxRequestsPerSec() / 2))).orElse(1.0);
         Http http = new Http(id, rps);
@@ -65,6 +66,7 @@ public final class MarketSources {
 
     // ───────────────────────── helpers ─────────────────────────
 
+    /** Число из поля (строка или число); NaN — нет или не число. */
     static double d(JsonNode n, String f) {
         JsonNode v = n.get(f);
         if (v == null || v.isNull()) return Double.NaN;
@@ -74,6 +76,7 @@ public final class MarketSources {
         try { return Double.parseDouble(s); } catch (NumberFormatException e) { return Double.NaN; }
     }
 
+    /** Число из элемента массива; NaN — нет или не число. */
     static double d(JsonNode arr, int i) {
         JsonNode v = arr.get(i);
         if (v == null || v.isNull()) return Double.NaN;
@@ -93,12 +96,14 @@ public final class MarketSources {
         return null;
     }
 
+    /** Спотовый тикер из сводки; null — котируемая валюта не из списка подбора. */
     static TickerSnapshot spot(String ex, String venue, double last, double bid, double ask, double hi, double lo, double open, double qv, long trades) {
         String[] bq = split(venue);
         if (bq == null) return null;
         return new TickerSnapshot(ex, bq[0] + bq[1], venue, bq[0], bq[1], false, last, bid, ask, hi, lo, open, qv, trades);
     }
 
+    /** Цены закрытия по возрастанию времени из строк {время, цена}. */
     static double[] closes(List<double[]> rows) {
         rows.sort(Comparator.comparingDouble(r -> r[0]));
         double[] out = new double[rows.size()];
@@ -108,10 +113,14 @@ public final class MarketSources {
 
     // ───────────────────────── Binance / MEXC ─────────────────────────
 
+    /** Binance и биржи с тем же форматом (MEXC, Aster): /ticker/24hr и /klines. */
     static final class BinanceLike implements MarketSource {
+        /** Биржа, REST-адрес, пути сводки и свечей, HTTP-клиент с лимитами. */
         final String id, base, tickerPath, klinePath; final Http http;
         BinanceLike(String id, String base, Http http, String tickerPath, String klinePath) { this.id = id; this.base = base; this.http = http; this.tickerPath = tickerPath; this.klinePath = klinePath; }
+        /** Идентификатор биржи. */
         public String exchange() { return id; }
+        /** Суточная сводка по всем тикерам биржи. */
         public List<TickerSnapshot> tickers() throws Exception {
             List<TickerSnapshot> out = new ArrayList<>();
             for (JsonNode t : http.get(base + tickerPath)) {
@@ -124,6 +133,7 @@ public final class MarketSources {
             }
             return out;
         }
+        /** Минутные цены закрытия тикера (не больше limit). */
         public double[] closes1m(TickerSnapshot t, int limit) throws Exception {
             List<double[]> rows = new ArrayList<>();
             for (JsonNode k : http.get(base + klinePath + "?symbol=" + t.venueSymbol() + "&interval=1m&limit=" + limit))
@@ -137,9 +147,12 @@ public final class MarketSources {
     /** GET /api/v1/market/allTickers -> data.ticker[{symbol:"BTC-USDT",buy,sell,last,high,low,changeRate,volValue}];
      *  свечи GET /api/v1/market/candles?type=1min&symbol=BTC-USDT -> [[time(с),open,close,high,low,vol,turnover]], новые первыми. */
     static final class Kucoin implements MarketSource {
+        /** REST-адрес биржи и HTTP-клиент с лимитами. */
         final String base; final Http http;
         Kucoin(String base, Http http) { this.base = base; this.http = http; }
+        /** Идентификатор биржи. */
         public String exchange() { return "kucoin"; }
+        /** Суточная сводка по всем тикерам биржи. */
         public List<TickerSnapshot> tickers() throws Exception {
             List<TickerSnapshot> out = new ArrayList<>();
             for (JsonNode t : http.get(base + "/api/v1/market/allTickers").path("data").path("ticker")) {
@@ -151,6 +164,7 @@ public final class MarketSources {
             }
             return out;
         }
+        /** Минутные цены закрытия тикера (не больше limit). */
         public double[] closes1m(TickerSnapshot t, int limit) throws Exception {
             long end = System.currentTimeMillis() / 1000, start = end - limit * 60L;
             List<double[]> rows = new ArrayList<>();
@@ -162,10 +176,14 @@ public final class MarketSources {
 
     // ───────────────────────── Bybit ─────────────────────────
 
+    /** Bybit v5: /v5/market/tickers и /v5/market/kline (spot). */
     static final class Bybit implements MarketSource {
+        /** REST-адрес биржи и HTTP-клиент с лимитами. */
         final String base; final Http http;
         Bybit(String base, Http http) { this.base = base; this.http = http; }
+        /** Идентификатор биржи. */
         public String exchange() { return "bybit"; }
+        /** Суточная сводка по всем тикерам биржи. */
         public List<TickerSnapshot> tickers() throws Exception {
             List<TickerSnapshot> out = new ArrayList<>();
             for (JsonNode t : http.get(base + "/v5/market/tickers?category=spot").path("result").path("list")) {
@@ -175,6 +193,7 @@ public final class MarketSources {
             }
             return out;
         }
+        /** Минутные цены закрытия тикера (не больше limit). */
         public double[] closes1m(TickerSnapshot t, int limit) throws Exception {
             List<double[]> rows = new ArrayList<>();
             for (JsonNode k : http.get(base + "/v5/market/kline?category=spot&symbol=" + t.venueSymbol() + "&interval=1&limit=" + Math.min(limit, 1000)).path("result").path("list"))
@@ -185,10 +204,14 @@ public final class MarketSources {
 
     // ───────────────────────── OKX ─────────────────────────
 
+    /** OKX: /api/v5/market/tickers и /candles (SPOT). */
     static final class Okx implements MarketSource {
+        /** REST-адрес биржи и HTTP-клиент с лимитами. */
         final String base; final Http http;
         Okx(String base, Http http) { this.base = base; this.http = http; }
+        /** Идентификатор биржи. */
         public String exchange() { return "okx"; }
+        /** Суточная сводка по всем тикерам биржи. */
         public List<TickerSnapshot> tickers() throws Exception {
             List<TickerSnapshot> out = new ArrayList<>();
             for (JsonNode t : http.get(base + "/api/v5/market/tickers?instType=SPOT").path("data")) {
@@ -198,6 +221,7 @@ public final class MarketSources {
             }
             return out;
         }
+        /** Минутные цены закрытия тикера (не больше limit). */
         public double[] closes1m(TickerSnapshot t, int limit) throws Exception {
             List<double[]> rows = new ArrayList<>();
             for (JsonNode k : http.get(base + "/api/v5/market/candles?instId=" + t.venueSymbol() + "&bar=1m&limit=" + Math.min(limit, 300)).path("data"))
@@ -208,10 +232,14 @@ public final class MarketSources {
 
     // ───────────────────────── Gate ─────────────────────────
 
+    /** Gate: /spot/tickers и /spot/candlesticks. */
     static final class Gate implements MarketSource {
+        /** REST-адрес биржи и HTTP-клиент с лимитами. */
         final String base; final Http http;
         Gate(String base, Http http) { this.base = base; this.http = http; }
+        /** Идентификатор биржи. */
         public String exchange() { return "gate"; }
+        /** Суточная сводка по всем тикерам биржи. */
         public List<TickerSnapshot> tickers() throws Exception {
             List<TickerSnapshot> out = new ArrayList<>();
             for (JsonNode t : http.get(base + "/api/v4/spot/tickers")) {
@@ -222,6 +250,7 @@ public final class MarketSources {
             }
             return out;
         }
+        /** Минутные цены закрытия тикера (не больше limit). */
         public double[] closes1m(TickerSnapshot t, int limit) throws Exception {
             List<double[]> rows = new ArrayList<>();
             for (JsonNode k : http.get(base + "/api/v4/spot/candlesticks?currency_pair=" + t.venueSymbol() + "&interval=1m&limit=" + Math.min(limit, 1000)))
@@ -232,10 +261,14 @@ public final class MarketSources {
 
     // ───────────────────────── BingX ─────────────────────────
 
+    /** BingX: /openApi/spot/v1/ticker/24hr и /market/kline. */
     static final class Bingx implements MarketSource {
+        /** REST-адрес биржи и HTTP-клиент с лимитами. */
         final String base; final Http http;
         Bingx(String base, Http http) { this.base = base; this.http = http; }
+        /** Идентификатор биржи. */
         public String exchange() { return "bingx"; }
+        /** Суточная сводка по всем тикерам биржи. */
         public List<TickerSnapshot> tickers() throws Exception {
             List<TickerSnapshot> out = new ArrayList<>();
             JsonNode r = http.get(base + "/openApi/spot/v1/ticker/24hr?timestamp=" + System.currentTimeMillis());
@@ -247,6 +280,7 @@ public final class MarketSources {
             }
             return out;
         }
+        /** Минутные цены закрытия тикера (не больше limit). */
         public double[] closes1m(TickerSnapshot t, int limit) throws Exception {
             List<double[]> rows = new ArrayList<>();
             JsonNode r = http.get(base + "/openApi/spot/v2/market/kline?symbol=" + t.venueSymbol() + "&interval=1m&limit=" + Math.min(limit, 1000));
@@ -257,10 +291,14 @@ public final class MarketSources {
 
     // ───────────────────────── LBank ─────────────────────────
 
+    /** LBank: /v2/ticker/24hr.do и /v2/kline.do. */
     static final class Lbank implements MarketSource {
+        /** REST-адрес биржи и HTTP-клиент с лимитами. */
         final String base; final Http http;
         Lbank(String base, Http http) { this.base = base; this.http = http; }
+        /** Идентификатор биржи. */
         public String exchange() { return "lbank"; }
+        /** Суточная сводка по всем тикерам биржи. */
         public List<TickerSnapshot> tickers() throws Exception {
             List<TickerSnapshot> out = new ArrayList<>();
             for (JsonNode t : http.get(base + "/v2/ticker/24hr.do?symbol=all").path("data")) {
@@ -272,6 +310,7 @@ public final class MarketSources {
             }
             return out;
         }
+        /** Минутные цены закрытия тикера (не больше limit). */
         public double[] closes1m(TickerSnapshot t, int limit) throws Exception {
             long from = System.currentTimeMillis() / 1000 - limit * 60L;
             List<double[]> rows = new ArrayList<>();
@@ -283,10 +322,14 @@ public final class MarketSources {
 
     // ───────────────────────── Hyperliquid (перпы) ─────────────────────────
 
+    /** Hyperliquid: metaAndAssetCtxs и candleSnapshot (перпы). */
     static final class Hyperliquid implements MarketSource {
+        /** REST-адрес биржи и HTTP-клиент с лимитами. */
         final String base; final Http http;
         Hyperliquid(String base, Http http) { this.base = base; this.http = http; }
+        /** Идентификатор биржи. */
         public String exchange() { return "hyperliquid"; }
+        /** Суточная сводка по всем тикерам биржи. */
         public List<TickerSnapshot> tickers() throws Exception {
             JsonNode r = http.post(base + "/info", "{\"type\":\"metaAndAssetCtxs\"}");
             JsonNode universe = r.path(0).path("universe"), ctxs = r.path(1);
@@ -303,6 +346,7 @@ public final class MarketSources {
             }
             return out;
         }
+        /** Минутные цены закрытия тикера (не больше limit). */
         public double[] closes1m(TickerSnapshot t, int limit) throws Exception {
             long now = System.currentTimeMillis();
             String body = "{\"type\":\"candleSnapshot\",\"req\":{\"coin\":\"" + t.venueSymbol() + "\",\"interval\":\"1m\",\"startTime\":"
@@ -315,10 +359,14 @@ public final class MarketSources {
 
     // ───────────────────────── dYdX v4 (перпы) ─────────────────────────
 
+    /** dYdX v4 indexer: /perpetualMarkets и /candles (перпы). */
     static final class Dydx implements MarketSource {
+        /** REST-адрес биржи и HTTP-клиент с лимитами. */
         final String base; final Http http;
         Dydx(String base, Http http) { this.base = base; this.http = http; }
+        /** Идентификатор биржи. */
         public String exchange() { return "dydx"; }
+        /** Суточная сводка по всем тикерам биржи. */
         public List<TickerSnapshot> tickers() throws Exception {
             List<TickerSnapshot> out = new ArrayList<>();
             var it = http.get(base + "/v4/perpetualMarkets").path("markets").fields();
@@ -334,6 +382,7 @@ public final class MarketSources {
             }
             return out;
         }
+        /** Минутные цены закрытия тикера (не больше limit). */
         public double[] closes1m(TickerSnapshot t, int limit) throws Exception {
             List<double[]> rows = new ArrayList<>();
             for (JsonNode k : http.get(base + "/v4/candles/perpetualMarkets/" + t.venueSymbol() + "?resolution=1MIN&limit=" + Math.min(limit, 100)).path("candles")) {

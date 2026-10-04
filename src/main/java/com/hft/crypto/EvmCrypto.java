@@ -22,5 +22,6 @@ public interface EvmCrypto {
     String signTransaction(long chainId, BigInteger nonce, BigInteger gasPrice, BigInteger gasLimit,
                            String to, BigInteger value, String dataHex);
 
+    /** Подпись secp256k1: r и s по 32 байта, v — 27 или 28. */
     record Signature(byte[] r, byte[] s, int v) {}
 }

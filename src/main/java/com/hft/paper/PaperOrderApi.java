@@ -29,15 +29,28 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class PaperOrderApi implements ExchangeOrderApi {
 
+    /** Лимитный ордер, ждущий цены: остаток, цена, запрошено, исполнено, сумма в котируемой. */
     private record Resting(long id, String symbol, Side side, double qtyLeft, double price, double requested, double filled, double quoteSum) {}
 
+    /** Стакан, по которому исполняются ордера. */
     private final MarketDataStore market;
+    /** Бумажные балансы. */
     private final BalanceStore balances;
+    /** Комиссия мейкера, доля. */
     private final double makerFee;
+    /** Комиссия тейкера, доля. */
     private final double takerFee;
+    /** Номера ордеров. */
     private final AtomicLong ids = new AtomicLong(1_000_000);
+    /** Висящие лимитные ордера. */
     private final Map<Long, Resting> resting = new ConcurrentHashMap<>();
 
+    /**
+     * @param market стаканы биржи
+     * @param balances бумажные балансы
+     * @param makerFeePct комиссия мейкера, %
+     * @param takerFeePct комиссия тейкера, %
+     */
     public PaperOrderApi(MarketDataStore market, BalanceStore balances, double makerFeePct, double takerFeePct) {
         this.market = market;
         this.balances = balances;
@@ -47,8 +60,10 @@ public final class PaperOrderApi implements ExchangeOrderApi {
 
     /** Снимок стакана для прохода по уровням: один согласованный снимок, буфер на поток. */
     private static final ThreadLocal<OrderBook.Levels> LEVELS = ThreadLocal.withInitial(OrderBook.Levels::new);
+    /** Буфер лучших цен на поток (без аллокаций). */
     private static final ThreadLocal<double[]> TOP = ThreadLocal.withInitial(() -> new double[4]);
 
+    /** Снимок всех уровней стакана символа. */
     private OrderBook.Levels levels(String symbol) {
         OrderBook.Levels l = LEVELS.get();
         market.book(symbol).copyTo(l);
@@ -62,6 +77,7 @@ public final class PaperOrderApi implements ExchangeOrderApi {
     @Override public OrderResult buyMarket(String s, double q) { return takeFromBook(s, Side.BUY, q, Double.NaN, false, "MARKET"); }
     @Override public OrderResult sellMarket(String s, double q) { return takeFromBook(s, Side.SELL, q, Double.NaN, false, "MARKET"); }
 
+    /** Рыночная покупка на сумму в котируемой валюте. */
     @Override
     public OrderResult buyMarketForQuote(String symbol, double quoteAmount) {
         long t0 = System.nanoTime();
@@ -77,11 +93,13 @@ public final class PaperOrderApi implements ExchangeOrderApi {
         return result(ids.incrementAndGet(), symbol, Side.BUY, "FILLED", qty, qty, avg, t0);
     }
 
+    /** Отменить висящий ордер. */
     @Override
     public void cancelOrder(String symbol, long orderId) {
         resting.remove(orderId);
     }
 
+    /** Отменить все висящие ордера символа. */
     @Override
     public int cancelAll(String symbol) {
         int n = 0;
@@ -91,10 +109,12 @@ public final class PaperOrderApi implements ExchangeOrderApi {
         return n;
     }
 
+    /** Сколько висит лимитных ордеров. */
     public int openOrders() { return resting.size(); }
 
     // ------------------------------------------------------------------ internals
 
+    /** Лимитный ордер: исполнить то, что пересекает стакан, остаток (GTC) — оставить висеть. */
     private OrderResult limit(String symbol, Side side, double qty, double price, TimeInForce tif) {
         if (tif == TimeInForce.FOK) {
             double available = depthUpTo(symbol, side, price);
@@ -114,6 +134,7 @@ public final class PaperOrderApi implements ExchangeOrderApi {
         return new OrderResult(id, "paper-" + id, symbol, side, status, qty, taker.executedQty(), taker.avgPrice(), 0);
     }
 
+    /** Объём на стороне стакана до цены limitPrice включительно. */
     private double depthUpTo(String symbol, Side side, double limitPrice) {
         OrderBook.Levels b = levels(symbol);
         double sum = 0;

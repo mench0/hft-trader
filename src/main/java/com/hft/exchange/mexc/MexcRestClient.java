@@ -29,19 +29,27 @@ import java.util.Map;
  */
 public final class MexcRestClient extends SignedCexClient {
 
+    /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(MexcRestClient.class);
 
+    /**
+     * @param config подключение и параметры биржи
+     * @param credentials ключи из окружения
+     * @param filters правила символов
+     */
     public MexcRestClient(ExchangeConfig config, Credentials credentials, SymbolFilters filters) {
         super("mexc", config, credentials, filters);
     }
 
     // ------------------------------------------------------------ HTTP
 
+    /** Публичный GET. */
     private JsonNode publicGet(String path, Map<String, String> p) throws Exception {
         String q = p.isEmpty() ? "" : "?" + query(p);
         return exec(req(baseUrl + path + q).GET().build(), false);
     }
 
+    /** Подписанный запрос. */
     private JsonNode signed(String method, String path, Map<String, String> p, boolean order) throws Exception {
         credentials.require();
         p.put("recvWindow", String.valueOf(config.recvWindowMs()));
@@ -54,6 +62,7 @@ public final class MexcRestClient extends SignedCexClient {
         return exec(r, order);
     }
 
+    /** Ошибка в HTTP-коде или теле ответа — ApiException (лимит — с признаком rateLimit). */
     @Override
     protected void checkError(int http, JsonNode body) {
         if (http == 429 || body.path("code").asInt(0) == 429) {
@@ -68,6 +77,7 @@ public final class MexcRestClient extends SignedCexClient {
 
     // ------------------------------------------------------------ ордера
 
+    /** Отправить ордер (по WebSocket, если можно, иначе REST); исход ждёт вызывающий. */
     @Override
     protected OrderResult placeRaw(Order o) throws Exception {
         Map<String, String> p = params();
@@ -94,6 +104,7 @@ public final class MexcRestClient extends SignedCexClient {
                 o.qtyIsQuote() ? 0 : o.qty(), 0, 0, 0);
     }
 
+    /** Статус ордера: из WS-потока, если есть, иначе запрос к бирже. */
     @Override
     public OrderResult orderStatus(String symbol, long orderId) throws Exception {
         Map<String, String> p = params();
@@ -115,6 +126,7 @@ public final class MexcRestClient extends SignedCexClient {
                 d(o, "origQty"), exec, exec > 0 ? quoteSum / exec : 0, 0);
     }
 
+    /** Отменить ордер. */
     @Override
     public void cancelOrder(String symbol, long orderId) throws Exception {
         Map<String, String> p = params();
@@ -124,6 +136,7 @@ public final class MexcRestClient extends SignedCexClient {
         log.info("[mexc] ордер {} по {} отменён", orderId, symbol);
     }
 
+    /** Отменить все открытые ордера символа; возвращает их число. */
     @Override
     public int cancelAll(String symbol) throws Exception {
         Map<String, String> p = params();
@@ -163,6 +176,7 @@ public final class MexcRestClient extends SignedCexClient {
         log.info("[mexc] правила загружены для {} символов", loaded);
     }
 
+    /** Загрузить балансы. */
     @Override
     public void loadBalances(BalanceStore store) throws Exception {
         JsonNode r = signed("GET", "/api/v3/account", params(), false);

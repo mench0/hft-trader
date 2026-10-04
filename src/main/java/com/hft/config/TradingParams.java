@@ -1,20 +1,43 @@
 package com.hft.config;
 
-import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
+import static com.hft.config.ParamSpec.flag;
+import static com.hft.config.ParamSpec.num;
+import static com.hft.config.ParamSpec.text;
+
 /**
- * Все торговые параметры одной биржи: риск, стратегия и размеры структур данных.
+ * Все настройки одной биржи: подключение, риск, стратегии, работа фидов.
  *
- * В application.yml их нет — задаются только через админку
- * ({@code POST /exchange/params?exchange=bybit&maxPositionQuote=50&entryZ=2.5}),
- * для каждой биржи свои, и сохраняются в SQLite вместе с остальным состоянием.
+ * Задаются только через админку ({@code POST /exchange/params?exchange=bybit&maxPositionQuote=50}) и только для
+ * выбранных бирж; хранятся в SQLite. Описание каждого параметра (по умолчанию, границы, нужен ли перезапуск,
+ * справка) — в {@link #SPECS}, его же отдаёт {@code GET /exchange/params/schema}.
  *
- * Неизменяемый: при изменении из админки создаётся новый экземпляр и атомарно
- * подменяется в {@link TradingSettings}. Поток стратегии читает одну volatile-ссылку
- * и видит согласованный набор значений, без блокировок.
+ * Неизменяемый: при изменении из админки собирается новый экземпляр и атомарно подменяется в
+ * {@link TradingSettings}. Поток стратегии читает одну volatile-ссылку и видит согласованный набор значений.
  */
 public record TradingParams(
+        // ---- подключение ----
+        boolean testnet,
+        boolean live,
+        String restUrl,
+        String wsUrl,
+        int recvWindowMs,
+        boolean wsTrade,
+        double paperStartBalance,
+        // ---- работа фидов и клиента ----
+        long wsStaleMs,
+        long wsReconnectBaseMs,
+        long restFallbackGraceMs,
+        long pollBackoffMs,
+        int feedMaxFailures,
+        int wsMaxParseErrors,
+        int wsMaxCrossedBooks,
+        long balanceSyncMs,
+        long marketFillWaitMs,
+        double marketPriceBandPercent,
+        int orderThreads,
         // ---- риск ----
         boolean tradingEnabled,
         double maxPositionQuote,
@@ -25,6 +48,7 @@ public record TradingParams(
         int maxOrdersPerMinute,
         long maxDataAgeMs,
         // ---- стратегия mean-reversion ----
+        boolean meanReversionEnabled,
         double entryZ,
         double exitZ,
         double stopLossPercent,
@@ -34,97 +58,142 @@ public record TradingParams(
         long maxBookAgeMs,
         double maxSpreadPercent,
         long positionTimeoutMs,
-        // ---- структуры данных (применяются при следующем /control/start) ----
+        // ---- структуры данных ----
         int bookDepth,
         int priceWindow,
-        // ---- какие стратегии работают на бирже ----
-        boolean meanReversionEnabled,
-        boolean triangularEnabled,
-        boolean statArbEnabled,
         // ---- треугольный арбитраж ----
-        String triHomeAsset,            // с какой валюты начинается и где заканчивается круг (USDT)
-        double triMinProfitPercent,     // минимальная чистая прибыль круга после трёх комиссий, %
-        double triOrderQuote,           // размер круга в triHomeAsset
-        long triMaxBookAgeMs,           // все три стакана не старше
-        long triCooldownMs,             // пауза после круга по тому же треугольнику
-        boolean triUnwindOnFail,        // если нога не прошла — вернуть остаток в triHomeAsset
-        // ---- статистический арбитраж (пары) ----
-        String statArbPairs,            // "BTCUSDT/ETHUSDT,SOLUSDT/AVAXUSDT"; пусто — все пары выбранных символов
-        int statArbWindow,              // размер окна в отсчётах
-        long statArbSampleMs,           // шаг отсчётов по времени
+        boolean triangularEnabled,
+        String triHomeAsset,
+        double triMinProfitPercent,
+        double triOrderQuote,
+        double triDepthUsage,
+        long triMaxBookAgeMs,
+        long triCooldownMs,
+        boolean triUnwindOnFail,
+        // ---- статистический арбитраж ----
+        boolean statArbEnabled,
+        String statArbPairs,
+        int statArbMaxAutoPairs,
+        int statArbWindow,
+        long statArbSampleMs,
         double statArbEntryZ,
         double statArbExitZ,
-        double statArbStopZ,            // спред разошёлся ещё сильнее — выход с убытком
-        double statArbMinCorrelation,   // корреляция доходностей пары не ниже
+        double statArbStopZ,
+        double statArbMinCorrelation,
         double statArbOrderQuote,
-        long statArbMaxHoldMs
+        long statArbMaxHoldMs,
+        // ---- Uniswap V2 (только для uniswapv2) ----
+        String uniRouter,
+        String uniTokens,
+        String uniPools,
+        double uniSlippagePercent
 ) {
 
-    public static final TradingParams DEFAULTS = new TradingParams(
-            false, 100.0, 50.0, 0.3, 0.2, 0.1, 30, 5_000,
-            2.0, 0.3, 0.5, 0.15, 5, 20.0, 2_000, 0.1, 3_600_000,
-            20, 1000,
-            true, false, false,
-            "USDT", 0.15, 20.0, 1_000, 3_000, true,
-            "", 300, 1_000, 2.0, 0.5, 4.0, 0.6, 20.0, 3_600_000);
+    private static final String URL = "(|https?://\\S+|wss?://\\S+)";
+    /** Формат адреса Ethereum (0x + 40 hex) или пусто. */
+    private static final String ADDR = "(|0x[0-9a-fA-F]{40})";
 
-    private static final java.util.Set<String> STRINGS = java.util.Set.of("triHomeAsset", "statArbPairs");
+    /** Описания всех параметров: по умолчанию, границы, перезапуск, справка. */
+    public static final Map<String, ParamSpec> SPECS = ParamSpec.index(List.of(
+            // подключение
+            flag("testnet", true, "Тестовая сеть биржи (если есть). Безопасное значение по умолчанию; для реальной торговли — false").needsRestart(),
+            flag("live", false, "Реальные ордера: нужны ещё API-ключи в окружении (ID_API_KEY/_SECRET). false — бумажная торговля на живых данных").needsRestart(),
+            text("restUrl", "", URL, "REST-адрес вместо стандартного (пусто — по каталогу с учётом testnet; для Uniswap — RPC ноды)").needsRestart(),
+            text("wsUrl", "", URL, "WebSocket-адрес вместо стандартного (пусто — по каталогу с учётом testnet)").needsRestart(),
+            num("recvWindowMs", 5000, 100, 60_000, "Окно годности подписанного запроса, мс").needsRestart(),
+            flag("wsTrade", true, "Отправлять ордера по WebSocket, где биржа это умеет (иначе REST)").needsRestart(),
+            num("paperStartBalance", 1000, 0, 1e12, "Стартовый бумажный баланс в котируемой валюте каждого символа").needsRestart(),
+            // фиды и клиент
+            num("wsStaleMs", 0, 0, 600_000, "Тишина в WebSocket, после которой переподключение, мс (0 — по умолчанию для биржи)").needsRestart(),
+            num("wsReconnectBaseMs", 500, 50, 60_000, "Начальная пауза перед переподключением WebSocket, мс (дальше растёт вдвое)").needsRestart(),
+            num("restFallbackGraceMs", 2000, 0, 600_000, "Сколько ждать восстановления WebSocket, прежде чем включить REST-опрос стакана, мс").needsRestart(),
+            num("pollBackoffMs", 60_000, 1000, 3_600_000, "Пауза REST-опроса после ответа «слишком часто», мс (повторы — вдвое дольше)").needsRestart(),
+            num("feedMaxFailures", 15, 1, 10_000, "Неудач подряд (подключений WS или циклов REST-опроса), после которых источник данных сдаётся: заявки снимаются, торговля останавливается").needsRestart(),
+            num("wsMaxParseErrors", 5, 1, 10_000, "Ошибок разбора сообщений WS подряд, после которых соединение сбрасывается").needsRestart(),
+            num("wsMaxCrossedBooks", 200, 1, 1_000_000, "Перекрещённых стаканов подряд (bid ≥ ask), после которых символ переподписывается").needsRestart(),
+            num("balanceSyncMs", 300_000, 5_000, 86_400_000, "Как часто сверять баланс с биржей по REST, мс (если баланс приходит по WebSocket)"),
+            num("marketFillWaitMs", 400, 0, 10_000, "Сколько ждать исполнения рыночного/IOC-ордера в WebSocket перед запросом статуса, мс"),
+            num("marketPriceBandPercent", 5, 0.1, 50, "Hyperliquid: «рыночный» ордер — это IOC с ценой не дальше этого % от середины"),
+            num("orderThreads", 4, 1, 64, "Потоков для отправки ордеров стратегией возврата к среднему").needsRestart(),
+            // риск
+            flag("tradingEnabled", false, "Торговля на бирже разрешена (также /trading/start и /trading/stop)"),
+            num("maxPositionQuote", 100, 0, 1e9, "Максимальный размер ордера в котируемой валюте"),
+            num("maxDailyLossQuote", 50, 0, 1e9, "Дневной лимит убытка (реализованный, после комиссий); после него kill switch"),
+            num("maxSlippagePercent", 0.3, 0, 100, "Предел ожидаемого проскальзывания рыночного ордера по стакану, %"),
+            num("feeReservePercent", 0.2, 0, 50, "Резерв под комиссию при ордере «на весь баланс», %"),
+            num("takerFeePercent", 0.1, 0, 5, "Комиссия тейкера для расчёта прибыли, % (по умолчанию — из каталога биржи)"),
+            num("maxOrdersPerMinute", 30, 1, 100_000, "Лимит ордеров в минуту (защита от цикла в стратегии)"),
+            num("maxDataAgeMs", 5000, 50, 600_000, "Стакан старше — ордер отклоняется, мс"),
+            // mean reversion
+            flag("meanReversionEnabled", true, "Стратегия возврата к среднему включена"),
+            num("entryZ", 2.0, 0.1, 20, "Вход, когда цена ниже среднего на столько сигм"),
+            num("exitZ", 0.3, -20, 20, "Выход, когда отклонение вернулось к этому значению"),
+            num("stopLossPercent", 0.5, 0.01, 100, "Стоп-лосс, %"),
+            num("minImbalance", 0.15, -1, 1, "Минимальный перевес бидов в стакане для входа"),
+            num("imbalanceLevels", 5, 1, 1000, "По скольким уровням считается перевес"),
+            num("orderQuote", 20, 0, 1e9, "Размер сделки в котируемой валюте"),
+            num("maxBookAgeMs", 2000, 10, 600_000, "Вход только по стакану не старше, мс"),
+            num("maxSpreadPercent", 0.1, 0, 100, "Не входить при спреде шире, %"),
+            num("positionTimeoutMs", 3_600_000, 1000, 7L * 24 * 3_600_000, "Закрыть позицию по таймауту, мс"),
+            num("bookDepth", 20, 1, 1000, "Глубина стакана в памяти, уровней").needsRestart(),
+            num("priceWindow", 1000, 4, 1_000_000, "Окно цен для среднего и сигмы, тиков").needsRestart(),
+            // треугольный арбитраж
+            flag("triangularEnabled", false, "Треугольный арбитраж включён"),
+            text("triHomeAsset", "USDT", "[A-Z0-9]{2,10}", "Валюта, с которой начинается и где заканчивается круг").needsRestart(),
+            num("triMinProfitPercent", 0.15, 0, 10, "Минимальная чистая прибыль круга после трёх комиссий, %"),
+            num("triOrderQuote", 20, 0, 1e9, "Размер круга в triHomeAsset"),
+            num("triDepthUsage", 0.5, 0.01, 1, "Какую долю объёма лучших уровней можно взять кругом"),
+            num("triMaxBookAgeMs", 1000, 10, 60_000, "Все три стакана не старше, мс"),
+            num("triCooldownMs", 3000, 0, 3_600_000, "Пауза перед повтором того же круга, мс"),
+            flag("triUnwindOnFail", true, "Нога не исполнилась — продать остаток обратно в triHomeAsset"),
+            // статистический арбитраж
+            flag("statArbEnabled", false, "Статистический арбитраж (пары) включён"),
+            text("statArbPairs", "", "([A-Z0-9]+/[A-Z0-9]+(,[A-Z0-9]+/[A-Z0-9]+)*)?", "Пары A/B через запятую; пусто — все пары выбранных символов с одной котируемой валютой").needsRestart(),
+            num("statArbMaxAutoPairs", 15, 1, 500, "Сколько пар брать автоматически, если statArbPairs пуст").needsRestart(),
+            num("statArbWindow", 300, 30, 100_000, "Окно в отсчётах").needsRestart(),
+            num("statArbSampleMs", 1000, 100, 3_600_000, "Шаг отсчётов по времени, мс"),
+            num("statArbEntryZ", 2.0, 0.5, 20, "Вход по |z| спреда"),
+            num("statArbExitZ", 0.5, -5, 20, "Выход, когда |z| вернулся к этому значению"),
+            num("statArbStopZ", 4.0, 1, 50, "Стоп: спред разошёлся до этого |z|"),
+            num("statArbMinCorrelation", 0.6, -1, 1, "Минимальная корреляция доходностей пары"),
+            num("statArbOrderQuote", 20, 0, 1e9, "Размер позиции в котируемой валюте"),
+            num("statArbMaxHoldMs", 3_600_000, 1000, 30L * 24 * 3_600_000, "Закрыть позицию по таймауту, мс"),
+            // Uniswap
+            text("uniRouter", "", ADDR, "Uniswap V2: адрес Router02").needsRestart(),
+            text("uniTokens", "", "(|[A-Za-z0-9]+=0x[0-9a-fA-F]{40}:\\d+(;[A-Za-z0-9]+=0x[0-9a-fA-F]{40}:\\d+)*)", "Uniswap V2: токены SYM=0xадрес:десятичные;… ").needsRestart(),
+            text("uniPools", "", "(|[A-Za-z0-9]+=0x[0-9a-fA-F]{40}:(true|false):\\d+:\\d+(;[A-Za-z0-9]+=0x[0-9a-fA-F]{40}:(true|false):\\d+:\\d+)*)",
+                    "Uniswap V2: пулы ТИКЕР=0xадрес_пары:база_это_token0:десятичные_базы:десятичные_котир;… (например WETHUSDC=0x…:true:18:6)").needsRestart(),
+            num("uniSlippagePercent", 0.5, 0, 50, "Uniswap V2: допустимое проскальзывание свопа, %")
+    ));
 
-    /** Параметры, изменение которых вступает в силу только после перезапуска биржи. */
+    /** Значения по умолчанию. */
+    public static final TradingParams DEFAULTS = ParamSpec.build(TradingParams.class, SPECS, Map.of());
+
+    /** Параметры, которые уходят в верхний регистр (тикеры, валюты). */
+    private static final java.util.Set<String> UPPER = java.util.Set.of("triHomeAsset", "statArbPairs");
+
+    /** Параметр применяется только после перезапуска биржи. */
     public static boolean requiresRestart(String key) {
-        return key.equals("bookDepth") || key.equals("priceWindow") || key.equals("statArbPairs")
-                || key.equals("statArbWindow") || key.equals("triHomeAsset");
+        ParamSpec s = SPECS.get(key);
+        return s != null && s.restart();
     }
+
+    /** Описания для админки. */
+    public static Map<String, Object> schema() { return ParamSpec.schema(SPECS); }
 
     /**
      * Новый набор: текущие значения, поверх которых применены переданные.
-     * Неизвестный ключ или значение вне допустимого диапазона — IllegalArgumentException,
-     * и тогда не применяется ничего.
+     * Значение вне допустимого диапазона — IllegalArgumentException, и тогда не применяется ничего.
+     * Чужие ключи (exchange и т.п.) игнорируются.
      */
     public TradingParams with(Map<String, String> updates) {
         Map<String, String> m = toStringMap();
         for (var e : updates.entrySet()) {
-            if (!m.containsKey(e.getKey())) continue;          // чужие ключи запроса (exchange и т.п.)
-            m.put(e.getKey(), STRINGS.contains(e.getKey()) ? e.getValue().trim().toUpperCase() : e.getValue().trim());
+            if (!SPECS.containsKey(e.getKey())) continue;
+            String v = e.getValue().trim();
+            m.put(e.getKey(), UPPER.contains(e.getKey()) ? v.toUpperCase() : v);
         }
-        TradingParams p = new TradingParams(
-                bool(m, "tradingEnabled"),
-                dbl(m, "maxPositionQuote", 0, 1e9),
-                dbl(m, "maxDailyLossQuote", 0, 1e9),
-                dbl(m, "maxSlippagePercent", 0, 100),
-                dbl(m, "feeReservePercent", 0, 50),
-                dbl(m, "takerFeePercent", 0, 5),
-                (int) lng(m, "maxOrdersPerMinute", 1, 100_000),
-                lng(m, "maxDataAgeMs", 50, 600_000),
-                dbl(m, "entryZ", 0.1, 20),
-                dbl(m, "exitZ", -20, 20),
-                dbl(m, "stopLossPercent", 0.01, 100),
-                dbl(m, "minImbalance", -1, 1),
-                (int) lng(m, "imbalanceLevels", 1, 1000),
-                dbl(m, "orderQuote", 0, 1e9),
-                lng(m, "maxBookAgeMs", 10, 600_000),
-                dbl(m, "maxSpreadPercent", 0, 100),
-                lng(m, "positionTimeoutMs", 1_000, 7L * 24 * 3_600_000),
-                (int) lng(m, "bookDepth", 1, 1000),
-                (int) lng(m, "priceWindow", 4, 1_000_000),
-                bool(m, "meanReversionEnabled"),
-                bool(m, "triangularEnabled"),
-                bool(m, "statArbEnabled"),
-                str(m, "triHomeAsset", "[A-Z0-9]{2,10}"),
-                dbl(m, "triMinProfitPercent", 0, 10),
-                dbl(m, "triOrderQuote", 0, 1e9),
-                lng(m, "triMaxBookAgeMs", 10, 60_000),
-                lng(m, "triCooldownMs", 0, 3_600_000),
-                bool(m, "triUnwindOnFail"),
-                str(m, "statArbPairs", "([A-Z0-9]+/[A-Z0-9]+(,[A-Z0-9]+/[A-Z0-9]+)*)?"),
-                (int) lng(m, "statArbWindow", 30, 100_000),
-                lng(m, "statArbSampleMs", 100, 3_600_000),
-                dbl(m, "statArbEntryZ", 0.5, 20),
-                dbl(m, "statArbExitZ", -5, 20),
-                dbl(m, "statArbStopZ", 1, 50),
-                dbl(m, "statArbMinCorrelation", -1, 1),
-                dbl(m, "statArbOrderQuote", 0, 1e9),
-                lng(m, "statArbMaxHoldMs", 1_000, 30L * 24 * 3_600_000));
+        TradingParams p = ParamSpec.build(TradingParams.class, SPECS, m);
         if (p.statArbExitZ >= p.statArbEntryZ || p.statArbStopZ <= p.statArbEntryZ)
             throw new IllegalArgumentException("нужно statArbExitZ < statArbEntryZ < statArbStopZ");
         if (p.imbalanceLevels > p.bookDepth)
@@ -133,74 +202,5 @@ public record TradingParams(
     }
 
     /** Все параметры строками — для сохранения в SQLite и для ответа админки. */
-    public Map<String, String> toStringMap() {
-        Map<String, String> m = new LinkedHashMap<>();
-        m.put("tradingEnabled", String.valueOf(tradingEnabled));
-        m.put("maxPositionQuote", String.valueOf(maxPositionQuote));
-        m.put("maxDailyLossQuote", String.valueOf(maxDailyLossQuote));
-        m.put("maxSlippagePercent", String.valueOf(maxSlippagePercent));
-        m.put("feeReservePercent", String.valueOf(feeReservePercent));
-        m.put("takerFeePercent", String.valueOf(takerFeePercent));
-        m.put("maxOrdersPerMinute", String.valueOf(maxOrdersPerMinute));
-        m.put("maxDataAgeMs", String.valueOf(maxDataAgeMs));
-        m.put("entryZ", String.valueOf(entryZ));
-        m.put("exitZ", String.valueOf(exitZ));
-        m.put("stopLossPercent", String.valueOf(stopLossPercent));
-        m.put("minImbalance", String.valueOf(minImbalance));
-        m.put("imbalanceLevels", String.valueOf(imbalanceLevels));
-        m.put("orderQuote", String.valueOf(orderQuote));
-        m.put("maxBookAgeMs", String.valueOf(maxBookAgeMs));
-        m.put("maxSpreadPercent", String.valueOf(maxSpreadPercent));
-        m.put("positionTimeoutMs", String.valueOf(positionTimeoutMs));
-        m.put("bookDepth", String.valueOf(bookDepth));
-        m.put("priceWindow", String.valueOf(priceWindow));
-        m.put("meanReversionEnabled", String.valueOf(meanReversionEnabled));
-        m.put("triangularEnabled", String.valueOf(triangularEnabled));
-        m.put("statArbEnabled", String.valueOf(statArbEnabled));
-        m.put("triHomeAsset", triHomeAsset);
-        m.put("triMinProfitPercent", String.valueOf(triMinProfitPercent));
-        m.put("triOrderQuote", String.valueOf(triOrderQuote));
-        m.put("triMaxBookAgeMs", String.valueOf(triMaxBookAgeMs));
-        m.put("triCooldownMs", String.valueOf(triCooldownMs));
-        m.put("triUnwindOnFail", String.valueOf(triUnwindOnFail));
-        m.put("statArbPairs", statArbPairs);
-        m.put("statArbWindow", String.valueOf(statArbWindow));
-        m.put("statArbSampleMs", String.valueOf(statArbSampleMs));
-        m.put("statArbEntryZ", String.valueOf(statArbEntryZ));
-        m.put("statArbExitZ", String.valueOf(statArbExitZ));
-        m.put("statArbStopZ", String.valueOf(statArbStopZ));
-        m.put("statArbMinCorrelation", String.valueOf(statArbMinCorrelation));
-        m.put("statArbOrderQuote", String.valueOf(statArbOrderQuote));
-        m.put("statArbMaxHoldMs", String.valueOf(statArbMaxHoldMs));
-        return m;
-    }
-
-    private static String str(Map<String, String> m, String k, String regex) {
-        String v = m.get(k);
-        if (!v.matches(regex)) throw new IllegalArgumentException(k + ": недопустимое значение «" + v + "»");
-        return v;
-    }
-
-    private static boolean bool(Map<String, String> m, String k) {
-        String v = m.get(k);
-        if (!v.equalsIgnoreCase("true") && !v.equalsIgnoreCase("false"))
-            throw new IllegalArgumentException(k + ": ожидалось true/false, получено " + v);
-        return Boolean.parseBoolean(v);
-    }
-
-    private static double dbl(Map<String, String> m, String k, double min, double max) {
-        double v;
-        try { v = Double.parseDouble(m.get(k)); }
-        catch (NumberFormatException e) { throw new IllegalArgumentException(k + ": не число: " + m.get(k)); }
-        if (!(v >= min && v <= max)) throw new IllegalArgumentException(k + ": " + v + " вне диапазона [" + min + ", " + max + "]");
-        return v;
-    }
-
-    private static long lng(Map<String, String> m, String k, long min, long max) {
-        long v;
-        try { v = Long.parseLong(m.get(k)); }
-        catch (NumberFormatException e) { throw new IllegalArgumentException(k + ": не целое число: " + m.get(k)); }
-        if (v < min || v > max) throw new IllegalArgumentException(k + ": " + v + " вне диапазона [" + min + ", " + max + "]");
-        return v;
-    }
+    public Map<String, String> toStringMap() { return ParamSpec.toMap(this); }
 }

@@ -19,21 +19,36 @@ import java.util.concurrent.locks.StampedLock;
  */
 public final class OrderBook {
 
+    /** Символ. */
     private final String symbol;
+    /** Глубина стакана, уровней. */
     private final int depth;
+    /** Оптимистичное чтение: читатели не блокируют писателя. */
     private final StampedLock lock = new StampedLock();
 
+    /** Цены бидов по убыванию. */
     private final double[] bidPrices;
+    /** Объёмы бидов. */
     private final double[] bidQtys;
+    /** Цены асков по возрастанию. */
     private final double[] askPrices;
+    /** Объёмы асков. */
     private final double[] askQtys;
 
+    /** Уровней бидов. */
     private int bidCount;
+    /** Уровней асков. */
     private int askCount;
 
+    /** Время последнего обновления, мс. */
     private long lastUpdateMs;
+    /** Номер обновления биржи. */
     private long lastUpdateId;
 
+    /**
+     * @param symbol символ
+     * @param depth глубина, уровней
+     */
     public OrderBook(String symbol, int depth) {
         this.symbol = symbol;
         this.depth = depth;
@@ -73,6 +88,7 @@ public final class OrderBook {
         try { return topRaw(out); } finally { lock.unlockRead(st); }
     }
 
+    /** Верх стакана без блокировки (вызывается внутри согласованного чтения). */
     private boolean topRaw(double[] out) {
         int bn = bidCount, an = askCount;
         out[0] = bn > 0 ? bidPrices[0] : Double.NaN;
@@ -92,6 +108,7 @@ public final class OrderBook {
         try { copyRaw(into); } finally { lock.unlockRead(st); }
     }
 
+    /** Скопировать уровни без блокировки. */
     private void copyRaw(Levels into) {
         int bn = Math.min(bidCount, depth), an = Math.min(askCount, depth);
         System.arraycopy(bidPrices, 0, into.bidPrices, 0, bn);
@@ -104,9 +121,12 @@ public final class OrderBook {
 
     /** Переиспользуемый буфер уровней. */
     public static final class Levels {
+        /** Цены и объёмы уровней снимка. */
         public double[] bidPrices = new double[0], bidQtys = new double[0], askPrices = new double[0], askQtys = new double[0];
+        /** Уровней бидов и асков в снимке. */
         public int bidCount, askCount;
 
+        /** Увеличить массивы буфера до n уровней. */
         void ensure(int n) {
             if (bidPrices.length >= n) return;
             bidPrices = new double[n]; bidQtys = new double[n]; askPrices = new double[n]; askQtys = new double[n];
@@ -115,6 +135,7 @@ public final class OrderBook {
 
     // ---------- чтение (каждый метод — из одного согласованного снимка) ----------
 
+    /** Лучший бид; NaN — сторона пуста. */
     public double bestBid() {
         long st = lock.tryOptimisticRead();
         double r = bidCount > 0 ? bidPrices[0] : Double.NaN;
@@ -123,6 +144,7 @@ public final class OrderBook {
         try { return bidCount > 0 ? bidPrices[0] : Double.NaN; } finally { lock.unlockRead(st); }
     }
 
+    /** Объём лучшего бида. */
     public double bestBidQty() {
         long st = lock.tryOptimisticRead();
         double r = bidCount > 0 ? bidQtys[0] : 0;
@@ -131,6 +153,7 @@ public final class OrderBook {
         try { return bidCount > 0 ? bidQtys[0] : 0; } finally { lock.unlockRead(st); }
     }
 
+    /** Лучший аск; NaN — сторона пуста. */
     public double bestAsk() {
         long st = lock.tryOptimisticRead();
         double r = askCount > 0 ? askPrices[0] : Double.NaN;
@@ -139,6 +162,7 @@ public final class OrderBook {
         try { return askCount > 0 ? askPrices[0] : Double.NaN; } finally { lock.unlockRead(st); }
     }
 
+    /** Объём лучшего аска. */
     public double bestAskQty() {
         long st = lock.tryOptimisticRead();
         double r = askCount > 0 ? askQtys[0] : 0;
@@ -201,6 +225,7 @@ public final class OrderBook {
         try { return slippageRaw(qty, isBuy); } finally { lock.unlockRead(st); }
     }
 
+    /** Уровней бидов. */
     public int bidCount() {
         long st = lock.tryOptimisticRead();
         int r = bidCount;
@@ -209,6 +234,7 @@ public final class OrderBook {
         try { return bidCount; } finally { lock.unlockRead(st); }
     }
 
+    /** Уровней асков. */
     public int askCount() {
         long st = lock.tryOptimisticRead();
         int r = askCount;
@@ -217,6 +243,7 @@ public final class OrderBook {
         try { return askCount; } finally { lock.unlockRead(st); }
     }
 
+    /** Время последнего обновления, мс. */
     public long lastUpdateMs() {
         long st = lock.tryOptimisticRead();
         long r = lastUpdateMs;
@@ -225,6 +252,7 @@ public final class OrderBook {
         try { return lastUpdateMs; } finally { lock.unlockRead(st); }
     }
 
+    /** Обе стороны непусты. */
     public boolean isReady() {
         long st = lock.tryOptimisticRead();
         boolean r = bidCount > 0 && askCount > 0;
@@ -233,6 +261,7 @@ public final class OrderBook {
         try { return bidCount > 0 && askCount > 0; } finally { lock.unlockRead(st); }
     }
 
+    /** Цена бида на уровне (0 — лучший). */
     public double bidPriceAt(int level) {
         long st = lock.tryOptimisticRead();
         double r = level >= 0 && level < bidCount ? bidPrices[level] : Double.NaN;
@@ -241,6 +270,7 @@ public final class OrderBook {
         try { return level >= 0 && level < bidCount ? bidPrices[level] : Double.NaN; } finally { lock.unlockRead(st); }
     }
 
+    /** Объём бида на уровне. */
     public double bidQtyAt(int level) {
         long st = lock.tryOptimisticRead();
         double r = level >= 0 && level < bidCount ? bidQtys[level] : 0;
@@ -249,6 +279,7 @@ public final class OrderBook {
         try { return level >= 0 && level < bidCount ? bidQtys[level] : 0; } finally { lock.unlockRead(st); }
     }
 
+    /** Цена аска на уровне. */
     public double askPriceAt(int level) {
         long st = lock.tryOptimisticRead();
         double r = level >= 0 && level < askCount ? askPrices[level] : Double.NaN;
@@ -257,6 +288,7 @@ public final class OrderBook {
         try { return level >= 0 && level < askCount ? askPrices[level] : Double.NaN; } finally { lock.unlockRead(st); }
     }
 
+    /** Символ. */
     public String symbol() { return symbol; }
 
     /** Возраст данных. Если больше пары секунд — стакан протух. */
@@ -266,22 +298,26 @@ public final class OrderBook {
     // Внутри возможны мусорные значения при гонке с писателем, но индексы всегда < depth, а результат
     // отбрасывается, если validate() не прошёл.
 
+    /** Середина без блокировки. */
     private double midRaw() {
         if (bidCount == 0 || askCount == 0) return Double.NaN;
         return (bidPrices[0] + askPrices[0]) / 2.0;
     }
 
+    /** Спред без блокировки. */
     private double spreadRaw() {
         if (bidCount == 0 || askCount == 0) return Double.NaN;
         return askPrices[0] - bidPrices[0];
     }
 
+    /** Спред в % от середины без блокировки. */
     private double spreadPercentRaw() {
         double mid = midRaw();
         if (Double.isNaN(mid) || mid == 0) return Double.NaN;
         return spreadRaw() / mid * 100.0;
     }
 
+    /** Микроцена (середина, взвешенная объёмами лучших уровней) без блокировки. */
     private double microRaw() {
         if (bidCount == 0 || askCount == 0) return Double.NaN;
         double bq = bidQtys[0], aq = askQtys[0];
@@ -290,6 +326,7 @@ public final class OrderBook {
         return (bidPrices[0] * aq + askPrices[0] * bq) / total;
     }
 
+    /** Перевес бидов над асками по уровням (−1…1) без блокировки. */
     private double imbalanceRaw(int levels) {
         int n = Math.min(Math.min(levels, depth), Math.min(bidCount, askCount));
         double bidVol = 0, askVol = 0;
@@ -298,6 +335,7 @@ public final class OrderBook {
         return total == 0 ? 0 : (bidVol - askVol) / total;
     }
 
+    /** Средняя цена исполнения qty проходом по уровням; NaN — объёма не хватает. */
     private double walkRaw(double[] prices, double[] qtys, int count, double qty) {
         double remaining = qty, cost = 0;
         for (int i = 0, n = Math.min(count, depth); i < n && remaining > 0; i++) {
@@ -309,6 +347,7 @@ public final class OrderBook {
         return cost / qty;
     }
 
+    /** Ожидаемое проскальзывание рыночного ордера, % от лучшей цены. */
     private double slippageRaw(double qty, boolean isBuy) {
         double mid = midRaw();
         if (Double.isNaN(mid)) return Double.NaN;
@@ -317,9 +356,11 @@ public final class OrderBook {
         return Math.abs(exec - mid) / mid * 100.0;
     }
 
+    /** Кратко для логов. */
     @Override
     public String toString() {
         return String.format("%s bid=%.2f(%.4f) ask=%.2f(%.4f) spread=%.4f%% imb=%.2f",
+                /** Лучший бид; NaN — сторона пуста. */
                 symbol, bestBid(), bestBidQty(), bestAsk(), bestAskQty(), spreadPercent(), imbalance(5));
     }
 }

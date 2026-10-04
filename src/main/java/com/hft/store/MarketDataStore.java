@@ -24,13 +24,22 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class MarketDataStore {
 
+    /** Глубина стаканов. */
     private final int bookDepth;
+    /** Размер окна цен. */
     private final int windowSize;
 
+    /** Стакан по символу. */
     private final Map<String, OrderBook> books = new ConcurrentHashMap<>();
+    /** Окно цен по символу. */
     private final Map<String, PriceWindow> windows = new ConcurrentHashMap<>();
+    /** Статистика тиков по символу. */
     private final Map<String, SymbolStats> stats = new ConcurrentHashMap<>();
 
+    /**
+     * @param bookDepth глубина стакана, уровней
+     * @param windowSize окно цен, тиков
+     */
     public MarketDataStore(int bookDepth, int windowSize) {
         this.bookDepth = bookDepth;
         this.windowSize = windowSize;
@@ -38,10 +47,14 @@ public final class MarketDataStore {
 
     /** Статистика по одному символу. Mutable, обновляется на каждом тике. */
     public static final class SymbolStats {
+        /** Цена последнего тика. */
         volatile double lastPrice;
+        /** Сколько тиков получено. */
         volatile long tickCount;
 
+        /** Цена последнего тика. */
         public double lastPrice() { return lastPrice; }
+        /** Сколько тиков получено. */
         public long tickCount() { return tickCount; }
     }
 
@@ -72,18 +85,22 @@ public final class MarketDataStore {
         }
     }
 
+    /** Стакан символа или null. */
     public OrderBook book(String symbol) {
         return books.get(symbol.toUpperCase());
     }
 
+    /** Окно цен символа или null. */
     public PriceWindow window(String symbol) {
         return windows.get(symbol.toUpperCase());
     }
 
+    /** Статистика символа или null. */
     public SymbolStats stats(String symbol) {
         return stats.get(symbol.toUpperCase());
     }
 
+    /** Зарегистрированные символы. */
     public Set<String> symbols() {
         return Collections.unmodifiableSet(books.keySet());
     }

@@ -30,7 +30,7 @@ import java.util.function.Consumer;
  *
  * Жизненный цикл: подключиться → подписаться → читать; при обрыве, ошибке разбора подряд или
  * тишине дольше порога — переподключиться с экспоненциальной паузой (до 30 с). После
- * {@value #MAX_FAILURES} неудачных подключений подряд источник сдаётся и вызывает onGiveUp.
+ * feedMaxFailures (по умолчанию 15) неудачных подключений подряд источник сдаётся и вызывает onGiveUp.
  * Счётчик неудач обнуляется, как только пришёл первый корректный стакан.
  *
  * Стакан в памяти — {@link LocalBook}: снимок заменяет всё, обновление правит уровни.
@@ -43,31 +43,55 @@ import java.util.function.Consumer;
  */
 public final class WsBookFeed implements BookFeed {
 
+    /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(WsBookFeed.class);
-    static final int MAX_FAILURES = 15;
-    private static final int MAX_CONSECUTIVE_PARSE_ERRORS = 5;
-    private static final int MAX_CROSSED_EVENTS = 200;
+    /** Неудачных подключений подряд, после которых источник сдаётся (параметр feedMaxFailures). */
+    private volatile int maxFailures = 15;
+    /** Ошибок разбора подряд, после которых соединение сбрасывается (параметр wsMaxParseErrors). */
+    private volatile int maxParseErrors = 5;
+    /** Перекрещённых стаканов подряд, после которых символ переподписывается (параметр wsMaxCrossedBooks). */
+    private volatile int maxCrossed = 200;
 
+    /** Описание биржи из каталога. */
     private final ExchangeInfo info;
+    /** Подключение и параметры биржи. */
     private final ExchangeConfig cfg;
+    /** Формат WebSocket биржи. */
     private final WsDialect dialect;
+    /** Куда записываются стаканы. */
     private final MarketDataStore market;
+    /** Куда уходит тик после обновления стакана (конвейер). */
     private final TickSink onTick;
+    /** Вызывается после обновления стакана символа (бумажный движок). */
     private final Consumer<String> onBook;
+    /** Вызывается, когда источник сдался. */
     private final Runnable onGiveUp;
+    /** Вызывается при подключении и обрыве (будит HybridBookFeed). */
     private volatile Runnable onStateChange = () -> {};
 
+    /** HTTP-клиент. */
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+    /** Символы подписки (наш формат). */
     private final List<String> symbols = new CopyOnWriteArrayList<>();
+    /** Символ биржи -> наш символ. */
     private final Map<String, String> venueToInternal = new ConcurrentHashMap<>();
     /** Состояние символа: локальный стакан и буферы публикации — только поток WS. */
     private final Map<String, SymbolState> states = new ConcurrentHashMap<>();
 
+    /** Состояние символа: локальный стакан и буферы публикации. */
     private static final class SymbolState {
+        /** Наш символ. */
         final String internal;
+        /** Локальный стакан (изменения применяются к нему). */
         final LocalBook book;
+        /** Буферы верхних уровней для публикации. */
         final double[] bp, bq, ap, aq;
+        /** Перекрещённых стаканов подряд. */
         int crossed;
+        /**
+         * @param internal наш символ
+         * @param depth глубина публикации
+         */
         SymbolState(String internal, int depth) {
             this.internal = internal;
             this.book = new LocalBook(LocalBook.levelsFor(depth));
@@ -75,24 +99,42 @@ public final class WsBookFeed implements BookFeed {
         }
     }
 
+    /** Фид запущен. */
     private volatile boolean running;
+    /** Источник сдался. */
     private volatile boolean gaveUp;
+    /** Текущий сокет. */
     private volatile WebSocket socket;
+    /** Очередь отправки в сокет. */
     private volatile WsSender sender;
+    /** Буфер разбора текущего соединения. */
     private volatile BookBatch currentBatch;
+    /** Соединение открыто. */
     private volatile boolean open;
+    /** Время последнего кадра. */
     private volatile long lastFrameMs;
+    /** Неудачных подключений подряд. */
     private volatile int failures;
+    /** Ошибок разбора подряд. */
     private volatile int parseErrorsInRow;
+    /** Запрошен сброс соединения. */
     private volatile boolean abortRequested;
+    /** Последняя ошибка (для метрик). */
     private volatile String lastError = "";
+    /** Тишина, после которой переподключение, мс. */
     private volatile long staleMs;
+    /** Начальная пауза переподключения, мс. */
     private volatile long baseBackoffMs = 500;
+    /** Поток фида. */
     private Thread thread;
 
+    /** Получено сообщений. */
     private final AtomicLong messages = new AtomicLong();
+    /** Обновлений стакана. */
     private final AtomicLong bookUpdates = new AtomicLong();
+    /** Переподключений. */
     private final AtomicLong reconnects = new AtomicLong();
+    /** Ошибок разбора всего. */
     private final AtomicLong parseErrors = new AtomicLong();
 
     public WsBookFeed(ExchangeInfo info, ExchangeConfig cfg, WsDialect dialect, MarketDataStore market,
@@ -109,6 +151,18 @@ public final class WsBookFeed implements BookFeed {
     }
 
     /** Для тестов. */
+    /** Пороги отказа: неудачных подключений, ошибок разбора и перекрещённых стаканов подряд. */
+    public WsBookFeed limits(int maxFailures, int maxParseErrors, int maxCrossed) {
+        this.maxFailures = maxFailures;
+        this.maxParseErrors = maxParseErrors;
+        this.maxCrossed = maxCrossed;
+        return this;
+    }
+
+    /** Тишина, после которой переподключение, мс (по умолчанию зависит от пинга биржи). */
+    long staleMs() { return staleMs; }
+
+    /** Задать тишину до переподключения и начальную паузу переподключения, мс. */
     public WsBookFeed tune(long staleMs, long baseBackoffMs) {
         this.staleMs = staleMs;
         this.baseBackoffMs = baseBackoffMs;
@@ -120,6 +174,7 @@ public final class WsBookFeed implements BookFeed {
 
     private void fireState() { try { onStateChange.run(); } catch (Exception ignored) { /* наблюдатель не должен ронять фид */ } }
 
+    /** Зарегистрировать символ: имя на бирже и состояние. */
     private void register(String s) {
         if (!symbols.contains(s)) symbols.add(s);
         try {
@@ -132,11 +187,13 @@ public final class WsBookFeed implements BookFeed {
         }
     }
 
+    /** Имя символа на бирже. */
     private String venueOf(String internal) {
         for (var e : venueToInternal.entrySet()) if (e.getValue().equals(internal)) return e.getKey();
         return null;
     }
 
+    /** Адрес: из конфига или по умолчанию диалекта. */
     String url() {
         return cfg.wsUrl() == null || cfg.wsUrl().isBlank() ? dialect.defaultUrl(cfg.testnet(), cfg.restUrl()) : cfg.wsUrl();
     }
@@ -188,6 +245,7 @@ public final class WsBookFeed implements BookFeed {
 
     // ───────────────────────── подключение ─────────────────────────
 
+    /** Подключаться и переподключаться с нарастающей паузой; после feedMaxFailures неудач — сдаться. */
     private void loop() {
         while (running) {
             try {
@@ -201,13 +259,14 @@ public final class WsBookFeed implements BookFeed {
             open = false;
             fireState();
             if (!running) return;
-            if (++failures >= MAX_FAILURES) { giveUp(); return; }
+            if (++failures >= maxFailures) { giveUp(); return; }
             reconnects.incrementAndGet();
             long pause = Math.min(30_000, baseBackoffMs << Math.min(failures, 10));
             try { Thread.sleep(pause); } catch (InterruptedException e) { return; }
         }
     }
 
+    /** Одно соединение: адрес (с токеном, если нужен), подписка, пинг, контроль тишины. */
     private void connectAndServe() throws Exception {
         CompletableFuture<Void> closed = new CompletableFuture<>();
         Listener listener = new Listener(closed);
@@ -253,17 +312,19 @@ public final class WsBookFeed implements BookFeed {
         }
     }
 
+    /** Сдаться: остановиться и вызвать onGiveUp. */
     private void giveUp() {
         gaveUp = true;
         running = false;
         open = false;
-        log.error("[{}] WS: {} неудачных подключений подряд — источник остановлен ({})", info.id(), MAX_FAILURES, lastError);
+        log.error("[{}] WS: {} неудачных подключений подряд — источник остановлен ({})", info.id(), maxFailures, lastError);
         fireState();
         try { onGiveUp.run(); } catch (Exception e) { log.error("onGiveUp: {}", e.toString()); }
     }
 
     // ───────────────────────── обработка сообщений (поток чтения WS) ─────────────────────────
 
+    /** Разобрать сообщение; ответ (pong) отправить сразу; стакан — применить. */
     private void handle(WebSocket w, char[] buf, int len, BookBatch batch) {
         messages.incrementAndGet();
         try {
@@ -275,7 +336,7 @@ public final class WsBookFeed implements BookFeed {
             lastError = "parse: " + e.getMessage();
             parseErrors.incrementAndGet();
             log.warn("[{}] WS: {}", info.id(), lastError);
-            if (++parseErrorsInRow >= MAX_CONSECUTIVE_PARSE_ERRORS) {
+            if (++parseErrorsInRow >= maxParseErrors) {
                 log.warn("[{}] WS: {} ошибок разбора подряд — переподключение", info.id(), parseErrorsInRow);
                 abortRequested = true;     // abort() не вызывает onClose/onError, поэтому говорим циклу сами
                 w.abort();
@@ -283,6 +344,7 @@ public final class WsBookFeed implements BookFeed {
         }
     }
 
+    /** Применить снимок или изменения к локальному стакану и опубликовать верх. */
     private void apply(WebSocket w, BookBatch b) {
         SymbolState st = states.get(b.venue);
         if (st == null) return;                          // отписались или чужой символ
@@ -291,7 +353,7 @@ public final class WsBookFeed implements BookFeed {
         st.book.apply(b);
         if (!st.book.isReady()) return;
         if (st.book.isCrossed()) {
-            if (++st.crossed >= MAX_CROSSED_EVENTS) {
+            if (++st.crossed >= maxCrossed) {
                 log.warn("[{}] {} перекрещён {} обновлений подряд — подписываюсь заново", info.id(), st.internal, st.crossed);
                 st.crossed = 0;
                 st.book.clear();
@@ -317,17 +379,24 @@ public final class WsBookFeed implements BookFeed {
         onBook.accept(st.internal);
     }
 
+    /** Слушатель сокета JDK: склейка фрагментов и кадры. */
     private final class Listener implements WebSocket.Listener {
+        /** Завершается при закрытии сокета. */
         private final CompletableFuture<Void> closed;
+        /** Буфер разбора сообщений этого соединения. */
         final BookBatch batch = new BookBatch();
+        /** Буфер склейки фрагментов текста. */
         private char[] buf = new char[8192];
+        /** Сколько символов в буфере. */
         private int len;
+        /** Буфер склейки бинарных фрагментов. */
         private ByteBuffer bin = ByteBuffer.allocate(0);
 
         Listener(CompletableFuture<Void> closed) { this.closed = closed; }
 
         @Override public void onOpen(WebSocket w) { w.request(1); }
 
+        /** Дописать фрагмент текстового кадра в буфер. */
         private void append(CharSequence data) {
             int n = data.length();
             if (len + n > buf.length) buf = java.util.Arrays.copyOf(buf, Math.max(buf.length * 2, len + n));

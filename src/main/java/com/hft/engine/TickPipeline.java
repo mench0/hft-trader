@@ -27,7 +27,9 @@ public final class TickPipeline {
 
     private static final int RING_SIZE = 4096; // степень двойки
 
+    /** Disruptor: кольцо тиков и потоки обработчиков. */
     private final Disruptor<Tick> disruptor;
+    /** Кольцевой буфер, в который публикуются тики. */
     private final RingBuffer<Tick> ring;
 
     /**
@@ -55,10 +57,12 @@ public final class TickPipeline {
         this.ring = disruptor.getRingBuffer();
     }
 
+    /** Запустить потоки обработчиков. */
     public void start() {
         disruptor.start();
     }
 
+    /** Дождаться обработки опубликованных тиков и остановить потоки. */
     public void shutdown() {
         disruptor.shutdown();
     }

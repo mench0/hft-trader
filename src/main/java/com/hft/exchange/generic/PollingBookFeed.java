@@ -33,37 +33,65 @@ import java.util.function.Consumer;
  */
 public final class PollingBookFeed implements BookFeed {
 
+    /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(PollingBookFeed.class);
-    private static final int MAX_FAILURES = 15;
+    /** Неудачных циклов опроса подряд, после которых источник сдаётся (параметр feedMaxFailures). */
+    private volatile int maxFailures = 15;
 
+    /** Описание биржи из каталога. */
     private final ExchangeInfo info;
+    /** Подключение и параметры биржи. */
     private final ExchangeConfig cfg;
+    /** Формат REST-стакана биржи. */
     private final BookDialect dialect;
+    /** Куда записываются стаканы. */
     private final MarketDataStore market;
+    /** Куда уходит тик после обновления стакана (конвейер). */
     private final TickSink onTick;
+    /** Вызывается после обновления стакана символа (бумажный движок). */
     private final Consumer<String> onBook;
+    /** Вызывается, когда источник сдался. */
     private final Runnable onGiveUp;
 
+    /** HTTP-клиент. */
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build();
+    /** Символы подписки (наш формат). */
     private final List<String> symbols = new CopyOnWriteArrayList<>();
+    /** Минимальный интервал между запросами по каталогу, нс. */
     private final long minGapNanos;
     /** Общий бюджет биржи: опрос не должен съесть лимит, нужный торговому клиенту. */
     private final RateBudget budget;
 
+    /** Фид запущен. */
     private volatile boolean running;
+    /** Источник сдался. */
     private volatile boolean gaveUp;
+    /** До какого момента опрос приостановлен после «слишком часто». */
     private volatile long blockedUntilMs;
+    /** Текущая пауза после «слишком часто» (удваивается при повторах). */
     private volatile long backoffMs = 60_000;
+    /** Начальная пауза после «слишком часто» (параметр pollBackoffMs). */
+    private volatile long baseBackoffMs = 60_000;
+    /** Время последнего успешного ответа. */
     private volatile long lastSuccessMs;
+    /** Неудачных циклов подряд. */
     private volatile int consecutiveFailures;
+    /** Последняя ошибка (для метрик). */
     private volatile String lastError = "";
+    /** Поток фида. */
     private Thread thread;
 
+    /** Запросов. */
     private final AtomicLong requests = new AtomicLong();
+    /** Ошибок. */
     private final AtomicLong errors = new AtomicLong();
+    /** Ответов «слишком часто». */
     private final AtomicLong rateLimited = new AtomicLong();
+    /** Суммарная задержка ответов, нс. */
     private final AtomicLong totalLatencyNanos = new AtomicLong();
+    /** Максимальная задержка ответа, нс. */
     private final AtomicLong maxLatencyNanos = new AtomicLong();
+    /** Когда можно отправить следующий запрос (nanoTime). */
     private long nextSlotNanos;
 
     public PollingBookFeed(ExchangeInfo info, ExchangeConfig cfg, BookDialect dialect, MarketDataStore market,
@@ -80,10 +108,19 @@ public final class PollingBookFeed implements BookFeed {
         this.budget = RateBudget.of(info.id());
     }
 
+    /** Задать, после скольких неудачных циклов подряд источник сдаётся. */
+    public PollingBookFeed maxFailures(int n) { this.maxFailures = n; return this; }
+
+    /** Задать начальную паузу после ответа «слишком часто», мс. */
+    public PollingBookFeed backoff(long ms) { this.baseBackoffMs = ms; this.backoffMs = ms; return this; }
+
+    /** Опрос на паузе, пока WS жив. */
     private volatile boolean paused;
     /** Пока WS жив, опрос молчит (не тратит лимит). */
     public void pause() { paused = true; }
+    /** Возобновить опрос. */
     public void resume() { paused = false; }
+    /** Опрос на паузе. */
     public boolean isPaused() { return paused; }
 
     /** REST-опрос — никогда не «реальное время». */
@@ -126,6 +163,7 @@ public final class PollingBookFeed implements BookFeed {
         return m;
     }
 
+    /** Подключаться и переподключаться с нарастающей паузой; после feedMaxFailures неудач — сдаться. */
     private void loop() {
         while (running) {
             try {
@@ -139,7 +177,7 @@ public final class PollingBookFeed implements BookFeed {
                     anyOk |= pollOne(s);
                 }
                 if (anyOk) consecutiveFailures = 0;
-                else if (++consecutiveFailures >= MAX_FAILURES) { giveUp(); return; }
+                else if (++consecutiveFailures >= maxFailures) { giveUp(); return; }
                 else Thread.sleep(Math.min(30_000, 250L << Math.min(consecutiveFailures, 7)));
             } catch (InterruptedException e) {
                 return;
@@ -150,6 +188,7 @@ public final class PollingBookFeed implements BookFeed {
         }
     }
 
+    /** Выдержать минимальный интервал между запросами. */
     private void paceRequests() throws InterruptedException {
         long now = System.nanoTime();
         if (nextSlotNanos > now) {
@@ -159,6 +198,7 @@ public final class PollingBookFeed implements BookFeed {
         nextSlotNanos = Math.max(now, nextSlotNanos) + minGapNanos;
     }
 
+    /** Один запрос стакана: бюджет лимитов, ответ, запись в стакан, тик. */
     private boolean pollOne(String symbol) throws InterruptedException {
         long t0 = System.nanoTime();
         try {
@@ -191,7 +231,7 @@ public final class PollingBookFeed implements BookFeed {
             long now = System.currentTimeMillis();
             market.book(symbol).applySnapshot(b.bp(), b.bq(), b.bp().length, b.ap(), b.aq(), b.ap().length, now, now);
             lastSuccessMs = now;
-            backoffMs = 60_000;
+            backoffMs = baseBackoffMs;
 
             onTick.onTick(symbol, (b.bp()[0] + b.ap()[0]) / 2, 0, false, b.tsMs(), System.nanoTime());
             onBook.accept(symbol);
@@ -210,10 +250,11 @@ public final class PollingBookFeed implements BookFeed {
         }
     }
 
+    /** Сдаться: остановиться и вызвать onGiveUp. */
     private void giveUp() {
         gaveUp = true;
         running = false;
-        log.error("[{}] {} ошибок подряд — источник данных остановлен", info.id(), MAX_FAILURES);
+        log.error("[{}] {} ошибок подряд — источник данных остановлен", info.id(), maxFailures);
         try { onGiveUp.run(); } catch (Exception e) { log.error("onGiveUp: {}", e.toString()); }
     }
 }

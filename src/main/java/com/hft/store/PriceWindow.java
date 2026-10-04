@@ -12,15 +12,21 @@ package com.hft.store;
  */
 public final class PriceWindow {
 
+    /** Кольцевой буфер цен. */
     private final double[] buffer;
+    /** Размер окна. */
     private final int capacity;
+    /** Куда пишется следующая цена. */
     private int writeIndex;
+    /** Сколько цен уже в окне (до заполнения меньше capacity). */
     private int size;
 
     // Инкрементальная статистика
     private double sum;
+    /** Сумма квадратов цен в окне — для дисперсии за O(1). */
     private double sumOfSquares;
 
+    /** @param capacity размер окна, цен */
     public PriceWindow(int capacity) {
         this.capacity = capacity;
         this.buffer = new double[capacity];
@@ -41,6 +47,7 @@ public final class PriceWindow {
         writeIndex = (writeIndex + 1) % capacity;
     }
 
+    /** Среднее по окну; NaN — окно пусто. */
     public double mean() {
         return size == 0 ? Double.NaN : sum / size;
     }
@@ -71,11 +78,13 @@ public final class PriceWindow {
         return zScore(buffer[lastIdx]);
     }
 
+    /** Последняя цена; NaN — окно пусто. */
     public double last() {
         if (size == 0) return Double.NaN;
         return buffer[(writeIndex - 1 + capacity) % capacity];
     }
 
+    /** Минимум по окну (O(n)); NaN — окно пусто. */
     public double min() {
         if (size == 0) return Double.NaN;
         double m = Double.MAX_VALUE;
@@ -83,6 +92,7 @@ public final class PriceWindow {
         return m;
     }
 
+    /** Максимум по окну (O(n)); NaN — окно пусто. */
     public double max() {
         if (size == 0) return Double.NaN;
         double m = -Double.MAX_VALUE;
@@ -99,6 +109,7 @@ public final class PriceWindow {
         return (last() - oldest) / oldest * 100.0;
     }
 
+    /** Сколько цен в окне. */
     public int size() { return size; }
 
     /** Окно должно заполниться хотя бы наполовину, иначе статистика недостоверна. */

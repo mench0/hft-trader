@@ -41,14 +41,19 @@ import java.util.Optional;
  */
 public final class SqliteStateStore {
 
+    /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(SqliteStateStore.class);
+    /** Ключ строки состояния в таблице app_state. */
     private static final String STATE_KEY = "state";
 
+    /** Файл базы. */
     private final Path dbPath;
+    /** JDBC-адрес базы. */
     private final String jdbcUrl;
     private final ObjectMapper mapper = new ObjectMapper()
             .configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
+    /** Путь к базе — переменная окружения STATE_DB (по умолчанию data/state.db). */
     public SqliteStateStore() {
         String path = System.getenv().getOrDefault("STATE_DB", "data/state.db");
         this.dbPath = Path.of(path);
@@ -56,6 +61,7 @@ public final class SqliteStateStore {
         init();
     }
 
+    /** Создать каталог, таблицу и включить WAL. */
     private void init() {
         try {
             dbPath.toAbsolutePath().getParent().toFile().mkdirs();
@@ -77,10 +83,12 @@ public final class SqliteStateStore {
         }
     }
 
+    /** Новое соединение (SQLite — дёшево). */
     private Connection connect() throws SQLException {
         return DriverManager.getConnection(jdbcUrl);
     }
 
+    /** Прочитать сохранённое состояние; пусто — нет записи или она не читается. */
     public Optional<PersistedState> load() {
         String sql = "SELECT value FROM app_state WHERE key = ?";
         try (Connection conn = connect(); PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -122,5 +130,6 @@ public final class SqliteStateStore {
         }
     }
 
+    /** Путь к файлу базы. */
     public Path filePath() { return dbPath; }
 }

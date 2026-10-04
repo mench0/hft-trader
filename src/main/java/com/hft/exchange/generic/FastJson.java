@@ -12,12 +12,16 @@ import java.io.IOException;
  */
 public final class FastJson {
 
+    /** Фабрика потоковых парсеров (потокобезопасна). */
     public static final JsonFactory F = new JsonFactory();
 
+    /** Утилитный класс — экземпляры не создаются. */
     private FastJson() {}
 
+    /** Степени десяти, точные в double. */
     private static final double[] POW10 = new double[23];
     static { POW10[0] = 1; for (int i = 1; i < POW10.length; i++) POW10[i] = POW10[i - 1] * 10; }
+    /** Целые до 2^53 представимы в double точно. */
     private static final long MAX_EXACT = 1L << 53;
 
     /** Число из текущего токена (строка "123.45" или число 123.45). */
@@ -30,6 +34,7 @@ public final class FastJson {
         return d;
     }
 
+    /** Целое из текущего токена (число или строка цифр); иначе def. */
     public static long longOf(JsonParser p, long def) throws IOException {
         JsonToken t = p.currentToken();
         if (t == JsonToken.VALUE_NUMBER_INT) return p.getLongValue();
@@ -76,8 +81,10 @@ public final class FastJson {
         return neg ? -v : v;
     }
 
+    /** Медленный, но точный разбор через Double.parseDouble. */
     private static double slow(char[] c, int off, int len) { return Double.parseDouble(new String(c, off, len)); }
 
+    /** Текущий токен — строка, равная s (без создания строки). */
     public static boolean textIs(JsonParser p, String s) throws IOException {
         if (p.currentToken() != JsonToken.VALUE_STRING) return false;
         int len = p.getTextLength();
@@ -87,6 +94,7 @@ public final class FastJson {
         return true;
     }
 
+    /** Буфер символов равен строке s. */
     public static boolean equals(char[] c, int len, String s) {
         if (len != s.length()) return false;
         for (int i = 0; i < len; i++) if (c[i] != s.charAt(i)) return false;

@@ -12,11 +12,14 @@ import java.util.Arrays;
  * цены для торговли не нужны и отбрасываются.
  */
 public final class LocalBook {
+    /** Предел уровней на сторону. */
     private final int maxLevels;
     private double[] bp, bq;   // биды по убыванию
     private double[] ap, aq;   // аски по возрастанию
+    /** Уровней бидов и асков. */
     private int bn, an;
 
+    /** @param maxLevels предел уровней на сторону */
     public LocalBook(int maxLevels) {
         this.maxLevels = Math.max(1, maxLevels);
         int cap = Math.min(64, this.maxLevels);
@@ -26,8 +29,10 @@ public final class LocalBook {
     /** Предел уровней для стакана, из которого берутся верхние depth уровней. */
     public static int levelsFor(int depth) { return Math.max(4 * depth, 200); }
 
+    /** Очистить (перед снимком). */
     public void clear() { bn = 0; an = 0; }
 
+    /** Изменить уровень бидов (объём 0 — удалить). */
     public void applyBid(double p, double q) {
         int i = find(bp, bn, p, true);
         if (i >= 0) {
@@ -44,6 +49,7 @@ public final class LocalBook {
         bp[at] = p; bq[at] = q; bn++;
     }
 
+    /** Изменить уровень асков (объём 0 — удалить). */
     public void applyAsk(double p, double q) {
         int i = find(ap, an, p, false);
         if (i >= 0) {
@@ -73,19 +79,26 @@ public final class LocalBook {
         return -(lo + 1);
     }
 
+    /** Применить все уровни сообщения. */
     void apply(BookBatch b) {
         for (int i = 0; i < b.bn; i++) applyBid(b.bp[i], b.bq[i]);
         for (int i = 0; i < b.an; i++) applyAsk(b.ap[i], b.aq[i]);
     }
 
+    /** Обе стороны непусты. */
     public boolean isReady() { return bn > 0 && an > 0; }
+    /** Обе стороны непусты. */
     boolean isCrossed() { return isReady() && bp[0] >= ap[0]; }
+    /** Лучший бид; NaN — сторона пуста. */
     double bestBid() { return bp[0]; }
+    /** Лучший аск; NaN — сторона пуста. */
     double bestAsk() { return ap[0]; }
 
+    /** Уровней бидов. */
     int bidLevels() { return bn; }
 
     /** Верхние уровни в переданные массивы; возвращает число скопированных уровней. */
     public int topBids(double[] px, double[] qty) { int k = Math.min(px.length, bn); System.arraycopy(bp, 0, px, 0, k); System.arraycopy(bq, 0, qty, 0, k); return k; }
+    /** Верхние аски в массивы; возвращает число скопированных уровней. */
     public int topAsks(double[] px, double[] qty) { int k = Math.min(px.length, an); System.arraycopy(ap, 0, px, 0, k); System.arraycopy(aq, 0, qty, 0, k); return k; }
 }

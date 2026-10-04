@@ -22,13 +22,22 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class OrderExecutor {
 
+    /** Логгер исполнителя. */
     private static final Logger log = LoggerFactory.getLogger(OrderExecutor.class);
 
+    /** Имя для потоков и логов. */
     private final String name;
+    /** Пул потоков с ограниченной очередью. */
     private final ThreadPoolExecutor pool;
+    /** Символы с ордером «в полёте». */
     private final Set<String> inFlight = ConcurrentHashMap.newKeySet();
+    /** Счётчики: отправлено, отклонено (символ занят или очередь полна), упало с ошибкой. */
     private final AtomicLong submitted = new AtomicLong(), rejected = new AtomicLong(), failed = new AtomicLong();
 
+    /**
+     * @param name имя (биржа и стратегия)
+     * @param threads сколько ордеров могут идти одновременно
+     */
     public OrderExecutor(String name, int threads) {
         this.name = name;
         AtomicLong n = new AtomicLong();
@@ -59,6 +68,7 @@ public final class OrderExecutor {
         }
     }
 
+    /** По символу уже идёт ордер — новые решения по нему не принимаются. */
     public boolean isBusy(String symbol) { return inFlight.contains(symbol); }
 
     /** Дождаться, пока все поставленные задачи завершатся (не дольше timeoutMs). */
@@ -70,6 +80,7 @@ public final class OrderExecutor {
         return inFlight.isEmpty();
     }
 
+    /** Счётчики и загрузка пула для админки. */
     public java.util.Map<String, Object> stats() {
         return java.util.Map.of("submitted", submitted.get(), "rejectedBusy", rejected.get(), "failed", failed.get(),
                 "inFlight", inFlight.size(), "queued", pool.getQueue().size());

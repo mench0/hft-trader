@@ -37,21 +37,30 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public abstract class SignedCexClient implements ExchangeOrderApi {
 
+    /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(SignedCexClient.class);
 
     /** Параметры одного ордера, уже округлённые и проверенные. */
     protected record Order(String symbol, Side side, Type type, TimeInForce tif,
                            double qty, double price, boolean qtyIsQuote, String clientId) {}
 
+    /** Биржа (для логов, бюджета лимитов и весов). */
     protected final String exchangeId;
+    /** REST-адрес. */
     protected final String baseUrl;
+    /** API-ключи. */
     protected final Credentials credentials;
+    /** Правила символов (округление). */
     protected final SymbolFilters filters;
+    /** Подключение и параметры биржи. */
     protected final ExchangeConfig config;
+    /** Разбор и сборка JSON. */
     protected final ObjectMapper mapper = new ObjectMapper();
     /** Общий бюджет запросов биржи (один на процесс, его же тратят фид и подбор тикеров). */
     protected final RateBudget budget;
+    /** Полоса фоновых запросов (статусы, балансы, правила). */
     protected final RateBudget.Lane callLimiter;
+    /** Полоса ордеров — отдельно, чтобы сверка баланса не задерживала ордер. */
     protected final RateBudget.Lane orderLimiter;
 
     /** Сколько последних ордеров помнить: состояния и соответствие id. Старые вытесняются, иначе карты росли бы всё время работы. */
@@ -67,14 +76,18 @@ public abstract class SignedCexClient implements ExchangeOrderApi {
     private final HttpClient http = HttpClient.newBuilder()
             .version(HttpClient.Version.HTTP_2)
             .connectTimeout(Duration.ofSeconds(5)).build();
+    /** Счётчик для clientOrderId. */
     private final AtomicLong clientSeq = new AtomicLong(System.currentTimeMillis());
+    /** Метрики: запросов, ошибок, ответов о превышении лимита. */
     private final AtomicLong requests = new AtomicLong(), errors = new AtomicLong(), rateLimited = new AtomicLong();
+    /** Метрики задержки: сумма и максимум, нс. */
     private final AtomicLong latencyNanos = new AtomicLong(), maxLatencyNanos = new AtomicLong();
 
     // числовой id интерфейса <-> строковый id биржи
     private static final long ID_BASE = 9_000_000_000_000_000_000L;
     // обе карты меняются вместе под замком toLong; при вытеснении старого id убирается и обратная запись
     private final Map<Long, String> toVenue = new HashMap<>();
+    /** Строковый id биржи -> числовой псевдоним (последние 10 000, порядок вставки). */
     private final Map<String, Long> toLong = new LinkedHashMap<>(256, 0.75f, false) {
         @Override protected boolean removeEldestEntry(Map.Entry<String, Long> e) {
             if (size() <= MAX_TRACKED_ORDERS) return false;
@@ -82,8 +95,15 @@ public abstract class SignedCexClient implements ExchangeOrderApi {
             return true;
         }
     };
+    /** Счётчик числовых псевдонимов строковых id. */
     private final AtomicLong idSeq = new AtomicLong();
 
+    /**
+     * @param exchangeId биржа
+     * @param config подключение и параметры
+     * @param credentials ключи
+     * @param filters правила символов
+     */
     protected SignedCexClient(String exchangeId, ExchangeConfig config, Credentials credentials, SymbolFilters filters) {
         this.exchangeId = exchangeId;
         this.config = config;
@@ -97,16 +117,20 @@ public abstract class SignedCexClient implements ExchangeOrderApi {
 
     // ------------------------------------------------------------ для наследников
 
+    /** Отправить ордер на биржу (без ожидания исполнения). */
     protected abstract OrderResult placeRaw(Order o) throws Exception;
 
+    /** Статус ордера по id. */
     public abstract OrderResult orderStatus(String symbol, long orderId) throws Exception;
 
     @Override public abstract void cancelOrder(String symbol, long orderId) throws Exception;
 
     @Override public abstract int cancelAll(String symbol) throws Exception;
 
+    /** Загрузить правила торговли символов. */
     public abstract void loadFilters(Iterable<String> symbols) throws Exception;
 
+    /** Загрузить балансы. */
     public abstract void loadBalances(BalanceStore store) throws Exception;
 
     /** Бросает ApiException, если по HTTP-коду или телу видно, что биржа вернула ошибку. */
@@ -117,6 +141,7 @@ public abstract class SignedCexClient implements ExchangeOrderApi {
     /** Поднять приватные WS-каналы (ордера, исполнения, балансы). По умолчанию — нет, всё через REST. */
     public void startStreams(BalanceStore store) throws Exception {}
 
+    /** Остановить приватный WS-канал. */
     public void stopStreams() {
         WsRpcChannel c = wsChannel;
         if (c != null) c.stop();
@@ -134,10 +159,8 @@ public abstract class SignedCexClient implements ExchangeOrderApi {
         while (wsChannel != null && !wsReady() && !wsChannel.isDisabled() && System.currentTimeMillis() < until) Thread.sleep(50);
     }
 
-    /** Отключить WS-торговлю переменной окружения <ID>_WS_TRADE=false. */
-    protected boolean wsTradeAllowed() {
-        return !"false".equalsIgnoreCase(System.getenv(exchangeId.toUpperCase() + "_WS_TRADE"));
-    }
+    /** Ордера по WebSocket разрешены параметром биржи wsTrade. */
+    protected boolean wsTradeAllowed() { return config.params().wsTrade(); }
 
     // ------------------------------------------------------------ ExchangeOrderApi
 
@@ -173,7 +196,7 @@ public abstract class SignedCexClient implements ExchangeOrderApi {
     private OrderResult awaitTerminal(OrderResult r, TimeInForce tif) throws Exception {
         OrderResult cur = r;
         if (wsReady()) {                                   // сначала ждём событие из WS: REST тратит лимит
-            long until = System.currentTimeMillis() + 400;
+            long until = System.currentTimeMillis() + config.params().marketFillWaitMs();
             while (System.currentTimeMillis() < until) {
                 OrderResult s = streamed.get(r.orderId());
                 if (s != null && !"NEW".equals(s.status())) { cur = s; break; }
@@ -196,6 +219,7 @@ public abstract class SignedCexClient implements ExchangeOrderApi {
 
     // ------------------------------------------------------------ id
 
+    /** Числовой id ордера: числовой id биржи как есть, строковый — псевдоним (последние 10 000). */
     protected long registerId(String venueId) {
         try { return Long.parseLong(venueId); } catch (NumberFormatException ignore) { /* строковый id */ }
         synchronized (toLong) {
@@ -208,12 +232,14 @@ public abstract class SignedCexClient implements ExchangeOrderApi {
         }
     }
 
+    /** Строковый id биржи по числовому псевдониму (или само число). */
     protected String venueId(long id) {
         synchronized (toLong) { return toVenue.getOrDefault(id, Long.toString(id)); }
     }
 
     // ------------------------------------------------------------ HTTP
 
+    /** URL-кодирование значения. */
     protected static String enc(String s) { return URLEncoder.encode(s, StandardCharsets.UTF_8); }
 
     /** query из параметров в порядке добавления: a=1&b=2 */
@@ -226,8 +252,10 @@ public abstract class SignedCexClient implements ExchangeOrderApi {
         return sb.toString();
     }
 
+    /** Пустая упорядоченная карта параметров. */
     protected static Map<String, String> params() { return new LinkedHashMap<>(); }
 
+    /** Заготовка HTTP-запроса с таймаутом 10 с. */
     protected static HttpRequest.Builder req(String url) {
         return HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(10));
     }
@@ -268,11 +296,13 @@ public abstract class SignedCexClient implements ExchangeOrderApi {
         return json;
     }
 
+    /** JSON ответа; не JSON — объект {raw: текст}. */
     private JsonNode parseLenient(String text) throws Exception {
         try { return mapper.readTree(text); }
         catch (Exception e) { return mapper.createObjectNode().put("raw", text); }
     }
 
+    /** Метрики запросов и бюджета лимитов для админки. */
     public Map<String, Object> stats() {
         long n = requests.get();
         var m = new LinkedHashMap<String, Object>();
@@ -288,11 +318,13 @@ public abstract class SignedCexClient implements ExchangeOrderApi {
         return m;
     }
 
+    /** Число из поля (строка или число); 0 — нет или не число. */
     protected static double d(JsonNode n, String field) {
         String s = n.path(field).asText("");
         if (s.isEmpty()) return 0;
         try { return Double.parseDouble(s); } catch (NumberFormatException e) { return 0; }
     }
 
+    /** Число без экспоненты с заданным числом знаков. */
     protected static String plain(double v, int scale) { return com.hft.util.Numbers.plain(v, scale); }
 }

@@ -29,19 +29,29 @@ import org.slf4j.LoggerFactory;
  */
 public final class OrderService {
 
+    /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(OrderService.class);
 
+    /** API биржи или бумажный движок. */
     private final ExchangeOrderApi rest;
+    /** Рыночные данные (цена для оценок и проверок). */
     private final MarketDataStore market;
+    /** Локальные балансы. */
     private final BalanceStore balances;
+    /** Правила символов (округление объёма и цены). */
     private final SymbolFilters filters;
+    /** Проверки риска перед отправкой. */
     private final RiskManager risk;
+    /** Параметры биржи (резерв под комиссию). */
     private final TradingSettings settings;
 
+    /** Риск-менеджер биржи (стратегии пишут в него результат сделок). */
     public RiskManager risk() { return risk; }
 
+    /** Локальные балансы биржи. */
     public BalanceStore balances() { return balances; }
 
+    /** Время от отправки ордера до ответа. */
     private final Latency orderLatency = new Latency("Латентность ордера");
 
     public OrderService(ExchangeOrderApi rest, MarketDataStore market, BalanceStore balances,
@@ -102,6 +112,7 @@ public final class OrderService {
         return execute(OrderRequest.market(symbol, Side.BUY).balancePortion(portion));
     }
 
+    /** Рыночная продажа доли свободной базовой валюты (portion от 0 до 1). */
     public OrderResult sellMarketPortion(String symbol, double portion) {
         return execute(OrderRequest.market(symbol, Side.SELL).balancePortion(portion));
     }
@@ -237,6 +248,7 @@ public final class OrderService {
         }
     }
 
+    /** Результат «отклонено» без обращения к бирже. */
     private OrderResult failed(String symbol, Side side, String reason) {
         log.warn("Ордер не отправлен по {}: {}", symbol, reason);
         return new OrderResult(0, "", symbol, side, "REJECTED_LOCAL", 0, 0, 0, 0);
@@ -244,6 +256,7 @@ public final class OrderService {
 
     // ======================= ОТМЕНА =======================
 
+    /** Отменить ордер; ошибка логируется. */
     public void cancel(String symbol, long orderId) {
         try {
             rest.cancelOrder(symbol, orderId);
@@ -271,5 +284,6 @@ public final class OrderService {
         }
     }
 
+    /** Латентность ордеров. */
     public Latency latency() { return orderLatency; }
 }

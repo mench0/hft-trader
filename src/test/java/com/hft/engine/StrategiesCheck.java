@@ -96,8 +96,8 @@ public class StrategiesCheck {
     double lb = Math.log(100);
     for (int i = 0; i < 200; i++) { lb += r.nextGaussian() * 0.01; pr.add(Math.exp(2 * lb + r.nextGaussian() * 0.002), Math.exp(lb)); }
     ck("beta and correlation estimated", pr.compute() && Math.abs(pr.beta - 2) < 0.1 && pr.corr > 0.9 && Math.abs(pr.z) < 4);
-    ck("auto pairs share the quote asset", StatArbStrategy.pairList("", List.of("BTCUSDT", "ETHUSDT", "ETHBTC")).size() == 1
-        && StatArbStrategy.pairList("BTCUSDT/ETHUSDT,XXX/YYY", List.of("BTCUSDT", "ETHUSDT")).size() == 1);
+    ck("auto pairs share the quote asset", StatArbStrategy.pairList("", List.of("BTCUSDT", "ETHUSDT", "ETHBTC"), 15).size() == 1
+        && StatArbStrategy.pairList("BTCUSDT/ETHUSDT,XXX/YYY", List.of("BTCUSDT", "ETHUSDT"), 15).size() == 1);
 
     // живой прогон: окно 30 отсчётов по 100 мс; A идёт за B, потом A проваливается и возвращается
     var settings = new TradingSettings(TradingParams.DEFAULTS.with(kv("tradingEnabled", "true", "meanReversionEnabled", "false",

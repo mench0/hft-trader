@@ -7,11 +7,15 @@ package com.hft.config;
  */
 public final class TradingSettings {
 
+    /** Текущий набор; volatile — изменение из админки сразу видно потоку стратегии. */
     private volatile TradingParams params;
 
+    /** @param params начальные параметры биржи */
     public TradingSettings(TradingParams params) { this.params = params; }
 
+    /** Текущие параметры (одно volatile-чтение). */
     public TradingParams get() { return params; }
 
+    /** Подменить параметры целиком; видно потоку стратегии сразу. */
     public void set(TradingParams params) { this.params = params; }
 }

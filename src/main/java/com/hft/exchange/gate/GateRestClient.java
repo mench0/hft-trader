@@ -34,24 +34,34 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class GateRestClient extends SignedCexClient {
 
+    /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(GateRestClient.class);
+    /** Префикс пути REST API v4. */
     private static final String API = "/api/v4";
 
+    /**
+     * @param config подключение и параметры биржи
+     * @param credentials ключи из окружения
+     * @param filters правила символов
+     */
     public GateRestClient(ExchangeConfig config, Credentials credentials, SymbolFilters filters) {
         super("gate", config, credentials, filters);
     }
 
+    /** Имя символа на бирже. */
     static String pair(String symbol) {
         return BalanceStore.baseAsset(symbol) + "_" + BalanceStore.quoteAsset(symbol);
     }
 
     // ------------------------------------------------------------ HTTP
 
+    /** Публичный GET. */
     private JsonNode publicGet(String path, String query) throws Exception {
         String url = baseUrl + API + path + (query.isEmpty() ? "" : "?" + query);
         return exec(req(url).header("Accept", "application/json").GET().build(), false);
     }
 
+    /** Подписанный запрос. */
     private JsonNode signed(String method, String path, String query, String body, boolean order) throws Exception {
         credentials.require();
         String ts = String.valueOf(System.currentTimeMillis() / 1000);
@@ -68,6 +78,7 @@ public final class GateRestClient extends SignedCexClient {
         return exec(b.build(), order);
     }
 
+    /** Ошибка в HTTP-коде или теле ответа — ApiException (лимит — с признаком rateLimit). */
     @Override
     protected void checkError(int http, JsonNode body) {
         String label = body.path("label").asText("");
@@ -81,6 +92,7 @@ public final class GateRestClient extends SignedCexClient {
 
     // ------------------------------------------------------------ ордера
 
+    /** Отправить ордер (по WebSocket, если можно, иначе REST); исход ждёт вызывающий. */
     @Override
     protected OrderResult placeRaw(Order o) throws Exception {
         ObjectNode b = mapper.createObjectNode();
@@ -108,6 +120,7 @@ public final class GateRestClient extends SignedCexClient {
         return parse(r, o.symbol(), o.side(), o.qtyIsQuote() ? 0 : o.qty());
     }
 
+    /** Статус ордера: из WS-потока, если есть, иначе запрос к бирже. */
     @Override
     public OrderResult orderStatus(String symbol, long orderId) throws Exception {
         OrderResult st = streamed.get(orderId);
@@ -148,6 +161,7 @@ public final class GateRestClient extends SignedCexClient {
                 symbol.toUpperCase(), side, status, req, exec, avg, 0);
     }
 
+    /** Отменить ордер. */
     @Override
     public void cancelOrder(String symbol, long orderId) throws Exception {
         JsonNode ws = null;
@@ -158,6 +172,7 @@ public final class GateRestClient extends SignedCexClient {
         log.info("[gate] ордер {} по {} отменён", orderId, symbol);
     }
 
+    /** Отменить все открытые ордера символа; возвращает их число. */
     @Override
     public int cancelAll(String symbol) throws Exception {
         JsonNode r = null;
@@ -172,13 +187,19 @@ public final class GateRestClient extends SignedCexClient {
 
     // ------------------------------------------------------------ WebSocket API: ордера, исполнения, балансы
 
+    /** Адрес приватного WS вместо стандартного (тесты). */
     private volatile String privateWsUrl;
+    /** Куда пишутся балансы из WS. */
     private volatile BalanceStore balanceStore;
+    /** Баланс хотя бы раз пришёл по WS. */
     private volatile boolean accountSeen;
+    /** Номера WS-запросов. */
     private final AtomicLong wsSeq = new AtomicLong();
 
+    /** Задать адрес приватного WebSocket (тесты). */
     public void setPrivateWsUrl(String url) { this.privateWsUrl = url; }
 
+    /** Поднять приватный WS-канал: ордера, исполнения, балансы. */
     @Override
     public void startStreams(BalanceStore store) {
         if (!credentials.isPresent() || !wsTradeAllowed() || wsChannel != null) return;
@@ -218,6 +239,7 @@ public final class GateRestClient extends SignedCexClient {
         }
     }
 
+    /** Обрыв WS после отправки ордера: найти ордер по clientId через REST. */
     private OrderResult resolveUnknownPlacement(Order o, WsRpcChannel.WsUnknownOutcomeException cause) throws Exception {
         wsFallbacks.incrementAndGet();
         log.warn("[gate] исход ордера {} неизвестен ({}), проверяю по REST", o.clientId(), cause.getMessage());
@@ -229,6 +251,7 @@ public final class GateRestClient extends SignedCexClient {
         }
     }
 
+    /** Событие приватного канала: обновить состояние ордера или баланс. */
     private void onEvent(String text) throws Exception {
         JsonNode n = mapper.readTree(text);
         String ch = n.path("channel").asText();
@@ -255,10 +278,11 @@ public final class GateRestClient extends SignedCexClient {
         }
     }
 
+    /** Протокол приватного WS-канала биржи. */
     private final class Private implements WsRpcChannel.Protocol {
         @Override public String url() {
             if (privateWsUrl != null) return privateWsUrl;
-            return config.testnet() ? "wss://ws-testnet.gate.io/v4/ws/spot" : "wss://api.gateio.ws/ws/v4/";
+            return config.testnet() ? "wss://ws-testnet.gate.com/v4/ws/spot" : "wss://api.gateio.ws/ws/v4/";
         }
 
         @Override public List<String> login() {
@@ -270,6 +294,7 @@ public final class GateRestClient extends SignedCexClient {
             return List.of(m.toString());
         }
 
+        /** Сообщение подписки приватного канала с подписью. */
         private String subscribe(String channel, List<String> payload) {
             long ts = System.currentTimeMillis() / 1000;
             ObjectNode m = mapper.createObjectNode().put("time", ts).put("channel", channel).put("event", "subscribe");
@@ -313,6 +338,7 @@ public final class GateRestClient extends SignedCexClient {
 
     // ------------------------------------------------------------ правила и баланс
 
+    /** Загрузить правила торговли символов (шаги объёма и цены, минимальная сумма). */
     @Override
     public void loadFilters(Iterable<String> symbols) throws Exception {
         JsonNode list = publicGet("/spot/currency_pairs", "");
@@ -332,6 +358,7 @@ public final class GateRestClient extends SignedCexClient {
         log.info("[gate] правила загружены для {} символов", loaded);
     }
 
+    /** Загрузить балансы. */
     @Override
     public void loadBalances(BalanceStore store) throws Exception {
         JsonNode r = signed("GET", "/spot/accounts", "", "", false);

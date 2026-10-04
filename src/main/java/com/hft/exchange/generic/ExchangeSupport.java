@@ -21,19 +21,20 @@ import org.slf4j.LoggerFactory;
  */
 public final class ExchangeSupport {
 
+    /** Логгер общих функций бирж. */
     private static final Logger log = LoggerFactory.getLogger(ExchangeSupport.class);
 
+    /** Утилитный класс — экземпляры не создаются. */
     private ExchangeSupport() {}
 
-    /** LIVE только при ключах и явном ID_LIVE=true, иначе бумажный движок. */
-    public static boolean isLive(ExchangeInfo info, Credentials credentials) {
+    /** LIVE только при ключах в окружении и параметре биржи live=true, иначе бумажный движок. */
+    public static boolean isLive(ExchangeInfo info, ExchangeConfig config, Credentials credentials) {
         String id = info.id().toUpperCase();
-        boolean flag = "true".equalsIgnoreCase(System.getenv(id + "_LIVE"));
-        if (credentials.isPresent() && flag) {
-            log.warn("[{}] режим LIVE — ордера пойдут на биржу", info.id());
+        if (credentials.isPresent() && config.params().live()) {
+            log.warn("[{}] режим LIVE{} — ордера пойдут на биржу", info.id(), config.testnet() ? " (testnet)" : "");
             return true;
         }
-        log.info("[{}] режим PAPER (для LIVE нужны {}_API_KEY/_SECRET и {}_LIVE=true)", info.id(), id, id);
+        log.info("[{}] режим PAPER (для LIVE нужны {}_API_KEY/_SECRET в окружении и параметр live=true)", info.id(), id);
         return false;
     }
 
@@ -42,11 +43,9 @@ public final class ExchangeSupport {
         filters.put(symbol, new SymbolFilters.Filter(0, 1e12, 1e-6, 0, 1e12, 1e-8, 5.0));
     }
 
-    /** Стартовый бумажный баланс: PAPER_START_BALANCE или 1000 в котируемой валюте каждого символа. */
+    /** Стартовый бумажный баланс (параметр paperStartBalance) в котируемой валюте каждого символа. */
     public static void seedPaperBalances(BalanceStore balances, ExchangeConfig config) {
-        double start = 1000;
-        String env = System.getenv("PAPER_START_BALANCE");
-        if (env != null && !env.isBlank()) start = Double.parseDouble(env);
+        double start = config.params().paperStartBalance();
         for (String s : config.symbols()) {
             String quote = BalanceStore.quoteAsset(s);
             if (balances.total(quote) == 0) balances.set(quote, start, 0);
@@ -59,10 +58,15 @@ public final class ExchangeSupport {
                                    TickPipeline pipeline, PaperOrderApi paper, Runnable onGiveUp) {
         TickSink onTick = pipeline::publish;           // тик сразу в кольцо Disruptor, без промежуточного объекта
         java.util.function.Consumer<String> onBook = s -> { if (paper != null) paper.settle(s); };
-        var ws = WsDialects.forExchange(info.id());
-        return ws.isPresent()
-                ? new HybridBookFeed(info, config, ws.get(), Dialects.forExchange(info.id()), market, onTick, onBook, onGiveUp)
-                : new PollingBookFeed(info, config, Dialects.forExchange(info.id()), market, onTick, onBook, onGiveUp);
+        var p = config.params();
+        var ws = WsDialects.forExchange(info.id(), config);
+        if (ws.isEmpty()) return new PollingBookFeed(info, config, Dialects.forExchange(info.id(), config), market, onTick, onBook, onGiveUp)
+                .backoff(p.pollBackoffMs()).maxFailures(p.feedMaxFailures());
+        HybridBookFeed f = new HybridBookFeed(info, config, ws.get(), Dialects.forExchange(info.id(), config), market, onTick, onBook, onGiveUp);
+        f.ws().tune(p.wsStaleMs() > 0 ? p.wsStaleMs() : f.ws().staleMs(), p.wsReconnectBaseMs())
+                .limits(p.feedMaxFailures(), p.wsMaxParseErrors(), p.wsMaxCrossedBooks());
+        f.poll().backoff(p.pollBackoffMs()).maxFailures(p.feedMaxFailures());
+        return f.grace(p.restFallbackGraceMs());
     }
 
     /** Источник данных потерян: снять заявки, закрыть позиции, остановить стратегию и торговлю. */

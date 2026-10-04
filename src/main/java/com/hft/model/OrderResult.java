@@ -23,18 +23,22 @@ public record OrderResult(
         long latencyNanos
 ) {
 
+    /** Исполнен полностью. */
     public boolean isFilled() {
         return "FILLED".equals(status);
     }
 
+    /** Исполнен частично. */
     public boolean isPartial() {
         return "PARTIALLY_FILLED".equals(status);
     }
 
+    /** Отклонён биржей или истёк без исполнения. */
     public boolean isRejected() {
         return "REJECTED".equals(status) || "EXPIRED".equals(status);
     }
 
+    /** Кратко для логов. */
     @Override
     public String toString() {
         return String.format("Order[%d] %s %s %s: %.8f/%.8f @ %.2f (%.1f ms)",

@@ -48,30 +48,43 @@ import java.util.Map;
  */
 public final class UniswapV2Client extends SignedCexClient {
 
+    /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(UniswapV2Client.class);
 
+    /** Токен: адрес контракта и число знаков. */
     private record Token(String address, int decimals) {}
 
+    /** Подпись транзакций кошельком. */
     private final EvmCrypto crypto;
+    /** Адрес Router02 (параметр uniRouter). */
     private final String router;
+    /** Допустимое проскальзывание свопа, доля (параметр uniSlippagePercent). */
     private final double slippage;
+    /** Токены по тикеру (параметр uniTokens). */
     private final Map<String, Token> tokens = new LinkedHashMap<>();
+    /** Результаты свопов (последние 10 000). */
     private final Map<Long, OrderResult> results = BoundedMap.create(MAX_TRACKED_ORDERS);
+    /** Chain id сети (из eth_chainId; -1 — ещё не запрошен). */
     private volatile long chainId = -1;
 
+    /**
+     * @param config подключение и параметры биржи
+     * @param credentials ключи из окружения
+     * @param filters правила символов
+     */
     public UniswapV2Client(ExchangeConfig config, Credentials credentials, SymbolFilters filters) {
         this(config, credentials, filters, credentials.isPresent() ? new Web3jCrypto(credentials.apiSecret()) : null,
-                System.getenv("UNISWAPV2_ROUTER"), System.getenv("UNISWAPV2_TOKENS"), System.getenv("UNISWAPV2_SLIPPAGE_PCT"));
+                config.params().uniRouter(), config.params().uniTokens(), String.valueOf(config.params().uniSlippagePercent()));
     }
 
     public UniswapV2Client(ExchangeConfig config, Credentials credentials, SymbolFilters filters, EvmCrypto crypto,
                            String router, String tokenSpec, String slippagePct) {
         super("uniswapv2", config, credentials, filters);
         this.crypto = crypto;
-        if (router == null || router.isBlank()) throw new IllegalStateException("Задайте UNISWAPV2_ROUTER (адрес Router02)");
+        if (router == null || router.isBlank()) throw new IllegalStateException("Задайте параметр биржи uniRouter (адрес Router02)");
         this.router = router.toLowerCase();
         this.slippage = (slippagePct == null || slippagePct.isBlank() ? 0.5 : Double.parseDouble(slippagePct)) / 100.0;
-        if (tokenSpec == null || tokenSpec.isBlank()) throw new IllegalStateException("Задайте UNISWAPV2_TOKENS=\"WETH=0x..:18;USDC=0x..:6\"");
+        if (tokenSpec == null || tokenSpec.isBlank()) throw new IllegalStateException("Задайте параметр биржи uniTokens=\"WETH=0x..:18;USDC=0x..:6\"");
         for (String item : tokenSpec.split(";")) {
             String[] kv = item.trim().split("=");
             String[] f = kv[1].split(":");
@@ -79,6 +92,7 @@ public final class UniswapV2Client extends SignedCexClient {
         }
     }
 
+    /** Токен по тикеру; неизвестный — IllegalArgumentException. */
     private Token token(String asset) {
         Token t = tokens.get(asset.toUpperCase());
         if (t == null) throw new IllegalStateException("Нет токена " + asset + " в UNISWAPV2_TOKENS");
@@ -87,9 +101,12 @@ public final class UniswapV2Client extends SignedCexClient {
 
     // ------------------------------------------------------------ JSON-RPC
 
+    /** Номера RPC-запросов. */
     private final java.util.concurrent.atomic.AtomicLong rpcSeq = new java.util.concurrent.atomic.AtomicLong();
+    /** Адрес WebSocket ноды вместо стандартного (тесты). */
     private volatile String wsUrlOverride;
 
+    /** Адрес WebSocket ноды вместо стандартного (тесты). */
     public void setWsUrl(String url) { this.wsUrlOverride = url; }
 
     /** WebSocket к ноде для всех JSON-RPC вызовов; без него (или при сбое) — HTTP. Повтор по HTTP безопасен:
@@ -104,8 +121,11 @@ public final class UniswapV2Client extends SignedCexClient {
         ch.start();
     }
 
+    /** JSON-RPC по WebSocket ноды: без логина, ответы по id. */
     private static final class RpcProtocol implements WsRpcChannel.Protocol {
+        /** Адрес WebSocket ноды. */
         private final String url;
+        /** Разбор ответов RPC. */
         private final com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
         RpcProtocol(String url) { this.url = url; }
         @Override public String url() { return url; }
@@ -121,6 +141,7 @@ public final class UniswapV2Client extends SignedCexClient {
         }
     }
 
+    /** JSON-RPC вызов: по WebSocket, если готов, иначе HTTP; ошибка RPC — исключение. */
     private JsonNode rpc(String method, Object... params) throws Exception {
         WsRpcChannel ch = wsChannel;
         if (ch != null && ch.isReady()) {
@@ -147,6 +168,7 @@ public final class UniswapV2Client extends SignedCexClient {
                 .path("result");
     }
 
+    /** Ошибка в HTTP-коде или теле ответа — ApiException (лимит — с признаком rateLimit). */
     @Override
     protected void checkError(int http, JsonNode body) {
         if (http == 429) throw new ApiException(http, "429", "слишком часто", true);
@@ -158,6 +180,7 @@ public final class UniswapV2Client extends SignedCexClient {
         }
     }
 
+    /** eth_call к контракту, результат hex. */
     private String ethCall(String to, String data) throws Exception {
         Map<String, String> call = new LinkedHashMap<>();
         call.put("to", to);
@@ -165,11 +188,13 @@ public final class UniswapV2Client extends SignedCexClient {
         return rpc("eth_call", call, "latest").asText();
     }
 
+    /** hex (с 0x) в число. */
     private static BigInteger big(String hex) {
         String h = hex.startsWith("0x") ? hex.substring(2) : hex;
         return h.isEmpty() ? BigInteger.ZERO : new BigInteger(h, 16);
     }
 
+    /** Chain id сети (запрашивается один раз). */
     private long chainId() throws Exception {
         if (chainId < 0) chainId = big(rpc("eth_chainId").asText()).longValueExact();
         return chainId;
@@ -177,14 +202,17 @@ public final class UniswapV2Client extends SignedCexClient {
 
     // ------------------------------------------------------------ котировки и баланс
 
+    /** Баланс токена кошелька в минимальных единицах. */
     BigInteger balanceOf(Token t) throws Exception {
         return big(ethCall(t.address, Abi.call("70a08231", crypto.address())));
     }
 
+    /** Сколько получим за in (getAmountsOut роутера). */
     private BigInteger amountOut(BigInteger in, Token from, Token to) throws Exception {
         return lastWord(ethCall(router, Abi.call("d06ca61f", in, List.of(from.address, to.address))));
     }
 
+    /** Сколько нужно отдать за out (getAmountsIn роутера). */
     private BigInteger amountIn(BigInteger out, Token from, Token to) throws Exception {
         return firstWord(ethCall(router, Abi.call("1f00ca74", out, List.of(from.address, to.address))));
     }
@@ -196,24 +224,30 @@ public final class UniswapV2Client extends SignedCexClient {
         return big(h.substring(128 + 64 * (n - 1), 128 + 64 * n));
     }
 
+    /** Первое 32-байтовое слово ответа как число. */
     private static BigInteger firstWord(String hex) {
         String h = hex.startsWith("0x") ? hex.substring(2) : hex;
         return big(h.substring(128, 192));
     }
 
+    /** Количество в минимальные единицы токена. */
     private static BigInteger units(double v, int decimals) {
         return BigDecimal.valueOf(v).movePointRight(decimals).setScale(0, RoundingMode.DOWN).toBigInteger();
     }
 
+    /** Минимальные единицы в количество. */
     private static double human(BigInteger v, int decimals) {
         return new BigDecimal(v).movePointLeft(decimals).doubleValue();
     }
 
+    /** Значение плюс проскальзывание (максимум к оплате). */
     private BigInteger plus(BigInteger v) { return new BigDecimal(v).multiply(BigDecimal.valueOf(1 + slippage)).setScale(0, RoundingMode.UP).toBigInteger(); }
+    /** Значение минус проскальзывание (минимум к получению). */
     private BigInteger minus(BigInteger v) { return new BigDecimal(v).multiply(BigDecimal.valueOf(1 - slippage)).setScale(0, RoundingMode.DOWN).toBigInteger(); }
 
     // ------------------------------------------------------------ ордера
 
+    /** Отправить ордер (по WebSocket, если можно, иначе REST); исход ждёт вызывающий. */
     @Override
     protected OrderResult placeRaw(Order o) throws Exception {
         if (crypto == null) credentials.require();
@@ -274,10 +308,12 @@ public final class UniswapV2Client extends SignedCexClient {
         return r;
     }
 
+    /** Своп не выполнен — результат EXPIRED без исполнения. */
     private OrderResult expired(Order o) {
         return new OrderResult(0, o.clientId(), o.symbol(), o.side(), "EXPIRED", o.qtyIsQuote() ? 0 : o.qty(), 0, 0, 0);
     }
 
+    /** Разрешить роутеру тратить токен (approve), если разрешения не хватает. */
     private void ensureAllowance(Token t, BigInteger need) throws Exception {
         BigInteger have = big(ethCall(t.address, Abi.call("dd62ed3e", crypto.address(), router)));
         if (have.compareTo(need) >= 0) return;
@@ -285,6 +321,7 @@ public final class UniswapV2Client extends SignedCexClient {
         waitReceipt(sendTx(t.address, Abi.call("095ea7b3", router, need)));   // ровно нужная сумма, не безлимит
     }
 
+    /** Подписать и отправить транзакцию; возвращает хеш. */
     private String sendTx(String to, String data) throws Exception {
         String from = crypto.address();
         BigInteger nonce = big(rpc("eth_getTransactionCount", from, "pending").asText());
@@ -303,6 +340,7 @@ public final class UniswapV2Client extends SignedCexClient {
         return rpc("eth_sendRawTransaction", raw).asText();
     }
 
+    /** Дождаться квитанции транзакции; revert — исключение. */
     private void waitReceipt(String txHash) throws Exception {
         for (int i = 0; i < 90; i++) {
             JsonNode r = rpc("eth_getTransactionReceipt", txHash);
@@ -315,6 +353,7 @@ public final class UniswapV2Client extends SignedCexClient {
         throw new ApiException(200, "TIMEOUT", "транзакция не подтверждена за 90 с: " + txHash, false);
     }
 
+    /** Статус ордера: из WS-потока, если есть, иначе запрос к бирже. */
     @Override
     public OrderResult orderStatus(String symbol, long orderId) {
         OrderResult r = results.get(orderId);
@@ -322,16 +361,19 @@ public final class UniswapV2Client extends SignedCexClient {
         return r;
     }
 
+    /** Отменить ордер. */
     @Override
     public void cancelOrder(String symbol, long orderId) {
         throw new UnsupportedOperationException("AMM: отменять нечего — своп уже подтверждён или отклонён");
     }
 
+    /** Отменить все открытые ордера символа; возвращает их число. */
     @Override
     public int cancelAll(String symbol) { return 0; }
 
     // ------------------------------------------------------------ правила и баланс
 
+    /** Загрузить правила торговли символов (шаги объёма и цены, минимальная сумма). */
     @Override
     public void loadFilters(Iterable<String> symbols) {
         int loaded = 0;
@@ -345,6 +387,7 @@ public final class UniswapV2Client extends SignedCexClient {
         if (loaded == 0) throw new IllegalStateException("Uniswap: нет символов");
     }
 
+    /** Загрузить балансы. */
     @Override
     public void loadBalances(BalanceStore store) throws Exception {
         store.set("ETH", human(big(rpc("eth_getBalance", crypto.address(), "latest").asText()), 18), 0);

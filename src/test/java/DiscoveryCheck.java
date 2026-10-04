@@ -87,7 +87,7 @@ public class DiscoveryCheck {
 
     // ---- полный прогон: профили стратегий
     var svc = new DiscoveryService(List.of(bin, okx, gate, hl, dy, MarketSources.create("bybit", u + "/nope").get()),
-        List.of(new Profiles.MeanReversion(null), new Profiles.CrossExchange(), new Profiles.SpreadCapture()), 15);
+        List.of(new Profiles.MeanReversion(null, com.hft.config.GlobalParams.DEFAULTS), new Profiles.CrossExchange(com.hft.config.GlobalParams.DEFAULTS), new Profiles.SpreadCapture(com.hft.config.GlobalParams.DEFAULTS)), 15);
     Map<String, Object> res = svc.runOnce();
     JsonNode j = M.valueToTree(res);
     String dump = System.getenv("DISCOVERY_DUMP");

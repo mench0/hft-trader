@@ -11,6 +11,7 @@ import java.math.RoundingMode;
  */
 public final class Numbers {
 
+    /** Утилитный класс — экземпляры не создаются. */
     private Numbers() {}
 
     /** Число в обычной десятичной записи с нужным числом знаков, без хвостовых нулей. */

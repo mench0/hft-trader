@@ -29,20 +29,29 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class WsRpcChannel {
 
+    /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(WsRpcChannel.class);
+    /** Отказов логина подряд, после которых канал выключается (ключи, скорее всего, неверны). */
     private static final int MAX_LOGIN_FAILURES = 5;
 
+    /** Что за сообщение: подтверждение логина, ответ на запрос, событие, служебное. */
     public enum Kind { LOGIN_OK, REPLY, EVENT, IGNORE }
 
     /** @param id для REPLY; @param text тело (REPLY/EVENT); @param reply немедленный ответ (pong) или null */
     public record Msg(Kind kind, String id, String text, String reply) {
+        /** Служебное сообщение — пропустить. */
         public static Msg ignore() { return new Msg(Kind.IGNORE, null, null, null); }
+        /** Логин подтверждён. */
         public static Msg loginOk() { return new Msg(Kind.LOGIN_OK, null, null, null); }
+        /** Ответ на запрос с id. */
         public static Msg reply(String id, String text) { return new Msg(Kind.REPLY, id, text, null); }
+        /** Событие (ордера, исполнения, баланс). */
         public static Msg event(String text) { return new Msg(Kind.EVENT, null, text, null); }
     }
 
+    /** Протокол биржи: адрес, логин, подписки, пинг, разбор. */
     public interface Protocol {
+        /** Адрес приватного WebSocket. */
         String url();
         /** Сообщения логина сразу после подключения; пусто — логина нет. */
         List<String> login() throws Exception;
@@ -50,51 +59,79 @@ public final class WsRpcChannel {
         List<String> subscriptions() throws Exception;
         /** Разбор входящего. Исключение до логина = отказ в логине; после — просто ошибка в статистике. */
         Msg parse(String text) throws Exception;
+        /** Прикладной пинг; null — не нужен. */
         default String ping() { return null; }
+        /** Интервал пинга, мс. */
         default long pingIntervalMs() { return 20_000; }
+        /** Бинарный кадр в текст (gzip у части бирж). */
         default String decodeBinary(byte[] d) throws Exception { return new String(d, StandardCharsets.UTF_8); }
     }
 
+    /** WS не готов — запрос надо отправить по REST. */
     public static final class WsNotReadyException extends RuntimeException {
+        /** Без стека: исключение ожидаемое и частое. */
         public WsNotReadyException() { super("WS-канал не готов", null, false, false); }
     }
 
+    /** Запрос ушёл, но ответа нет (обрыв) — исход неизвестен, надо проверить по REST. */
     public static final class WsUnknownOutcomeException extends Exception {
+        /** @param m описание */
         public WsUnknownOutcomeException(String m) { super(m, null, false, false); }
     }
 
+    /** Биржа (для логов и бюджета лимитов). */
     private final String name;
+    /** Протокол биржи. */
     private final Protocol protocol;
+    /** HTTP-клиент для WebSocket. */
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+    /** Ожидающие ответа запросы по id. */
     private final Map<String, CompletableFuture<String>> pending = new ConcurrentHashMap<>();
 
+    /** Куда отдаются события. */
     private volatile EventSink eventSink = e -> {};
+    /** Состояние: работает, соединение есть, логин подтверждён, выключен после отказов логина. */
     private volatile boolean running, connected, loggedIn, disabled;
+    /** Текущий сокет. */
     private volatile WebSocket socket;
+    /** Очередь отправки. */
     private volatile WsSender sender;
+    /** Время последнего кадра. */
     private volatile long lastFrameMs;
+    /** Отказов логина подряд. */
     private volatile int loginFailures;
+    /** Последняя ошибка (для метрик). */
     private volatile String lastError = "";
+    /** Начальная пауза переподключения, мс. */
     private volatile long baseBackoffMs = 500;
+    /** Тишина, после которой переподключение, мс. */
     private volatile long staleMs;
+    /** Поток канала. */
     private Thread thread;
 
     private final AtomicLong calls = new AtomicLong(), unknown = new AtomicLong(), reconnects = new AtomicLong(),
             events = new AtomicLong(), parseErrors = new AtomicLong();
 
+    /**
+     * @param name биржа
+     * @param protocol протокол биржи
+     */
     public WsRpcChannel(String name, Protocol protocol) {
         this.name = name;
         this.protocol = protocol;
         this.staleMs = protocol.ping() != null ? Math.max(30_000, protocol.pingIntervalMs() * 3) : 90_000;
     }
 
+    /** Получатель событий канала. */
     public interface EventSink { void accept(String text) throws Exception; }
 
+    /** Задать получателя событий. */
     public WsRpcChannel onEvent(EventSink sink) { this.eventSink = sink; return this; }
 
     /** Для тестов. */
     public WsRpcChannel tune(long staleMs, long baseBackoffMs) { this.staleMs = staleMs; this.baseBackoffMs = baseBackoffMs; return this; }
 
+    /** Запустить поток канала. */
     public synchronized void start() {
         if (running) return;
         running = true;
@@ -105,6 +142,7 @@ public final class WsRpcChannel {
         thread.start();
     }
 
+    /** Остановить канал; ожидающие запросы завершаются ошибкой. */
     public synchronized void stop() {
         running = false;
         WebSocket w = socket;
@@ -113,9 +151,12 @@ public final class WsRpcChannel {
         if (thread != null) thread.interrupt();
     }
 
+    /** Можно отправлять запросы: соединение есть, логин подтверждён, канал не молчит. */
     public boolean isReady() { return running && !disabled && connected && loggedIn && System.currentTimeMillis() - lastFrameMs < staleMs; }
+    /** Выключен после отказов логина. */
     public boolean isDisabled() { return disabled; }
 
+    /** Метрики канала для админки. */
     public Map<String, Object> stats() {
         var m = new LinkedHashMap<String, Object>();
         m.put("ready", isReady());
@@ -169,6 +210,7 @@ public final class WsRpcChannel {
 
     // ---------------------------------------------------------------- цикл
 
+    /** Подключаться и переподключаться с нарастающей паузой. */
     private void loop() {
         int failures = 0;
         while (running && !disabled) {
@@ -191,6 +233,7 @@ public final class WsRpcChannel {
         }
     }
 
+    /** Одно соединение: логин, подписки, пинг, контроль тишины. */
     private void serve() throws Exception {
         CompletableFuture<Void> closed = new CompletableFuture<>();
         Listener l = new Listener(closed);
@@ -225,6 +268,7 @@ public final class WsRpcChannel {
         }
     }
 
+    /** Логин подтверждён — отправить подписки. */
     private void afterLogin(WebSocket w) throws Exception {
         loggedIn = true;
         loginFailures = 0;
@@ -236,6 +280,7 @@ public final class WsRpcChannel {
         }
     }
 
+    /** Учесть отказ логина; после MAX_LOGIN_FAILURES выключить канал. */
     private void noteLoginFailure() {
         if (++loginFailures >= MAX_LOGIN_FAILURES) {
             disabled = true;
@@ -243,6 +288,7 @@ public final class WsRpcChannel {
         }
     }
 
+    /** Завершить все ожидающие запросы ошибкой «исход неизвестен». */
     private void failPending(String why) {
         for (var e : pending.entrySet()) {
             CompletableFuture<String> f = pending.remove(e.getKey());
@@ -250,6 +296,7 @@ public final class WsRpcChannel {
         }
     }
 
+    /** Разобрать сообщение и раздать: логин, ответ, событие, pong. */
     private void handle(WebSocket w, String text, Listener l) {
         try {
             Msg m = protocol.parse(text);
@@ -275,10 +322,15 @@ public final class WsRpcChannel {
         }
     }
 
+    /** Слушатель сокета JDK: склейка фрагментов, кадры, закрытие. */
     private final class Listener implements WebSocket.Listener {
+        /** Завершается при закрытии сокета. */
         private final CompletableFuture<Void> closed;
+        /** Буфер склейки фрагментов текста. */
         private final StringBuilder text = new StringBuilder();
+        /** Буфер склейки бинарных фрагментов. */
         private ByteBuffer bin = ByteBuffer.allocate(0);
+        /** Запрошен сброс соединения из обработчика. */
         volatile boolean abort;
 
         Listener(CompletableFuture<Void> closed) { this.closed = closed; }

@@ -21,21 +21,26 @@ public final class BalanceStore {
     /** Заблокированные в открытых ордерах. */
     private final Map<String, Double> locked = new ConcurrentHashMap<>();
 
+    /** Когда баланс последний раз сверялся с биржей. */
     private volatile long lastSyncMs;
 
+    /** Задать свободный и заблокированный остаток валюты. */
     public void set(String asset, double freeAmount, double lockedAmount) {
         free.put(asset.toUpperCase(), freeAmount);
         locked.put(asset.toUpperCase(), lockedAmount);
     }
 
+    /** Свободно. */
     public double free(String asset) {
         return free.getOrDefault(asset.toUpperCase(), 0.0);
     }
 
+    /** Заблокировано в ордерах. */
     public double locked(String asset) {
         return locked.getOrDefault(asset.toUpperCase(), 0.0);
     }
 
+    /** Свободно + заблокировано. */
     public double total(String asset) {
         return free(asset) + locked(asset);
     }
@@ -48,14 +53,17 @@ public final class BalanceStore {
         free.merge(asset.toUpperCase(), delta, Double::sum);
     }
 
+    /** Отметить, что баланс только что сверен с биржей. */
     public void markSynced() {
         lastSyncMs = System.currentTimeMillis();
     }
 
+    /** Сколько мс прошло с последней сверки. */
     public long ageMs() {
         return System.currentTimeMillis() - lastSyncMs;
     }
 
+    /** Копия свободных остатков по валютам. */
     public Map<String, Double> snapshot() {
         return Map.copyOf(free);
     }
@@ -71,6 +79,7 @@ public final class BalanceStore {
             "USDT", "USDC", "FDUSD", "TUSD", "BUSD", "BTC", "ETH", "BNB", "EUR", "TRY", "USD"
     };
 
+    /** BTCUSDT -> {BTC, USDT} по известным котируемым валютам; иначе IllegalArgumentException. */
     public static String[] splitSymbol(String symbol) {
         String s = symbol.toUpperCase();
         for (String quote : QUOTE_ASSETS) {
@@ -81,10 +90,12 @@ public final class BalanceStore {
         throw new IllegalArgumentException("Не удалось разобрать символ: " + symbol);
     }
 
+    /** Базовая валюта символа (BTC в BTCUSDT). */
     public static String baseAsset(String symbol) {
         return splitSymbol(symbol)[0];
     }
 
+    /** Котируемая валюта символа (USDT в BTCUSDT). */
     public static String quoteAsset(String symbol) {
         return splitSymbol(symbol)[1];
     }

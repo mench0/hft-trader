@@ -34,13 +34,19 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public abstract class AbstractWsFeed {
 
+    /** Логгер наследника. */
     protected final Logger log = LoggerFactory.getLogger(getClass());
 
+    /** Фид запущен. */
     private final AtomicBoolean running = new AtomicBoolean(false);
+    /** Попыток переподключения подряд (для нарастающей паузы). */
     private final AtomicInteger reconnectAttempts = new AtomicInteger();
+    /** Получено сообщений. */
     private final AtomicInteger messageCount = new AtomicInteger();
 
+    /** Потоки Netty. */
     private EventLoopGroup group;
+    /** Текущее соединение. */
     private volatile Channel channel;
 
     /** Полный URL для подключения, включая параметры подписки. Вызывается при каждом (пере)подключении. */
@@ -52,6 +58,7 @@ public abstract class AbstractWsFeed {
     /** Что сделать сразу после успешного хендшейка — например, отправить подписку отдельным фреймом. */
     protected void onHandshakeComplete(Channel channel) { }
 
+    /** Подключиться; при обрыве переподключаться с нарастающей паузой. */
     public final void start() throws Exception {
         running.set(true);
         group = new NioEventLoopGroup(1, r -> {
@@ -62,6 +69,7 @@ public abstract class AbstractWsFeed {
         connect();
     }
 
+    /** Установить соединение и WebSocket-рукопожатие (с учётом лимита подключений). */
     private void connect() throws Exception {
         RateBudget.of(name()).acquire(RateBudget.Kind.WS_CONNECT, 1, 60_000);   // лимит подключений на IP
         URI uri = buildUri();
@@ -80,6 +88,7 @@ public abstract class AbstractWsFeed {
                 .option(ChannelOption.SO_KEEPALIVE, true)
                 .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5000)
                 .handler(new ChannelInitializer<Channel>() {
+                    /** Цепочка Netty: TLS, HTTP-кодек, агрегатор, обработчик WebSocket. */
                     @Override
                     protected void initChannel(Channel ch) {
                         ChannelPipeline p = ch.pipeline();
@@ -100,6 +109,7 @@ public abstract class AbstractWsFeed {
         log.info("[{}] Поток данных запущен", name());
     }
 
+    /** Переподключиться через 2^n секунд (не больше 30 с). */
     private void scheduleReconnect() {
         if (!running.get()) return;
         int attempt = reconnectAttempts.incrementAndGet();
@@ -115,6 +125,7 @@ public abstract class AbstractWsFeed {
         }, delay, TimeUnit.MILLISECONDS);
     }
 
+    /** Остановить фид и потоки Netty. */
     public final void stop() {
         running.set(false);
         if (channel != null) channel.close();
@@ -122,11 +133,13 @@ public abstract class AbstractWsFeed {
         log.info("[{}] Поток данных остановлен", name());
     }
 
+    /** Соединение открыто. */
     public final boolean isConnected() {
         Channel ch = channel;
         return ch != null && ch.isActive();
     }
 
+    /** Получено сообщений. */
     public final int messageCount() { return messageCount.get(); }
 
     /** Отправить текстовый фрейм в уже установленное соединение — для подписки/отписки на лету. */
@@ -143,30 +156,38 @@ public abstract class AbstractWsFeed {
     /** Короткое имя для логов — переопределяется наследником. */
     protected String name() { return getClass().getSimpleName(); }
 
+    /** Обработчик Netty: рукопожатие, текстовые кадры, пинги, ошибки. */
     private final class Handler extends SimpleChannelInboundHandler<Object> {
+        /** Рукопожатие WebSocket. */
         private final WebSocketClientHandshaker handshaker;
+        /** Завершается, когда рукопожатие прошло. */
         private ChannelPromise handshakeFuture;
 
+        /** @param handshaker рукопожатие для этого соединения */
         Handler(WebSocketClientHandshaker handshaker) {
             this.handshaker = handshaker;
         }
 
+        /** Создать признак завершения рукопожатия. */
         @Override
         public void handlerAdded(ChannelHandlerContext ctx) {
             handshakeFuture = ctx.newPromise();
         }
 
+        /** Соединение установлено — начать WebSocket-рукопожатие. */
         @Override
         public void channelActive(ChannelHandlerContext ctx) {
             handshaker.handshake(ctx.channel());
         }
 
+        /** Соединение закрыто — переподключиться, если фид не остановлен. */
         @Override
         public void channelInactive(ChannelHandlerContext ctx) {
             log.warn("[{}] Соединение закрыто", name());
             scheduleReconnect();
         }
 
+        /** 60 секунд без данных — закрыть соединение (дальше переподключение). */
         @Override
         public void userEventTriggered(ChannelHandlerContext ctx, Object evt) {
             if (evt instanceof IdleStateEvent) {
@@ -175,6 +196,7 @@ public abstract class AbstractWsFeed {
             }
         }
 
+        /** Кадр: завершение рукопожатия, текст — в onText, ping/pong/close. */
         @Override
         protected void channelRead0(ChannelHandlerContext ctx, Object msg) {
             Channel ch = ctx.channel();
@@ -199,6 +221,7 @@ public abstract class AbstractWsFeed {
             }
         }
 
+        /** Ошибка канала — закрыть (переподключение по channelInactive). */
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
             log.error("[{}] Ошибка в канале: {}", name(), cause.getMessage());

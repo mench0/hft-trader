@@ -21,8 +21,10 @@ import com.hft.exchange.uniswap.UniswapV2Client;
 /** Создание шлюза биржи по её id. */
 public final class ExchangeFactory {
 
+    /** Утилитный класс — экземпляры не создаются. */
     private ExchangeFactory() {}
 
+    /** Шлюз биржи по id; неизвестная биржа без адаптера — IllegalArgumentException. */
     public static ExchangeGateway create(String id, ExchangeConfig ec, TradingSettings settings) {
         return switch (id) {
             case "binance" -> new BinanceExchange(ec, settings);

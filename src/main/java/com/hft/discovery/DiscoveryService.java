@@ -15,36 +15,63 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 public final class DiscoveryService {
 
+    /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(DiscoveryService.class);
 
+    /** Источники сводок бирж. */
     private final List<MarketSource> sources;
+    /** Профили стратегий. */
     private final List<StrategyProfile> profiles;
+    /** Период пересчёта, мин. */
     private final long refreshMinutes;
+    /** Пересчёт идёт. */
     private final AtomicBoolean running = new AtomicBoolean();
+    /** Поток пересчёта по расписанию (демон). */
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "discovery");
         t.setDaemon(true);
         return t;
     });
+    /** Результат последнего пересчёта. */
     private volatile Map<String, Object> last = Map.of("status", "ещё не запускался");
+    /** Расписание запущено. */
     private volatile boolean started;
 
+    /**
+     * @param sources источники сводок
+     * @param profiles профили стратегий
+     * @param refreshMinutes период пересчёта, мин
+     */
     public DiscoveryService(List<MarketSource> sources, List<StrategyProfile> profiles, long refreshMinutes) {
         this.sources = sources;
         this.profiles = profiles;
         this.refreshMinutes = refreshMinutes;
     }
 
-    /** По умолчанию: все биржи из MarketSources (или DISCOVERY_EXCHANGES), три профиля стратегий. */
-    public static DiscoveryService createDefault(java.util.function.Function<String, MeanReversionBacktest.Params> mrParams) {
-        String env = System.getenv("DISCOVERY_EXCHANGES");
-        List<String> ids = env == null || env.isBlank() ? MarketSources.supported() : Arrays.stream(env.split(",")).map(String::trim).toList();
+    /**
+     * Подбор по настройкам процесса: биржи (discoveryExchanges, пусто — все с источником сводок),
+     * котируемые валюты, период пересчёта, бюджет свечей и пороги профилей.
+     *
+     * @param mrParams параметры бэктеста возврата к среднему для биржи (null — по умолчанию)
+     * @param g        настройки процесса
+     */
+    public static DiscoveryService createDefault(java.util.function.Function<String, MeanReversionBacktest.Params> mrParams,
+                                                 com.hft.config.GlobalParams g) {
+        MarketSources.setQuotes(Arrays.stream(g.discoveryQuotes().split(",")).map(String::trim).filter(q -> !q.isEmpty()).toList());
+        List<String> ids = g.discoveryExchanges().isBlank() ? MarketSources.supported()
+                : Arrays.stream(g.discoveryExchanges().split(",")).map(String::trim).toList();
         List<MarketSource> src = new ArrayList<>();
         for (String id : ids) MarketSources.create(id).ifPresent(src::add);
-        long every = (long) Profiles.envD("DISCOVERY_REFRESH_MIN", 15);
-        return new DiscoveryService(src, List.of(new Profiles.MeanReversion(mrParams), new Profiles.CrossExchange(), new Profiles.SpreadCapture()), every);
+        DiscoveryService d = new DiscoveryService(src, List.of(new Profiles.MeanReversion(mrParams, g), new Profiles.CrossExchange(g),
+                new Profiles.SpreadCapture(g)), g.discoveryRefreshMin());
+        d.klineBudget = g.discoveryKlineBudget();
+        return d;
     }
 
+    /** Сколько запросов свечей на биржу за один пересчёт. */
+    private volatile int klineBudget = 12;
+
+    /** Запустить пересчёт сейчас и далее по расписанию. */
     public synchronized void start() {
         if (started) return;
         started = true;
@@ -52,6 +79,7 @@ public final class DiscoveryService {
         log.info("Подбор тикеров: {} бирж, обновление раз в {} мин", sources.size(), refreshMinutes);
     }
 
+    /** Остановить расписание. */
     public void stop() { scheduler.shutdownNow(); }
 
     /** Запустить пересчёт сейчас (в фоне). false — уже идёт. */
@@ -61,8 +89,10 @@ public final class DiscoveryService {
         return true;
     }
 
+    /** Пересчёт идёт. */
     public boolean isRunning() { return running.get(); }
 
+    /** Результат последнего пересчёта и признак «идёт». */
     public Map<String, Object> result() {
         Map<String, Object> m = new LinkedHashMap<>(last);
         m.put("running", running.get());
@@ -108,7 +138,7 @@ public final class DiscoveryService {
 
             Map<String, Integer> budget = new ConcurrentHashMap<>();
             Map<String, double[]> cache = new ConcurrentHashMap<>();
-            int perExchangeBudget = (int) Profiles.envD("DISCOVERY_KLINE_BUDGET", 12);
+            int perExchangeBudget = klineBudget;
             StrategyProfile.ClosesProvider closes = (t, limit) -> {
                 String key = t.exchange() + ":" + t.symbol();
                 double[] c = cache.get(key);

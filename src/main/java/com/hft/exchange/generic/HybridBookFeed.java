@@ -21,14 +21,22 @@ import java.util.function.Consumer;
  */
 public final class HybridBookFeed implements BookFeed {
 
+    /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(HybridBookFeed.class);
 
+    /** Описание биржи из каталога. */
     private final ExchangeInfo info;
+    /** WebSocket — основной источник. */
     private final WsBookFeed ws;
+    /** REST-опрос — запасной. */
     private final PollingBookFeed poll;
+    /** Сколько ждать восстановления WS перед включением опроса, мс. */
     private volatile long graceMs = 2_000;
+    /** Фид запущен. */
     private volatile boolean running;
+    /** С какого момента WS не работает (0 — работает). */
     private volatile long wsDownSince;
+    /** Поток, переключающий WS и опрос. */
     private Thread supervisor;
 
     public HybridBookFeed(ExchangeInfo info, ExchangeConfig cfg, WsDialect wsDialect, BookDialect restDialect,
@@ -38,6 +46,7 @@ public final class HybridBookFeed implements BookFeed {
                 new PollingBookFeed(info, cfg, restDialect, market, onTick, onBook, onGiveUp));
     }
 
+    /** Собрать из готовых WS- и REST-фидов (тесты). */
     HybridBookFeed(ExchangeInfo info, WsBookFeed ws, PollingBookFeed poll) {
         this.info = info;
         this.ws = ws;
@@ -45,11 +54,20 @@ public final class HybridBookFeed implements BookFeed {
         ws.onStateChange(this::wake);            // обрыв/подключение WS — переключаемся сразу, а не по таймеру
     }
 
+    /** Монитор для пробуждения супервизора. */
     private final Object signal = new Object();
 
+    /** Разбудить супервизор. */
     private void wake() { synchronized (signal) { signal.notifyAll(); } }
 
+    /** Сколько ждать восстановления WS перед включением опроса, мс. */
     public HybridBookFeed grace(long ms) { this.graceMs = ms; return this; }
+
+    /** WebSocket-половина (для настройки таймаутов). */
+    WsBookFeed ws() { return ws; }
+
+    /** REST-половина (для настройки паузы после 429). */
+    PollingBookFeed poll() { return poll; }
 
     @Override public synchronized void start() {
         if (running) return;
@@ -71,6 +89,7 @@ public final class HybridBookFeed implements BookFeed {
         wake();
     }
 
+    /** Включать опрос, пока WS не работает дольше grace или сдался; выключать, когда WS вернулся. */
     private void supervise() {
         boolean pollingOn = false;
         while (running) {

@@ -37,20 +37,34 @@ import java.util.concurrent.CopyOnWriteArrayList;
  */
 public final class BybitMarketDataFeed extends AbstractWsFeed {
 
+    /** Подключение и параметры биржи. */
     private final ExchangeConfig config;
+    /** Куда записываются стаканы. */
     private final MarketDataStore store;
+    /** Конвейер, куда уходят сделки. */
     private final TickPipeline pipeline;
+    /** Время разбора сообщения. */
     private final Latency parseLatency = new Latency("[bybit] Парсинг сообщения");
 
+    /** Буфер публикации верха стакана. */
     private final double[] bidPrices;
+    /** Буфер публикации верха стакана. */
     private final double[] bidQtys;
+    /** Буфер публикации верха стакана. */
     private final double[] askPrices;
+    /** Буфер публикации верха стакана. */
     private final double[] askQtys;
 
+    /** Символы подписки. */
     private final List<String> activeSymbols;
     /** Локальный стакан каждого символа — пишет только поток WS. */
     private final Map<String, LocalBook> localBooks = new ConcurrentHashMap<>();
 
+    /**
+     * @param config подключение и параметры
+     * @param store рыночные данные
+     * @param pipeline конвейер тиков
+     */
     public BybitMarketDataFeed(ExchangeConfig config, MarketDataStore store, TickPipeline pipeline) {
         this.config = config;
         this.store = store;
@@ -63,14 +77,17 @@ public final class BybitMarketDataFeed extends AbstractWsFeed {
         this.askQtys = new double[d];
     }
 
+    /** Имя для логов и бюджета лимитов. */
     @Override
     protected String name() { return "bybit"; }
 
+    /** Адрес WebSocket (у Binance — с подпиской на потоки в URL). */
     @Override
     protected URI buildUri() throws Exception {
         return new URI(config.wsUrl());
     }
 
+    /** После рукопожатия — подписаться на сделки и стаканы. */
     @Override
     protected void onHandshakeComplete(Channel channel) {
         StringBuilder args = new StringBuilder();
@@ -84,6 +101,7 @@ public final class BybitMarketDataFeed extends AbstractWsFeed {
         log.info("[bybit] Отправлена подписка на {} символов", activeSymbols.size());
     }
 
+    /** Глубина подписки, которую поддерживает биржа. */
     private String depthParam() {
         int d = config.bookDepth();
         if (d <= 1) return "1";
@@ -94,10 +112,13 @@ public final class BybitMarketDataFeed extends AbstractWsFeed {
 
     // Разбор одного сообщения — только поток WS
     private String msgSymbol;
+    /** Сообщение — снимок / в нём стакан. */
     private boolean snapshot, hasBook;
+    /** Номер обновления стакана. */
     private long updateId;
     // изменения уровней из сообщения: применяются после разбора, когда известен type
     private double[] lbp = new double[64], lbq = new double[64], lap = new double[64], laq = new double[64];
+    /** Уровней бидов и асков в сообщении. */
     private int lbn, lan;
 
     /** Потоковый разбор без дерева узлов; сделки публикуются по мере чтения массива data. */
@@ -126,6 +147,7 @@ public final class BybitMarketDataFeed extends AbstractWsFeed {
         }
     }
 
+    /** Сделки из массива data — сразу в конвейер. */
     private void parseTrades(JsonParser p, long receivedNanos) throws IOException {
         while (p.nextToken() == JsonToken.START_OBJECT) {
             String symbol = null;
@@ -148,6 +170,7 @@ public final class BybitMarketDataFeed extends AbstractWsFeed {
         }
     }
 
+    /** Стакан из объекта data. */
     private void parseBook(JsonParser p) throws IOException {
         hasBook = true;
         while (p.nextToken() == JsonToken.FIELD_NAME) {
@@ -163,6 +186,7 @@ public final class BybitMarketDataFeed extends AbstractWsFeed {
         }
     }
 
+    /** Уровни в буферы сообщения; возвращает их число. */
     private int levels(JsonParser p, boolean bid) throws IOException {
         if (p.currentToken() != JsonToken.START_ARRAY) { p.skipChildren(); return 0; }
         int n = 0;
@@ -182,6 +206,7 @@ public final class BybitMarketDataFeed extends AbstractWsFeed {
         return n;
     }
 
+    /** Снимок заменяет, изменения правят локальный стакан; верх публикуется. */
     private void applyBook() {
         OrderBook book = store.book(msgSymbol);
         if (book == null) return;
@@ -207,6 +232,8 @@ public final class BybitMarketDataFeed extends AbstractWsFeed {
         return null;
     }
 
+    /** Символы подписки. */
     public List<String> activeSymbols() { return List.copyOf(activeSymbols); }
+    /** Время разбора сообщения. */
     public Latency parseLatency() { return parseLatency; }
 }

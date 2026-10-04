@@ -38,17 +38,31 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class BybitRestClient implements ExchangeOrderApi {
 
+    /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(BybitRestClient.class);
 
+    /** REST-адрес. */
     private final String baseUrl;
+    /** API-ключи. */
     private final Credentials credentials;
+    /** Окно годности подписи, мс. */
     private final int recvWindow;
+    /** HTTP/2-клиент. */
     private final HttpClient http;
+    /** Разбор JSON. */
     private final ObjectMapper mapper = new ObjectMapper();
+    /** Подпись HMAC-SHA256. */
     private final Signer signer;
+    /** Правила символов. */
     private final SymbolFilters filters;
+    /** Счётчик для orderLinkId. */
     private final AtomicLong clientOrderSeq = new AtomicLong(System.currentTimeMillis());
 
+    /**
+     * @param config подключение и параметры биржи
+     * @param credentials ключи из окружения
+     * @param filters правила символов
+     */
     public BybitRestClient(ExchangeConfig config, Credentials credentials, SymbolFilters filters) {
         this.baseUrl = config.restUrl();
         this.credentials = credentials;
@@ -63,6 +77,7 @@ public final class BybitRestClient implements ExchangeOrderApi {
 
     // ======================= ПУБЛИЧНЫЕ =======================
 
+    /** Последняя цена символа (для оценки рыночного ордера). */
     public double price(String symbol) throws Exception {
         JsonNode json = getPublic("/v5/market/tickers?category=spot&symbol=" + symbol.toUpperCase());
         return json.get("result").get("list").get(0).get("lastPrice").asDouble();
@@ -100,6 +115,7 @@ public final class BybitRestClient implements ExchangeOrderApi {
 
     // ======================= БАЛАНСЫ =======================
 
+    /** Загрузить балансы. */
     public void loadBalances(com.hft.store.BalanceStore store) throws Exception {
         credentials.require();
         JsonNode json = getSigned("/v5/account/wallet-balance", "accountType=UNIFIED");
@@ -121,14 +137,17 @@ public final class BybitRestClient implements ExchangeOrderApi {
 
     // ======================= ОРДЕРА =======================
 
+    /** Лимитная покупка. */
     public OrderResult buyLimit(String symbol, double qty, double price, TimeInForce tif) throws Exception {
         return placeOrder(symbol, Side.BUY, Type.LIMIT, qty, price, tif, false);
     }
 
+    /** Лимитная продажа. */
     public OrderResult sellLimit(String symbol, double qty, double price, TimeInForce tif) throws Exception {
         return placeOrder(symbol, Side.SELL, Type.LIMIT, qty, price, tif, false);
     }
 
+    /** Рыночная покупка qty базовой валюты. */
     public OrderResult buyMarket(String symbol, double qty) throws Exception {
         return placeOrder(symbol, Side.BUY, Type.MARKET, qty, 0, null, false);
     }
@@ -142,6 +161,7 @@ public final class BybitRestClient implements ExchangeOrderApi {
         return placeOrder(symbol, Side.BUY, Type.MARKET, quoteAmount, 0, null, true);
     }
 
+    /** Рыночная продажа qty базовой валюты. */
     public OrderResult sellMarket(String symbol, double qty) throws Exception {
         return placeOrder(symbol, Side.SELL, Type.MARKET, qty, 0, null, false);
     }
@@ -191,6 +211,7 @@ public final class BybitRestClient implements ExchangeOrderApi {
                 qtyIsQuote ? 0 : roundedQty, 0, 0, latency);
     }
 
+    /** Время жизни в формате Bybit. */
     private static String bybitTif(TimeInForce tif) {
         if (tif == null) return "GTC";
         return switch (tif) {
@@ -200,6 +221,7 @@ public final class BybitRestClient implements ExchangeOrderApi {
         };
     }
 
+    /** Отменить ордер. */
     public void cancelOrder(String symbol, long orderId) throws Exception {
         credentials.require();
         String body = String.format(
@@ -209,6 +231,7 @@ public final class BybitRestClient implements ExchangeOrderApi {
         log.info("[bybit] Ордер {} по {} отменён", orderId, symbol);
     }
 
+    /** Отменить все открытые ордера символа; возвращает их число. */
     public int cancelAll(String symbol) throws Exception {
         credentials.require();
         String body = String.format("{\"category\":\"spot\",\"symbol\":\"%s\"}", symbol.toUpperCase());
@@ -219,6 +242,7 @@ public final class BybitRestClient implements ExchangeOrderApi {
         return count;
     }
 
+    /** Статус ордера: из WS-потока, если есть, иначе запрос к бирже. */
     public OrderResult orderStatus(String symbol, long orderId) throws Exception {
         credentials.require();
         String query = "category=spot&symbol=" + symbol.toUpperCase() + "&orderId=" + orderId;
@@ -236,6 +260,7 @@ public final class BybitRestClient implements ExchangeOrderApi {
                 symbol.toUpperCase(), side, status, origQty, execQty, avgPrice, 0);
     }
 
+    /** Статус Bybit в наш (NEW, PARTIALLY_FILLED, FILLED, CANCELED, REJECTED). */
     private static String mapBybitStatus(String bybitStatus) {
         return switch (bybitStatus) {
             case "New" -> "NEW";
@@ -254,6 +279,7 @@ public final class BybitRestClient implements ExchangeOrderApi {
     // Подпись передаётся в заголовке X-BAPI-SIGN, а не в самом запросе —
     // этим и отличается от Binance, где подпись — часть query/body.
 
+    /** Публичный GET. */
     private JsonNode getPublic(String path) throws Exception {
         HttpRequest req = HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl + path))
@@ -263,6 +289,7 @@ public final class BybitRestClient implements ExchangeOrderApi {
         return send(req);
     }
 
+    /** Подписанный GET. */
     private JsonNode getSigned(String path, String query) throws Exception {
         long ts = System.currentTimeMillis();
         String payload = ts + credentials.apiKey() + recvWindow + query;
@@ -280,6 +307,7 @@ public final class BybitRestClient implements ExchangeOrderApi {
         return send(req);
     }
 
+    /** Подписанный POST с JSON. */
     private JsonNode postSigned(String path, String jsonBody) throws Exception {
         long ts = System.currentTimeMillis();
         String payload = ts + credentials.apiKey() + recvWindow + jsonBody;
@@ -301,6 +329,7 @@ public final class BybitRestClient implements ExchangeOrderApi {
     /** Общий бюджет запросов Bybit: X-Bapi-Limit-Status / Reset-Timestamp подтягивают счёт к счёту биржи. */
     private final RateBudget budget = RateBudget.of("bybit");
 
+    /** Отправить с учётом общего бюджета лимитов; retCode ≠ 0 — ExchangeException. */
     private JsonNode send(HttpRequest req) throws Exception {
         String path = req.uri().getPath();
         boolean order = path.startsWith("/v5/order/create") || path.startsWith("/v5/order/cancel");
@@ -320,15 +349,23 @@ public final class BybitRestClient implements ExchangeOrderApi {
 
     /** retCode 10006 — rate limit у Bybit. */
     public static final class ExchangeException extends RuntimeException implements RateLimited {
+        /** HTTP-код. */
         private final int httpStatus;
+        /** Код ошибки Bybit. */
         private final int retCode;
 
+        /**
+         * @param httpStatus HTTP-код
+         * @param retCode код ошибки Bybit
+         * @param message текст ошибки
+         */
         public ExchangeException(int httpStatus, int retCode, String message) {
             super("HTTP " + httpStatus + " retCode " + retCode + ": " + message);
             this.httpStatus = httpStatus;
             this.retCode = retCode;
         }
 
+        /** retCode 10006 или HTTP 429 — превышен лимит. */
         @Override
         public boolean isRateLimit() {
             return retCode == 10006 || httpStatus == 429;

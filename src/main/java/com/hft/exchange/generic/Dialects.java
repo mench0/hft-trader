@@ -24,11 +24,20 @@ import java.util.Map;
  */
 public final class Dialects {
 
+    /** Утилитный класс — экземпляры не создаются. */
     private Dialects() {}
 
+    /** Сборка и разбор JSON (только для редких сообщений; стакан — потоково). */
     private static final ObjectMapper JSON = new ObjectMapper();
+    /** Таймаут REST-запроса стакана. */
     private static final Duration TIMEOUT = Duration.ofSeconds(3);
 
+    /** Диалект биржи с её параметрами (для Uniswap — пулы из uniPools). */
+    public static BookDialect forExchange(String id, com.hft.config.ExchangeConfig cfg) {
+        return id.equals("uniswapv2") ? new UniswapV2(cfg.params().uniPools()) : forExchange(id);
+    }
+
+    /** Диалект REST-стакана биржи (без параметров: для Uniswap пулы пусты). */
     public static BookDialect forExchange(String id) {
         return switch (id) {
             case "okx" -> new Okx();
@@ -38,7 +47,7 @@ public final class Dialects {
             case "lbank" -> new Lbank();
             case "hyperliquid" -> new Hyperliquid();
             case "dydx" -> new Dydx();
-            case "uniswapv2" -> new UniswapV2();
+            case "uniswapv2" -> new UniswapV2("");
             case "kucoin" -> new Kucoin();
             case "aster" -> new Aster();
             default -> throw new IllegalArgumentException("Нет диалекта для биржи: " + id);
@@ -47,12 +56,15 @@ public final class Dialects {
 
     // ---------------------------------------------------------------- helpers
 
+    /** GET с таймаутом и Accept: application/json. */
     private static HttpRequest get(String url) {
         return HttpRequest.newBuilder(URI.create(url)).timeout(TIMEOUT)
                 .header("Accept", "application/json").GET().build();
     }
 
+    /** Базовая валюта символа. */
     private static String base(String symbol) { return BalanceStore.baseAsset(symbol); }
+    /** Котируемая валюта символа. */
     private static String quote(String symbol) { return BalanceStore.quoteAsset(symbol); }
 
     /** Уровни из массива: либо [[px, qty, ...]], либо [{pxKey:..., qtyKey:...}]. */
@@ -77,19 +89,23 @@ public final class Dialects {
         return new double[][]{p, q};
     }
 
+    /** Стакан из отсортированных уровней. */
     private static ParsedBook book(double[][] bids, double[][] asks, long ts) {
         return new ParsedBook(bids[0], bids[1], asks[0], asks[1], ts);
     }
 
+    /** Сколько уровней стакана берётся из REST-ответа. */
     private static final int MAX = 50;
 
     // -------------------------------------------------------------------- CEX
 
     /** GET /api/v5/market/books?instId=BTC-USDT&sz=20 -> {"code":"0","data":[{asks,bids,ts}]} */
     static final class Okx implements BookDialect {
+        /** Запрос стакана символа. */
         public HttpRequest request(String b, String s, int d) {
             return get(b + "/api/v5/market/books?instId=" + base(s) + "-" + quote(s) + "&sz=" + Math.min(d, 400));
         }
+        /** Разобрать ответ в стакан; ошибка биржи — исключение. */
         public ParsedBook parse(String body, String s) throws Exception {
             JsonNode r = JSON.readTree(body);
             if (!"0".equals(r.path("code").asText())) throw new IllegalStateException("OKX: " + body);
@@ -101,9 +117,11 @@ public final class Dialects {
 
     /** GET /api/v3/depth?symbol=BTCUSDT&limit=20 -> {lastUpdateId,bids,asks} */
     static final class Mexc implements BookDialect {
+        /** Запрос стакана символа. */
         public HttpRequest request(String b, String s, int d) {
             return get(b + "/api/v3/depth?symbol=" + s + "&limit=" + Math.min(d, 100));
         }
+        /** Разобрать ответ в стакан; ошибка биржи — исключение. */
         public ParsedBook parse(String body, String s) throws Exception {
             JsonNode r = JSON.readTree(body);
             return book(levels(r.get("bids"), null, null, true, MAX),
@@ -113,9 +131,11 @@ public final class Dialects {
 
     /** GET /api/v1/market/orderbook/level2_20?symbol=BTC-USDT -> {code:"200000",data:{time,bids,asks}} */
     static final class Kucoin implements BookDialect {
+        /** Запрос стакана символа. */
         public HttpRequest request(String b, String s, int d) {
             return get(b + "/api/v1/market/orderbook/" + (d <= 20 ? "level2_20" : "level2_100") + "?symbol=" + base(s) + "-" + quote(s));
         }
+        /** Разобрать ответ в стакан; ошибка биржи — исключение. */
         public ParsedBook parse(String body, String s) throws Exception {
             JsonNode r = JSON.readTree(body);
             if (!"200000".equals(r.path("code").asText())) throw new IllegalStateException("KuCoin: " + body);
@@ -127,10 +147,12 @@ public final class Dialects {
 
     /** Aster спот: GET /api/v3/depth?symbol=BTCUSDT&limit=20 -> {lastUpdateId,E?,bids,asks} (формат Binance) */
     static final class Aster implements BookDialect {
+        /** Запрос стакана символа. */
         public HttpRequest request(String b, String s, int d) {
             int limit = d <= 5 ? 5 : d <= 10 ? 10 : d <= 20 ? 20 : d <= 50 ? 50 : 100;
             return get(b + "/api/v3/depth?symbol=" + s + "&limit=" + limit);
         }
+        /** Разобрать ответ в стакан; ошибка биржи — исключение. */
         public ParsedBook parse(String body, String s) throws Exception {
             JsonNode r = JSON.readTree(body);
             if (r.has("code") && r.path("code").asInt(0) < 0) throw new IllegalStateException("Aster: " + body);
@@ -141,9 +163,11 @@ public final class Dialects {
 
     /** GET /api/v4/spot/order_book?currency_pair=BTC_USDT&limit=20 -> {current(ms),asks,bids} */
     static final class Gate implements BookDialect {
+        /** Запрос стакана символа. */
         public HttpRequest request(String b, String s, int d) {
             return get(b + "/api/v4/spot/order_book?currency_pair=" + base(s) + "_" + quote(s) + "&limit=" + Math.min(d, 100));
         }
+        /** Разобрать ответ в стакан; ошибка биржи — исключение. */
         public ParsedBook parse(String body, String s) throws Exception {
             JsonNode r = JSON.readTree(body);
             return book(levels(r.get("bids"), null, null, true, MAX),
@@ -153,9 +177,11 @@ public final class Dialects {
 
     /** GET /openApi/spot/v1/market/depth?symbol=BTC-USDT&limit=20 -> {code:0,data:{bids,asks,ts}} */
     static final class Bingx implements BookDialect {
+        /** Запрос стакана символа. */
         public HttpRequest request(String b, String s, int d) {
             return get(b + "/openApi/spot/v1/market/depth?symbol=" + base(s) + "-" + quote(s) + "&limit=" + Math.min(d, 100));
         }
+        /** Разобрать ответ в стакан; ошибка биржи — исключение. */
         public ParsedBook parse(String body, String s) throws Exception {
             JsonNode r = JSON.readTree(body);
             if (r.path("code").asInt(-1) != 0) throw new IllegalStateException("BingX: " + body);
@@ -167,9 +193,11 @@ public final class Dialects {
 
     /** GET /v2/depth.do?symbol=btc_usdt&size=20 -> {result:"true",data:{asks,bids,timestamp}} */
     static final class Lbank implements BookDialect {
+        /** Запрос стакана символа. */
         public HttpRequest request(String b, String s, int d) {
             return get(b + "/v2/depth.do?symbol=" + (base(s) + "_" + quote(s)).toLowerCase() + "&size=" + Math.min(d, 60));
         }
+        /** Разобрать ответ в стакан; ошибка биржи — исключение. */
         public ParsedBook parse(String body, String s) throws Exception {
             JsonNode r = JSON.readTree(body);
             if (!"true".equalsIgnoreCase(r.path("result").asText())) throw new IllegalStateException("LBank: " + body);
@@ -183,12 +211,14 @@ public final class Dialects {
 
     /** POST /info {"type":"l2Book","coin":"BTC"} -> {time, levels:[[bids],[asks]]}, уровни {px,sz,n} */
     static final class Hyperliquid implements BookDialect {
+        /** Запрос стакана символа. */
         public HttpRequest request(String b, String s, int d) {
             String body = "{\"type\":\"l2Book\",\"coin\":\"" + base(s) + "\"}";
             return HttpRequest.newBuilder(URI.create(b + "/info")).timeout(TIMEOUT)
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(body)).build();
         }
+        /** Разобрать ответ в стакан; ошибка биржи — исключение. */
         public ParsedBook parse(String body, String s) throws Exception {
             JsonNode r = JSON.readTree(body);
             JsonNode lv = r.get("levels");
@@ -200,9 +230,11 @@ public final class Dialects {
 
     /** GET /v4/orderbooks/perpetualMarket/BTC-USD -> {bids:[{price,size}], asks:[...]} */
     static final class Dydx implements BookDialect {
+        /** Запрос стакана символа. */
         public HttpRequest request(String b, String s, int d) {
             return get(b + "/v4/orderbooks/perpetualMarket/" + base(s) + "-" + quote(s));
         }
+        /** Разобрать ответ в стакан; ошибка биржи — исключение. */
         public ParsedBook parse(String body, String s) throws Exception {
             JsonNode r = JSON.readTree(body);
             return book(levels(r.get("bids"), "price", "size", true, MAX),
@@ -214,19 +246,22 @@ public final class Dialects {
 
     /**
      * Пул Uniswap V2: читаем getReserves() через eth_call и строим синтетический
-     * стакан по формуле x*y=k. Пулы задаются переменной окружения
-     * UNISWAPV2_POOLS="WETHUSDC=0xPAIR:true:18:6;WBTCUSDC=0x...:false:8:6", где
+     * стакан по формуле x*y=k. Пулы задаются параметром биржи uniPools
+     * "WETHUSDC=0xPAIR:true:18:6;WBTCUSDC=0x...:false:8:6", где
      * поля — адрес пары, base это token0?, decimals base, decimals quote.
      * Газ и MEV не учитываются: это только оценка цены.
      */
     static final class UniswapV2 implements BookDialect {
+        /** Пул: адрес пары, база — token0, десятичные базы и котируемой. */
         record Pool(String pair, boolean baseIsToken0, int decBase, int decQuote) {}
+        /** Комиссия пула Uniswap V2 (0.3%) — учитывается в ценах синтетического стакана. */
         private static final double FEE = 0.003;
+        /** Уровней синтетического стакана на сторону. */
         private static final int STEPS = 10;
+        /** Пулы по тикеру. */
         final Map<String, Pool> pools = new HashMap<>();
 
-        UniswapV2() { this(System.getenv("UNISWAPV2_POOLS")); }
-
+        /** @param raw пулы из параметра uniPools (пусто — нет пулов) */
         UniswapV2(String raw) {
             if (raw == null || raw.isBlank()) return;
             for (String item : raw.split(";")) {
@@ -237,9 +272,10 @@ public final class Dialects {
             }
         }
 
+        /** Запрос стакана символа. */
         public HttpRequest request(String b, String s, int d) {
             Pool p = pools.get(s.toUpperCase());
-            if (p == null) throw new IllegalArgumentException("Нет пула для " + s + " в UNISWAPV2_POOLS");
+            if (p == null) throw new IllegalArgumentException("Нет пула для " + s + " в параметре uniPools");
             String body = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"eth_call\",\"params\":[{\"to\":\""
                     + p.pair + "\",\"data\":\"0x0902f1ac\"},\"latest\"]}";
             return HttpRequest.newBuilder(URI.create(b)).timeout(TIMEOUT)
@@ -247,6 +283,7 @@ public final class Dialects {
                     .POST(HttpRequest.BodyPublishers.ofString(body)).build();
         }
 
+        /** Разобрать ответ в стакан; ошибка биржи — исключение. */
         public ParsedBook parse(String body, String s) throws Exception {
             Pool p = pools.get(s.toUpperCase());
             JsonNode r = JSON.readTree(body);
