@@ -32,7 +32,7 @@ public final class MexcRestClient extends SignedCexClient {
     private static final Logger log = LoggerFactory.getLogger(MexcRestClient.class);
 
     public MexcRestClient(ExchangeConfig config, Credentials credentials, SymbolFilters filters) {
-        super("mexc", config, credentials, filters, 5, 4);
+        super("mexc", config, credentials, filters);
     }
 
     // ------------------------------------------------------------ HTTP

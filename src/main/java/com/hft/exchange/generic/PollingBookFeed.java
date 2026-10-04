@@ -8,6 +8,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.net.http.HttpClient;
+import com.hft.rest.ApiException;
+import com.hft.rest.RateBudget;
+import com.hft.rest.RateLimits;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
@@ -44,6 +47,8 @@ public final class PollingBookFeed implements BookFeed {
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build();
     private final List<String> symbols = new CopyOnWriteArrayList<>();
     private final long minGapNanos;
+    /** Общий бюджет биржи: опрос не должен съесть лимит, нужный торговому клиенту. */
+    private final RateBudget budget;
 
     private volatile boolean running;
     private volatile boolean gaveUp;
@@ -72,6 +77,7 @@ public final class PollingBookFeed implements BookFeed {
         this.onGiveUp = onGiveUp;
         this.symbols.addAll(cfg.symbols());
         this.minGapNanos = (long) (1_000_000_000d / Math.max(0.1, info.maxRequestsPerSec()));
+        this.budget = RateBudget.of(info.id());
     }
 
     private volatile boolean paused;
@@ -127,7 +133,7 @@ public final class PollingBookFeed implements BookFeed {
                 boolean anyOk = false;
                 for (String s : symbols) {                 // итератор CopyOnWriteArrayList — снимок без копирования
                     if (!running) break;
-                    long wait = blockedUntilMs - System.currentTimeMillis();
+                    long wait = Math.max(blockedUntilMs - System.currentTimeMillis(), budget.blockedForMs());
                     if (wait > 0) { Thread.sleep(Math.min(wait, 1000)); break; }
                     paceRequests();
                     anyOk |= pollOne(s);
@@ -157,8 +163,12 @@ public final class PollingBookFeed implements BookFeed {
         long t0 = System.nanoTime();
         try {
             HttpRequest req = dialect.request(cfg.restUrl().isBlank() ? info.restUrl() : cfg.restUrl(), symbol, cfg.bookDepth());
+            double weight = "hyperliquid".equals(info.id()) ? 2            // l2Book у Hyperliquid весит 2
+                    : RateLimits.weight(info.id(), req.method(), req.uri().getPath(), req.uri().getRawQuery());
+            budget.acquire(RateBudget.Kind.PUBLIC, weight, 5_000);
             requests.incrementAndGet();
             HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
+            budget.onResponse(resp.statusCode(), resp.headers());
             long dt = System.nanoTime() - t0;
             totalLatencyNanos.addAndGet(dt);
             maxLatencyNanos.accumulateAndGet(dt, Math::max);
@@ -188,6 +198,10 @@ public final class PollingBookFeed implements BookFeed {
             return true;
         } catch (InterruptedException e) {
             throw e;
+        } catch (ApiException e) {
+            if (!"LOCAL".equals(e.code())) throw e;
+            lastError = e.getMessage();                 // свой бюджет исчерпан — это не ошибка биржи
+            return true;
         } catch (Exception e) {
             errors.incrementAndGet();
             lastError = e.getClass().getSimpleName() + ": " + e.getMessage();

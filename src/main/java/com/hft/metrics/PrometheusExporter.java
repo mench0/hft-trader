@@ -27,6 +27,7 @@ public final class PrometheusExporter {
         StringBuilder sb = new StringBuilder(4096);
 
         jvm(sb);
+        rateBudgets(sb);
 
         help(sb, "hft_connected", "1 если WebSocket-соединение с биржей активно");
         help(sb, "hft_trading_enabled", "1 если торговля на бирже включена в параметрах");
@@ -106,6 +107,29 @@ public final class PrometheusExporter {
         sb.append("hft_jvm_gc_seconds_total ").append(gcMillis / 1000.0).append('\n');
         help(sb, "hft_jvm_threads", "Живых потоков");
         sb.append("hft_jvm_threads ").append(java.lang.management.ManagementFactory.getThreadMXBean().getThreadCount()).append('\n');
+    }
+
+    /** Лимиты запросов: заполненность каждого ведра, ответы «слишком часто», отказы своего бюджета, пауза. */
+    private void rateBudgets(StringBuilder sb) {
+        var all = com.hft.rest.RateBudget.all();
+        if (all.isEmpty()) return;
+        help(sb, "hft_rate_used_ratio", "Заполненность ведра лимита запросов (1 = исчерпан наш запас 80% от лимита биржи)");
+        counter(sb, "hft_rate_limited_total", "Ответов биржи о превышении лимита (429/418/403 и коды лимита)");
+        counter(sb, "hft_rate_local_rejects_total", "Запросов, не отправленных из-за исчерпанного своего бюджета");
+        counter(sb, "hft_rate_waited_ms_total", "Суммарное ожидание в очереди лимита, мс");
+        help(sb, "hft_rate_blocked_ms", "Сколько ещё мс запросы к бирже приостановлены");
+        for (var e : new java.util.TreeMap<>(all).entrySet()) {
+            String ex = e.getKey();
+            var b = e.getValue();
+            for (var bucket : b.buckets()) {
+                sb.append("hft_rate_used_ratio{exchange=\"").append(ex).append("\",bucket=\"").append(bucket.get("name")).append("\"} ")
+                  .append(formatNumber((Double) bucket.get("usedRatio"))).append('\n');
+            }
+            line(sb, "hft_rate_limited_total", ex, b.rateLimitedResponses());
+            line(sb, "hft_rate_local_rejects_total", ex, b.localRejects());
+            line(sb, "hft_rate_waited_ms_total", ex, b.waitedMs());
+            line(sb, "hft_rate_blocked_ms", ex, b.blockedForMs());
+        }
     }
 
     private void help(StringBuilder sb, String name, String description) {

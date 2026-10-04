@@ -49,8 +49,10 @@ public abstract class SignedCexClient implements ExchangeOrderApi {
     protected final SymbolFilters filters;
     protected final ExchangeConfig config;
     protected final ObjectMapper mapper = new ObjectMapper();
-    protected final PacedLimiter callLimiter;
-    protected final PacedLimiter orderLimiter;
+    /** Общий бюджет запросов биржи (один на процесс, его же тратят фид и подбор тикеров). */
+    protected final RateBudget budget;
+    protected final RateBudget.Lane callLimiter;
+    protected final RateBudget.Lane orderLimiter;
 
     /** Сколько последних ордеров помнить: состояния и соответствие id. Старые вытесняются, иначе карты росли бы всё время работы. */
     protected static final int MAX_TRACKED_ORDERS = 10_000;
@@ -82,15 +84,15 @@ public abstract class SignedCexClient implements ExchangeOrderApi {
     };
     private final AtomicLong idSeq = new AtomicLong();
 
-    protected SignedCexClient(String exchangeId, ExchangeConfig config, Credentials credentials, SymbolFilters filters,
-                              double callsPerSec, double ordersPerSec) {
+    protected SignedCexClient(String exchangeId, ExchangeConfig config, Credentials credentials, SymbolFilters filters) {
         this.exchangeId = exchangeId;
         this.config = config;
         this.baseUrl = config.restUrl();
         this.credentials = credentials;
         this.filters = filters;
-        this.callLimiter = new PacedLimiter(callsPerSec, 2000);
-        this.orderLimiter = new PacedLimiter(ordersPerSec, 1000);
+        this.budget = RateBudget.of(exchangeId);
+        this.callLimiter = budget.lane(RateBudget.Kind.PRIVATE, 2000);
+        this.orderLimiter = budget.lane(RateBudget.Kind.ORDER, 1000);
     }
 
     // ------------------------------------------------------------ для наследников
@@ -232,9 +234,10 @@ public abstract class SignedCexClient implements ExchangeOrderApi {
 
     /** Выполнить запрос с лимитером, метриками и разбором ошибок. order=true — считается в лимит ордеров. */
     protected JsonNode exec(HttpRequest request, boolean order) throws Exception {
-        // ордера и фоновые запросы (статусы, балансы, правила) — разные лимитеры:
-        // синхронизация баланса не должна задерживать ордер
-        if (order) orderLimiter.acquire(); else callLimiter.acquire();
+        // ордера и фоновые запросы (статусы, балансы, правила) — разные виды в общем бюджете биржи;
+        // вес — по документации биржи (для тех, кто считает вес)
+        double weight = RateLimits.weight(exchangeId, request.method(), request.uri().getPath(), request.uri().getRawQuery());
+        budget.acquire(order ? RateBudget.Kind.ORDER : RateBudget.Kind.PRIVATE, weight, order ? 1000 : 2000);
         long t0 = System.nanoTime();
         requests.incrementAndGet();
         HttpResponse<String> resp;
@@ -249,20 +252,17 @@ public abstract class SignedCexClient implements ExchangeOrderApi {
         maxLatencyNanos.accumulateAndGet(dt, Math::max);
 
         int code = resp.statusCode();
-        if (code == 429 || code == 418 || code == 403) {
-            rateLimited.incrementAndGet();
-            long pause = code == 429 ? 10_000 : 60_000;
-            callLimiter.blockFor(pause);
-            orderLimiter.blockFor(pause);
-            log.warn("[{}] HTTP {} — запросы приостановлены на {} c", exchangeId, code, pause / 1000);
-        }
+        if (budget.onResponse(code, resp.headers()) > 0) rateLimited.incrementAndGet();
         String text = resp.body() == null ? "" : resp.body();
         JsonNode json = text.isBlank() ? mapper.createObjectNode() : parseLenient(text);
         try {
             checkError(code, json);
         } catch (ApiException e) {
             errors.incrementAndGet();
-            if (e.isRateLimit() && code != 429) callLimiter.blockFor(5_000);
+            if (e.isRateLimit() && code != 429 && code != 418 && code != 403) {
+                rateLimited.incrementAndGet();
+                budget.onLimitError(e.code());
+            }
             throw e;
         }
         return json;
@@ -281,7 +281,8 @@ public abstract class SignedCexClient implements ExchangeOrderApi {
         m.put("rateLimited", rateLimited.get());
         m.put("avgLatencyMs", n == 0 ? 0 : latencyNanos.get() / 1e6 / n);
         m.put("maxLatencyMs", maxLatencyNanos.get() / 1e6);
-        m.put("blockedForMs", callLimiter.blockedForMs());
+        m.put("blockedForMs", budget.blockedForMs());
+        m.put("rateBudget", budget.stats());
         WsRpcChannel c = wsChannel;
         if (c != null) { m.put("ws", c.stats()); m.put("wsFallbacks", wsFallbacks.get()); }
         return m;
