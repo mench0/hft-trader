@@ -214,7 +214,8 @@ public final class WsBookFeed implements BookFeed {
         RateBudget budget = RateBudget.of(info.id());
         budget.acquire(RateBudget.Kind.WS_CONNECT, 1, 60_000);   // лимит подключений на IP
         WebSocket w = http.newWebSocketBuilder().connectTimeout(Duration.ofSeconds(5))
-                .buildAsync(URI.create(url()), listener).get(10, TimeUnit.SECONDS);
+                .buildAsync(URI.create(dialect.connectUrl(url(), cfg.restUrl().isBlank() ? info.restUrl() : cfg.restUrl())), listener)
+                .get(10, TimeUnit.SECONDS);
         socket = w;
         WsSender snd = new WsSender(w, 1000);
         sender = snd;

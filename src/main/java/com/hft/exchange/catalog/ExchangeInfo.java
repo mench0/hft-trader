@@ -23,7 +23,7 @@ public record ExchangeInfo(
         String symbolHint,          // как писать тикер в админке
         String notes
 ) {
-    public enum Kind { CEX_TIER1, CEX_TIER3, PERP_DEX, AMM_DEX }
+    public enum Kind { CEX_TIER1, CEX_TIER3, PERP_DEX, ORDERBOOK_DEX, AMM_DEX }
 
     public enum Adapter { NATIVE_LIVE, LIVE_UNVERIFIED, PAPER_BLIND, NOT_IMPLEMENTED }
 }

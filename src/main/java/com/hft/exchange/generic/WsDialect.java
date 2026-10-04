@@ -16,6 +16,12 @@ public interface WsDialect {
     /** Адрес с учётом REST/RPC-адреса из конфига (для нод: https -> wss того же хоста). */
     default String defaultUrl(boolean testnet, String restUrl) { return defaultUrl(testnet); }
 
+    /**
+     * Адрес для очередного подключения. По умолчанию — url как есть; KuCoin перед каждым
+     * подключением получает по REST токен и адрес сервера.
+     */
+    default String connectUrl(String url, String restUrl) throws Exception { return url; }
+
     /** Как символ называется на бирже: BTCUSDT -> BTC-USDT, btc_usdt, BTC… */
     String venueSymbol(String symbol);
 

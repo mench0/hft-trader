@@ -32,7 +32,7 @@ public final class MarketSources {
     }
 
     public static List<String> supported() {
-        return List.of("binance", "bybit", "okx", "gate", "mexc", "bingx", "lbank", "hyperliquid", "dydx");
+        return List.of("binance", "bybit", "okx", "gate", "mexc", "bingx", "lbank", "kucoin", "aster", "hyperliquid", "dydx");
     }
 
     public static Optional<MarketSource> create(String id) {
@@ -50,7 +50,8 @@ public final class MarketSources {
         String b = baseUrl.replaceAll("/+$", "");
         return Optional.ofNullable(switch (id) {
             case "binance" -> new BinanceLike(id, b, http, "/api/v3/ticker/24hr", "/api/v3/klines");
-            case "mexc" -> new BinanceLike(id, b, http, "/api/v3/ticker/24hr", "/api/v3/klines");
+            case "mexc", "aster" -> new BinanceLike(id, b, http, "/api/v3/ticker/24hr", "/api/v3/klines");
+            case "kucoin" -> new Kucoin(b, http);
             case "bybit" -> new Bybit(b, http);
             case "okx" -> new Okx(b, http);
             case "gate" -> new Gate(b, http);
@@ -127,6 +128,34 @@ public final class MarketSources {
             List<double[]> rows = new ArrayList<>();
             for (JsonNode k : http.get(base + klinePath + "?symbol=" + t.venueSymbol() + "&interval=1m&limit=" + limit))
                 rows.add(new double[]{d(k, 0), d(k, 4)});
+            return closes(rows);
+        }
+    }
+
+    // ───────────────────────── KuCoin ─────────────────────────
+
+    /** GET /api/v1/market/allTickers -> data.ticker[{symbol:"BTC-USDT",buy,sell,last,high,low,changeRate,volValue}];
+     *  свечи GET /api/v1/market/candles?type=1min&symbol=BTC-USDT -> [[time(с),open,close,high,low,vol,turnover]], новые первыми. */
+    static final class Kucoin implements MarketSource {
+        final String base; final Http http;
+        Kucoin(String base, Http http) { this.base = base; this.http = http; }
+        public String exchange() { return "kucoin"; }
+        public List<TickerSnapshot> tickers() throws Exception {
+            List<TickerSnapshot> out = new ArrayList<>();
+            for (JsonNode t : http.get(base + "/api/v1/market/allTickers").path("data").path("ticker")) {
+                double last = d(t, "last"), ch = d(t, "changeRate");
+                double open = Double.isNaN(ch) ? Double.NaN : last / (1 + ch);
+                TickerSnapshot s = spot("kucoin", t.path("symbol").asText(), last, d(t, "buy"), d(t, "sell"),
+                        d(t, "high"), d(t, "low"), open, d(t, "volValue"), -1);
+                if (s != null) out.add(s);
+            }
+            return out;
+        }
+        public double[] closes1m(TickerSnapshot t, int limit) throws Exception {
+            long end = System.currentTimeMillis() / 1000, start = end - limit * 60L;
+            List<double[]> rows = new ArrayList<>();
+            for (JsonNode k : http.get(base + "/api/v1/market/candles?type=1min&symbol=" + t.venueSymbol() + "&startAt=" + start + "&endAt=" + end).path("data"))
+                rows.add(new double[]{d(k, 0), d(k, 2)});
             return closes(rows);
         }
     }

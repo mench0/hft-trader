@@ -42,6 +42,8 @@ public final class WsDialects {
             case "hyperliquid" -> Optional.of(new Hyperliquid());
             case "dydx" -> Optional.of(new Dydx());
             case "uniswapv2" -> Optional.of(new Uniswap(System.getenv("UNISWAPV2_POOLS")));
+            case "kucoin" -> Optional.of(new Kucoin());
+            case "aster" -> Optional.of(new Aster());
             default -> Optional.empty();
         };
     }
@@ -568,6 +570,178 @@ public final class WsDialects {
             out.tsMs = System.currentTimeMillis();
             for (int i = 0; i < b.bp().length; i++) out.bid(b.bp()[i], b.bq()[i]);
             for (int i = 0; i < b.ap().length; i++) out.ask(b.ap()[i], b.aq()[i]);
+        }
+    }
+
+    // ───────────────────────── KuCoin ─────────────────────────
+
+    /**
+     * Перед подключением POST /api/v1/bullet-public -> токен, адрес сервера и интервал пинга.
+     * Подписка: /spotMarket/level2Depth50:BTC-USDT,ETH-USDT (снимок 50 уровней каждые 100 мс, до 100 символов в теме).
+     * Сообщения: welcome, ack, pong, error, message{topic, subject:"level2", data{asks,bids,timestamp}}.
+     */
+    static final class Kucoin implements WsDialect {
+        private static final java.net.http.HttpClient HTTP = java.net.http.HttpClient.newBuilder()
+                .connectTimeout(java.time.Duration.ofSeconds(5)).build();
+        private volatile long pingMs = 18_000;
+        private final java.util.concurrent.atomic.AtomicLong ids = new java.util.concurrent.atomic.AtomicLong();
+
+        public String defaultUrl(boolean testnet) { return "kucoin:bullet-public"; }
+
+        @Override public String connectUrl(String url, String restUrl) throws Exception {
+            if (!url.startsWith("kucoin:")) return url;                       // адрес задан в конфиге явно
+            com.hft.rest.RateBudget budget = com.hft.rest.RateBudget.of("kucoin");
+            budget.acquire(com.hft.rest.RateBudget.Kind.PUBLIC, 10, 60_000);
+            var req = java.net.http.HttpRequest.newBuilder(java.net.URI.create(restUrl.replaceAll("/+$", "") + "/api/v1/bullet-public"))
+                    .timeout(java.time.Duration.ofSeconds(10)).POST(java.net.http.HttpRequest.BodyPublishers.noBody()).build();
+            var resp = HTTP.send(req, java.net.http.HttpResponse.BodyHandlers.ofString());
+            budget.onResponse(resp.statusCode(), resp.headers());
+            JsonNode r = JSON.readTree(resp.body());
+            if (!"200000".equals(r.path("code").asText())) throw new IllegalStateException("KuCoin bullet-public: " + abbreviate(resp.body()));
+            JsonNode d = r.path("data");
+            JsonNode server = d.path("instanceServers").path(0);
+            long interval = server.path("pingInterval").asLong(18_000);
+            pingMs = Math.max(5_000, interval - 2_000);
+            return server.path("endpoint").asText() + "?token=" + d.path("token").asText() + "&connectId=hft" + System.nanoTime();
+        }
+
+        public String venueSymbol(String s) { return base(s) + "-" + quote(s); }
+        public List<String> subscribe(List<String> v, int d) { return op("subscribe", v); }
+        public List<String> unsubscribe(List<String> v, int d) { return op("unsubscribe", v); }
+        private List<String> op(String type, List<String> v) {
+            List<String> out = new ArrayList<>();
+            for (int i = 0; i < v.size(); i += 100) {
+                ObjectNode o = JSON.createObjectNode().put("id", String.valueOf(ids.incrementAndGet())).put("type", type)
+                        .put("topic", "/spotMarket/level2Depth50:" + String.join(",", v.subList(i, Math.min(v.size(), i + 100))))
+                        .put("privateChannel", false).put("response", true);
+                out.add(msg(o));
+            }
+            return out;
+        }
+        @Override public String pingMessage() { return "{\"id\":\"" + ids.incrementAndGet() + "\",\"type\":\"ping\"}"; }
+        @Override public long pingIntervalMs() { return pingMs; }
+
+        public String parse(char[] c, int len, BookBatch out) throws Exception {
+            out.reset();
+            String type = null, code = null, data = null;
+            boolean level2 = false;
+            try (JsonParser p = open(c, len)) {
+                while (p.nextToken() == JsonToken.FIELD_NAME) {
+                    String f = p.currentName();
+                    p.nextToken();
+                    switch (f) {
+                        case "type" -> type = p.getText();
+                        case "code" -> code = p.getText();
+                        case "subject" -> level2 = textIs(p, "level2");
+                        case "topic" -> {
+                            char[] t = p.getTextCharacters(); int off = p.getTextOffset(), n = p.getTextLength(), colon = -1;
+                            for (int i = 0; i < n; i++) if (t[off + i] == ':') { colon = i; break; }
+                            if (colon >= 0) out.venue = out.resolve(t, off + colon + 1, n - colon - 1);
+                        }
+                        case "data" -> {
+                            if (p.currentToken() == JsonToken.START_OBJECT) {
+                                while (p.nextToken() == JsonToken.FIELD_NAME) {
+                                    String g = p.currentName();
+                                    p.nextToken();
+                                    switch (g) {
+                                        case "bids" -> levels(p, out, true);
+                                        case "asks" -> levels(p, out, false);
+                                        case "timestamp" -> out.tsMs = longOf(p, System.currentTimeMillis());
+                                        default -> p.skipChildren();
+                                    }
+                                }
+                            } else data = p.getText();
+                        }
+                        default -> p.skipChildren();
+                    }
+                }
+            }
+            if (type == null) throw new IllegalStateException("KuCoin: сообщение без type " + abbreviate(c, len));
+            switch (type) {
+                case "welcome", "ack", "pong" -> { out.reset(); return null; }
+                case "error" -> throw new IllegalStateException("KuCoin error " + code + ": " + data);
+                case "message" -> {
+                    if (!level2 || out.venue == null) throw new IllegalStateException("KuCoin: неожиданное сообщение " + abbreviate(c, len));
+                    out.snapshot = true;                            // level2Depth50 — каждый раз полный снимок
+                    if (out.tsMs == 0) out.tsMs = System.currentTimeMillis();
+                    return null;
+                }
+                default -> throw new IllegalStateException("KuCoin: неизвестный type " + type);
+            }
+        }
+    }
+
+    // ───────────────────────── Aster ─────────────────────────
+
+    /**
+     * Спот Aster, формат Binance: wss://sstream.asterdex.com/stream, подписка {"method":"SUBSCRIBE",
+     * "params":["btcusdt@depth20@100ms"],"id":N}. Сообщение {"stream":"btcusdt@depth20@100ms","data":{
+     * lastUpdateId, bids, asks}} (у фьючерсного формата — b/a и E). Каждое сообщение — снимок.
+     */
+    static final class Aster implements WsDialect {
+        private final java.util.concurrent.atomic.AtomicLong ids = new java.util.concurrent.atomic.AtomicLong();
+
+        public String defaultUrl(boolean testnet) {
+            return testnet ? "wss://sstream.asterdex-testnet.com/stream" : "wss://sstream.asterdex.com/stream";
+        }
+        public String venueSymbol(String s) { return s.toLowerCase(java.util.Locale.ROOT); }
+        public List<String> subscribe(List<String> v, int d) { return op("SUBSCRIBE", v, d); }
+        public List<String> unsubscribe(List<String> v, int d) { return op("UNSUBSCRIBE", v, d); }
+        private List<String> op(String method, List<String> v, int d) {
+            String depth = d <= 5 ? "5" : d <= 10 ? "10" : "20";
+            List<String> out = new ArrayList<>();
+            for (int i = 0; i < v.size(); i += 50) {
+                ObjectNode o = JSON.createObjectNode().put("method", method).put("id", ids.incrementAndGet());
+                ArrayNode params = o.putArray("params");
+                for (String s : v.subList(i, Math.min(v.size(), i + 50))) params.add(s + "@depth" + depth + "@100ms");
+                out.add(msg(o));
+            }
+            return out;
+        }
+
+        public String parse(char[] c, int len, BookBatch out) throws Exception {
+            out.reset();
+            boolean reply = false, book = false;
+            String errMsg = null;
+            try (JsonParser p = open(c, len)) {
+                while (p.nextToken() == JsonToken.FIELD_NAME) {
+                    String f = p.currentName();
+                    p.nextToken();
+                    switch (f) {
+                        case "result", "id" -> { reply = true; p.skipChildren(); }
+                        case "error" -> errMsg = text(p);
+                        case "stream" -> {
+                            char[] t = p.getTextCharacters(); int off = p.getTextOffset(), n = p.getTextLength(), at = n;
+                            for (int i = 0; i < n; i++) if (t[off + i] == '@') { at = i; break; }
+                            out.venue = out.resolve(t, off, at);
+                        }
+                        case "data" -> {
+                            if (p.currentToken() != JsonToken.START_OBJECT) throw new IllegalStateException("Aster: data не объект");
+                            while (p.nextToken() == JsonToken.FIELD_NAME) {
+                                String g = p.currentName();
+                                p.nextToken();
+                                switch (g) {
+                                    case "bids", "b" -> { book = true; levels(p, out, true); }
+                                    case "asks", "a" -> { book = true; levels(p, out, false); }
+                                    case "E", "T" -> out.tsMs = longOf(p, System.currentTimeMillis());
+                                    default -> p.skipChildren();
+                                }
+                            }
+                        }
+                        default -> p.skipChildren();
+                    }
+                }
+            }
+            if (errMsg != null) throw new IllegalStateException("Aster WS error: " + errMsg);
+            if (!book) {
+                out.reset();
+                if (reply) return null;                              // ответ на SUBSCRIBE
+                throw new IllegalStateException("Aster: неожиданное сообщение " + abbreviate(c, len));
+            }
+            if (out.venue == null) throw new IllegalStateException("Aster: стакан без stream " + abbreviate(c, len));
+            out.snapshot = true;
+            if (out.tsMs == 0) out.tsMs = System.currentTimeMillis();
+            return null;
         }
     }
 }
