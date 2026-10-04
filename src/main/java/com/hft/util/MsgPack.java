@@ -12,14 +12,17 @@ import java.util.Map;
  */
 public final class MsgPack {
 
+    /** Утилитный класс — экземпляры не создаются. */
     private MsgPack() {}
 
+    /** Упаковать значение (Map, List, String, число, boolean, null) в MessagePack — формат действий Hyperliquid. */
     public static byte[] pack(Object value) {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         write(out, value);
         return out.toByteArray();
     }
 
+    /** Записать одно значение рекурсивно. */
     private static void write(ByteArrayOutputStream o, Object v) {
         if (v == null) { o.write(0xc0); return; }
         if (v instanceof Boolean b) { o.write(b ? 0xc3 : 0xc2); return; }
@@ -45,6 +48,7 @@ public final class MsgPack {
         else { o.write(t32); for (int i = 3; i >= 0; i--) o.write(n >> (8 * i)); }
     }
 
+    /** Строка UTF-8 с заголовком длины (fixstr/str8/str16/str32). */
     private static void writeStr(ByteArrayOutputStream o, String s) {
         byte[] b = s.getBytes(StandardCharsets.UTF_8);
         int n = b.length;
@@ -55,6 +59,7 @@ public final class MsgPack {
         o.writeBytes(b);
     }
 
+    /** Целое в самой короткой форме MessagePack. */
     private static void writeInt(ByteArrayOutputStream o, long x) {
         if (x >= 0) {
             if (x <= 0x7f) o.write((int) x);

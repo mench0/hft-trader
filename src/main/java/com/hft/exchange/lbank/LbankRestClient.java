@@ -38,18 +38,28 @@ import java.util.TreeMap;
  */
 public final class LbankRestClient extends SignedCexClient {
 
+    /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(LbankRestClient.class);
+    /** Источник случайной строки echostr. */
     private static final SecureRandom RND = new SecureRandom();
+    /** Алфавит echostr. */
     private static final String ALNUM = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
+    /**
+     * @param config подключение и параметры биржи
+     * @param credentials ключи из окружения
+     * @param filters правила символов
+     */
     public LbankRestClient(ExchangeConfig config, Credentials credentials, SymbolFilters filters) {
         super("lbank", config, credentials, filters);
     }
 
+    /** Имя символа на бирже. */
     static String pair(String symbol) {
         return (BalanceStore.baseAsset(symbol) + "_" + BalanceStore.quoteAsset(symbol)).toLowerCase();
     }
 
+    /** Случайная строка 35 символов для подписи LBank. */
     private static String echostr() {
         StringBuilder sb = new StringBuilder(35);
         for (int i = 0; i < 35; i++) sb.append(ALNUM.charAt(RND.nextInt(ALNUM.length())));
@@ -72,10 +82,12 @@ public final class LbankRestClient extends SignedCexClient {
         }
     }
 
+    /** Публичный GET. */
     private JsonNode publicGet(String path) throws Exception {
         return exec(req(baseUrl + path).GET().build(), false);
     }
 
+    /** Подписанный POST (параметры формой). */
     private JsonNode signedPost(String path, Map<String, String> p, boolean order) throws Exception {
         credentials.require();
         String ts = String.valueOf(System.currentTimeMillis()), echo = echostr();
@@ -91,6 +103,7 @@ public final class LbankRestClient extends SignedCexClient {
         return exec(r, order);
     }
 
+    /** Ошибка в HTTP-коде или теле ответа — ApiException (лимит — с признаком rateLimit). */
     @Override
     protected void checkError(int http, JsonNode body) {
         if (http == 429) throw new ApiException(http, "429", "слишком часто", true);
@@ -103,6 +116,7 @@ public final class LbankRestClient extends SignedCexClient {
 
     // ------------------------------------------------------------ ордера
 
+    /** Отправить ордер (по WebSocket, если можно, иначе REST); исход ждёт вызывающий. */
     @Override
     protected OrderResult placeRaw(Order o) throws Exception {
         Map<String, String> p = params();
@@ -134,6 +148,7 @@ public final class LbankRestClient extends SignedCexClient {
                 o.qtyIsQuote() ? 0 : o.qty(), 0, 0, 0);
     }
 
+    /** Статус ордера: из WS-потока, если есть, иначе запрос к бирже. */
     @Override
     public OrderResult orderStatus(String symbol, long orderId) throws Exception {
         Map<String, String> p = params();
@@ -155,6 +170,7 @@ public final class LbankRestClient extends SignedCexClient {
                 d(o, "amount"), exec, d(o, "avg_price"), 0);
     }
 
+    /** Отменить ордер. */
     @Override
     public void cancelOrder(String symbol, long orderId) throws Exception {
         Map<String, String> p = params();
@@ -164,6 +180,7 @@ public final class LbankRestClient extends SignedCexClient {
         log.info("[lbank] ордер {} по {} отменён", orderId, symbol);
     }
 
+    /** Отменить все открытые ордера символа; возвращает их число. */
     @Override
     public int cancelAll(String symbol) throws Exception {
         Map<String, String> p = params();
@@ -196,6 +213,7 @@ public final class LbankRestClient extends SignedCexClient {
         log.info("[lbank] правила загружены для {} символов (minNotional по умолчанию 5.0)", loaded);
     }
 
+    /** Загрузить балансы. */
     @Override
     public void loadBalances(BalanceStore store) throws Exception {
         JsonNode r = signedPost("/v2/supplement/user_info_account.do", params(), false);

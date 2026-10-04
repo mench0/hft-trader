@@ -9,12 +9,15 @@ import java.net.http.HttpRequest;
  */
 public interface BookDialect {
 
+    /** HTTP-запрос стакана символа на depth уровней. */
     HttpRequest request(String baseUrl, String symbol, int depth);
 
+    /** Разобрать ответ в отсортированный стакан; ошибка биржи — исключение. */
     ParsedBook parse(String body, String symbol) throws Exception;
 
     /** Стакан, уже отсортированный: bids по убыванию цены, asks по возрастанию. */
     record ParsedBook(double[] bp, double[] bq, double[] ap, double[] aq, long tsMs) {
+        /** Хотя бы одна сторона пуста. */
         public boolean isEmpty() { return bp.length == 0 || ap.length == 0; }
     }
 }

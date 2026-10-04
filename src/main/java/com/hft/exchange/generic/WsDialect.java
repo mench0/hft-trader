@@ -28,11 +28,13 @@ public interface WsDialect {
     /** Сообщения подписки на список символов. */
     List<String> subscribe(List<String> venueSymbols, int depth);
 
+    /** Сообщения отписки от символов. */
     List<String> unsubscribe(List<String> venueSymbols, int depth);
 
     /** Прикладной пинг. null — не нужен (биржа шлёт ping-кадры, а JDK отвечает на них сам). */
     default String pingMessage() { return null; }
 
+    /** Интервал прикладного пинга, мс. */
     default long pingIntervalMs() { return 15_000; }
 
     /** Бинарные сообщения (например, gzip у BingX) -> текст. */

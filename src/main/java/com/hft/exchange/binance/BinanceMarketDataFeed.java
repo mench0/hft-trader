@@ -25,19 +25,32 @@ import java.util.concurrent.CopyOnWriteArrayList;
  */
 public final class BinanceMarketDataFeed extends AbstractWsFeed {
 
+    /** Подключение и параметры биржи. */
     private final ExchangeConfig config;
+    /** Куда записываются стаканы. */
     private final MarketDataStore store;
+    /** Конвейер, куда уходят сделки. */
     private final TickPipeline pipeline;
+    /** Время разбора сообщения. */
     private final Latency parseLatency = new Latency("[binance] Парсинг сообщения");
 
+    /** Буфер публикации верха стакана. */
     private final double[] bidPrices;
+    /** Буфер публикации верха стакана. */
     private final double[] bidQtys;
+    /** Буфер публикации верха стакана. */
     private final double[] askPrices;
+    /** Буфер публикации верха стакана. */
     private final double[] askQtys;
 
     // Символы, на которые подписаны.
     private final List<String> activeSymbols;
 
+    /**
+     * @param config подключение и параметры
+     * @param store рыночные данные
+     * @param pipeline конвейер тиков
+     */
     public BinanceMarketDataFeed(ExchangeConfig config, MarketDataStore store, TickPipeline pipeline) {
         this.config = config;
         this.store = store;
@@ -50,9 +63,11 @@ public final class BinanceMarketDataFeed extends AbstractWsFeed {
         this.askQtys = new double[d];
     }
 
+    /** Имя для логов и бюджета лимитов. */
     @Override
     protected String name() { return "binance"; }
 
+    /** Адрес WebSocket (у Binance — с подпиской на потоки в URL). */
     @Override
     protected URI buildUri() throws Exception {
         StringBuilder streams = new StringBuilder();
@@ -65,6 +80,7 @@ public final class BinanceMarketDataFeed extends AbstractWsFeed {
         return new URI(config.wsUrl() + "/stream?streams=" + streams);
     }
 
+    /** Глубина подписки, которую поддерживает биржа. */
     private String depthParam() {
         int d = config.bookDepth();
         if (d <= 5) return "5";
@@ -74,10 +90,15 @@ public final class BinanceMarketDataFeed extends AbstractWsFeed {
 
     // Разбор одного сообщения — только поток WS, поэтому поля можно переиспользовать
     private String msgSymbol;          // символ из "stream" (для стакана) или "s" (для сделки)
+    /** В сообщении сделка / стакан. */
     private boolean isTrade, hasBook;
+    /** Цена и объём сделки. */
     private double tradePrice, tradeQty;
+    /** Агрессор — продавец. */
     private boolean buyerIsMaker;
+    /** Время сделки и номер обновления стакана. */
     private long tradeTime, updateId;
+    /** Уровней бидов и асков. */
     private int bn, an;
 
     /**
@@ -111,6 +132,7 @@ public final class BinanceMarketDataFeed extends AbstractWsFeed {
         }
     }
 
+    /** Разобрать объект data. */
     private void parseData(JsonParser p) throws IOException {
         while (p.nextToken() == JsonToken.FIELD_NAME) {
             String f = p.currentName();
@@ -119,6 +141,7 @@ public final class BinanceMarketDataFeed extends AbstractWsFeed {
         }
     }
 
+    /** Разобрать одно поле сообщения Binance. */
     private void parseField(String f, JsonParser p) throws IOException {
         switch (f) {
             case "e" -> isTrade = FastJson.textIs(p, "trade");
@@ -172,6 +195,8 @@ public final class BinanceMarketDataFeed extends AbstractWsFeed {
         return null;
     }
 
+    /** Символы подписки. */
     public List<String> activeSymbols() { return List.copyOf(activeSymbols); }
+    /** Время разбора сообщения. */
     public Latency parseLatency() { return parseLatency; }
 }

@@ -29,8 +29,10 @@ import java.util.concurrent.TimeUnit;
  */
 public final class Main {
 
+    /** Логгер точки входа. */
     private static final Logger log = LoggerFactory.getLogger(Main.class);
 
+    /** Поднять админку, подбор тикеров, (по настройке) биржи и фоновые задачи; ждать сигнала остановки. */
     public static void main(String[] args) throws Exception {
         printBanner();
 
@@ -137,6 +139,7 @@ public final class Main {
         Thread.currentThread().join();
     }
 
+    /** Заставка в консоль. */
     private static void printBanner() {
         System.out.println("""
                 ┌─────────────────────────────────────┐

@@ -17,6 +17,7 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class SymbolFilters {
 
+    /** Правила символа: min/max/шаг объёма, min/max/шаг цены, минимальная сумма ордера. */
     public record Filter(
             double minQty,        // минимальный объём
             double maxQty,        // максимальный объём
@@ -27,16 +28,20 @@ public final class SymbolFilters {
             double minNotional    // минимальная сумма сделки (qty * price)
     ) {}
 
+    /** Правила по символу. */
     private final Map<String, Filter> filters = new ConcurrentHashMap<>();
 
+    /** Задать правила символа. */
     public void put(String symbol, Filter filter) {
         filters.put(symbol.toUpperCase(), filter);
     }
 
+    /** Правила символа или null. */
     public Filter get(String symbol) {
         return filters.get(symbol.toUpperCase());
     }
 
+    /** Правила символа загружены. */
     public boolean has(String symbol) {
         return filters.containsKey(symbol.toUpperCase());
     }
@@ -58,6 +63,7 @@ public final class SymbolFilters {
         return roundDown(price, f.tickSize());
     }
 
+    /** Округлить вниз до шага (с поправкой на погрешность double). */
     private static double roundDown(double value, double step) {
         BigDecimal bdValue = BigDecimal.valueOf(value);
         BigDecimal bdStep = BigDecimal.valueOf(step);
@@ -102,12 +108,14 @@ public final class SymbolFilters {
         return scaleOf(f.stepSize());
     }
 
+    /** Сколько знаков после запятой у шага цены. */
     public int priceScale(String symbol) {
         Filter f = get(symbol);
         if (f == null) return 8;
         return scaleOf(f.tickSize());
     }
 
+    /** Число знаков после запятой у шага (0.001 -> 3). */
     private static int scaleOf(double step) {
         if (step <= 0) return 8;
         BigDecimal bd = BigDecimal.valueOf(step).stripTrailingZeros();

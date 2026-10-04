@@ -32,32 +32,53 @@ import java.util.Map;
  */
 public final class SignedCexExchange implements ExchangeGateway, RequestStatsSource {
 
+    /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(SignedCexExchange.class);
 
+    /** Описание биржи из каталога. */
     private final ExchangeInfo info;
+    /** Подключение и параметры биржи. */
     private final ExchangeConfig config;
+    /** API-ключи из окружения. */
     private final Credentials credentials;
 
+    /** Стаканы, окна цен и статистика символов. */
     private final MarketDataStore market;
+    /** Балансы (с биржи или бумажные). */
     private final BalanceStore balances;
+    /** Правила торговли символов. */
     private final SymbolFilters filters;
     /** Создаёт клиент биржи для режима LIVE. */
     @FunctionalInterface
     public interface ClientFactory {
+        /** Клиент биржи для режима LIVE. */
         SignedCexClient create(ExchangeConfig config, Credentials credentials, SymbolFilters filters);
     }
 
     private final SignedCexClient rest;               // null в режиме PAPER
     private final PaperOrderApi paper;         // null в режиме LIVE
+    /** Проверки риска перед ордером. */
     private final RiskManager risk;
+    /** Отправка ордеров с проверками и учётом баланса. */
     private final OrderService orderService;
 
+    /** Первая стадия конвейера: запись тиков в память. */
     private final MarketDataHandler dataHandler;
+    /** Стратегии биржи. */
     private final StrategySet strategy;
+    /** Конвейер тиков (Disruptor). */
     private final TickPipeline pipeline;
+    /** Фид рыночных данных. */
     private final BookFeed feed;
+    /** Когда баланс последний раз сверялся с биржей по REST. */
     private volatile long lastRestSyncMs = System.currentTimeMillis();
 
+    /**
+     * @param id биржа из каталога
+     * @param config подключение и параметры
+     * @param settings параметры биржи
+     * @param clientFactory создаёт REST-клиент для LIVE
+     */
     public SignedCexExchange(String id, ExchangeConfig config, TradingSettings settings, ClientFactory clientFactory) {
         this.info = ExchangeCatalog.find(id).orElseThrow();
         this.config = config;
@@ -89,9 +110,11 @@ public final class SignedCexExchange implements ExchangeGateway, RequestStatsSou
         }
     }
 
+    /** Идентификатор биржи. */
     @Override
     public String id() { return info.id(); }
 
+    /** Загрузить правила и балансы, запустить конвейер и фид. */
     @Override
     public void start() throws Exception {
         if (rest != null) {
@@ -114,6 +137,7 @@ public final class SignedCexExchange implements ExchangeGateway, RequestStatsSou
         log.info("[{}] Биржа запущена ({}), символы: {}", info.id(), rest != null ? "LIVE" : "PAPER", config.symbols());
     }
 
+    /** Остановить стратегии, фид и конвейер. */
     @Override
     public void stop() {
         strategy.disable();
@@ -123,32 +147,42 @@ public final class SignedCexExchange implements ExchangeGateway, RequestStatsSou
         log.info("[{}] Биржа остановлена", info.id());
     }
 
+    /** Рыночные данные идут. */
     @Override
     public boolean isConnected() { return feed.isConnected(); }
 
+    /** Получено сообщений с биржи. */
     @Override
     public long messageCount() { return feed.messageCount(); }
 
+    /** Символы, по которым идут данные. */
     @Override
     public List<String> symbols() { return feed.activeSymbols(); }
 
+    /** Рыночные данные биржи. */
     @Override
     public MarketDataStore marketData() { return market; }
 
+    /** Балансы биржи. */
     @Override
     public BalanceStore balances() { return balances; }
 
+    /** Сервис ордеров биржи. */
     @Override
     public OrderService orders() { return orderService; }
 
+    /** Риск-менеджер биржи. */
     @Override
     public RiskManager risk() { return risk; }
 
+    /** Стратегии биржи. */
     @Override
     public StrategySet strategy() { return strategy; }
 
+    /** Фид рыночных данных. */
     public BookFeed feed() { return feed; }
 
+    /** Сверить баланс с биржей по REST, не чаще balanceSyncMs (в бумажном режиме — ничего). */
     @Override
     public void syncBalances() {
         if (rest == null) return;
@@ -176,6 +210,7 @@ public final class SignedCexExchange implements ExchangeGateway, RequestStatsSou
         return m;
     }
 
+    /** Ордера идут на биржу (LIVE), а не в бумажный движок. */
     @Override
     public boolean isLive() { return rest != null; }
 }

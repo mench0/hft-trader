@@ -11,8 +11,10 @@ import java.util.List;
  */
 final class Abi {
 
+    /** Утилитный класс — экземпляры не создаются. */
     private Abi() {}
 
+    /** Данные вызова контракта: селектор + аргументы по ABI (uint, address, bool, массив адресов). */
     static String call(String selectorHex, Object... args) {
         int headSize = 32 * args.length;
         StringBuilder head = new StringBuilder(), tail = new StringBuilder();
@@ -28,12 +30,14 @@ final class Abi {
         return "0x" + selectorHex + head + tail;
     }
 
+    /** Число в 32-байтовое слово (hex). */
     private static String word(BigInteger n) {
         if (n.signum() < 0 || n.bitLength() > 256) throw new IllegalArgumentException("uint256 вне диапазона: " + n);
         String h = n.toString(16);
         return "0".repeat(64 - h.length()) + h;
     }
 
+    /** Адрес в 32-байтовое слово (выравнивание влево нулями). */
     private static String addressWord(String addr) {
         String h = addr.startsWith("0x") ? addr.substring(2) : addr;
         if (h.length() != 40) throw new IllegalArgumentException("Некорректный адрес: " + addr);

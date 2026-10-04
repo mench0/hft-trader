@@ -30,23 +30,39 @@ import java.util.concurrent.atomic.DoubleAdder;
  */
 public final class RiskManager {
 
+    /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(RiskManager.class);
 
+    /** Параметры биржи (лимиты читаются на каждой проверке). */
     private final TradingSettings settings;
+    /** Рыночные данные (свежесть и проскальзывание). */
     private final MarketDataStore market;
+    /** Биржа (для логов). */
     private final String exchangeId;
 
+    /** Kill switch: все ордера отклоняются, пока не снят. */
     private final AtomicBoolean killSwitch = new AtomicBoolean(false);
+    /** Реализованный результат за сутки UTC. */
     private final DoubleAdder dailyPnl = new DoubleAdder();
     /** Номер суток UTC, к которым относится dailyPnl: при смене суток счётчик обнуляется. */
     private volatile long pnlDay = utcDay(System.currentTimeMillis());
+    /** Ордеров в текущем минутном окне. */
     private final AtomicInteger ordersThisMinute = new AtomicInteger();
+    /** Начало текущего минутного окна. */
     private final AtomicLong minuteWindowStart = new AtomicLong(System.currentTimeMillis());
+    /** Отклонено ордеров. */
     private final AtomicLong rejectedCount = new AtomicLong();
+    /** Принято ордеров. */
     private final AtomicLong acceptedCount = new AtomicLong();
 
+    /** Причина последнего отказа. */
     private volatile String lastRejectReason = "";
 
+    /**
+     * @param settings параметры биржи
+     * @param market рыночные данные биржи
+     * @param exchangeId биржа
+     */
     public RiskManager(TradingSettings settings, MarketDataStore market, String exchangeId) {
         this.settings = settings;
         this.market = market;
@@ -55,7 +71,9 @@ public final class RiskManager {
 
     /** Результат проверки: разрешено или отказ с причиной. */
     public record Decision(boolean allowed, String reason) {
+        /** Ордер разрешён. */
         public static final Decision OK = new Decision(true, "");
+        /** Отказ с причиной. */
         public static Decision deny(String reason) { return new Decision(false, reason); }
     }
 
@@ -119,6 +137,7 @@ public final class RiskManager {
         return Decision.OK;
     }
 
+    /** Учесть и залогировать отказ. */
     private Decision reject(String reason) {
         rejectedCount.incrementAndGet();
         lastRejectReason = reason;
@@ -126,6 +145,7 @@ public final class RiskManager {
         return Decision.deny(reason);
     }
 
+    /** Не превышен ли лимит ордеров в минуту (окно сбрасывается раз в минуту). */
     private boolean allowRate(int maxPerMinute) {
         long now = System.currentTimeMillis();
         long windowStart = minuteWindowStart.get();
@@ -157,6 +177,7 @@ public final class RiskManager {
         }
     }
 
+    /** Номер суток UTC. */
     private static long utcDay(long ms) { return ms / 86_400_000L; }
 
     // ---------- Управление ----------
@@ -167,17 +188,23 @@ public final class RiskManager {
         log.error("[{}] KILL SWITCH активирован: {}", exchangeId, reason);
     }
 
+    /** Снять kill switch. */
     public void resumeTrading() {
         killSwitch.set(false);
         log.info("Торговля возобновлена");
     }
 
+    /** Kill switch взведён. */
     public boolean isStopped() {
         return killSwitch.get();
     }
 
+    /** Реализованный результат за текущие сутки UTC. */
     public double dailyPnl() { rollDay(); return dailyPnl.sum(); }
+    /** Отклонено ордеров. */
     public long rejectedCount() { return rejectedCount.get(); }
+    /** Принято ордеров. */
     public long acceptedCount() { return acceptedCount.get(); }
+    /** Причина последнего отказа. */
     public String lastRejectReason() { return lastRejectReason; }
 }

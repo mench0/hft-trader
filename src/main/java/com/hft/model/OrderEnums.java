@@ -6,6 +6,7 @@ package com.hft.model;
  */
 public final class OrderEnums {
 
+    /** Утилитный класс — экземпляры не создаются. */
     private OrderEnums() {}
 
     /** Сторона сделки. */

@@ -28,8 +28,10 @@ import static com.hft.exchange.generic.FastJson.*;
  */
 public final class WsDialects {
 
+    /** Утилитный класс — экземпляры не создаются. */
     private WsDialects() {}
 
+    /** Сборка и разбор JSON (только для редких сообщений; стакан — потоково). */
     private static final ObjectMapper JSON = new ObjectMapper();
 
     /** Есть ли WS-диалект для биржи (у MEXC нет: спотовый WS отдаёт protobuf). */
@@ -38,6 +40,7 @@ public final class WsDialects {
         return id.equals("uniswapv2") ? Optional.of(new Uniswap(cfg.params().uniPools())) : forExchange(id);
     }
 
+    /** WS-диалект биржи без её параметров (для Uniswap пулы пусты); пусто — у биржи нет WS-стакана. */
     public static Optional<WsDialect> forExchange(String id) {
         return switch (id) {
             case "okx" -> Optional.of(new Okx());
@@ -58,13 +61,19 @@ public final class WsDialects {
 
     // ───────────────────────── helpers ─────────────────────────
 
+    /** Базовая валюта символа. */
     private static String base(String s) { return BalanceStore.baseAsset(s); }
+    /** Котируемая валюта символа. */
     private static String quote(String s) { return BalanceStore.quoteAsset(s); }
+    /** JSON сообщения строкой. */
     private static String msg(ObjectNode o) { return o.toString(); }
 
+    /** Начало сообщения для текста ошибки. */
     static String abbreviate(char[] c, int len) { return len > 200 ? new String(c, 0, 200) + "…" : new String(c, 0, len); }
+    /** Начало строки для текста ошибки. */
     static String abbreviate(String s) { return s.length() > 200 ? s.substring(0, 200) + "…" : s; }
 
+    /** Потоковый парсер; сообщение должно быть JSON-объектом. */
     private static JsonParser open(char[] buf, int len) throws Exception {
         JsonParser p = F.createParser(buf, 0, len);
         if (p.nextToken() != JsonToken.START_OBJECT) { p.close(); throw new IllegalStateException("ожидался JSON-объект: " + abbreviate(buf, len)); }
@@ -73,13 +82,19 @@ public final class WsDialects {
 
     // ───────────────────────── OKX ─────────────────────────
 
+    /** OKX: канал books (снимок + изменения), пинг «ping». */
     static final class Okx implements WsDialect {
+        /** Адрес по умолчанию (основная или тестовая сеть). */
         public String defaultUrl(boolean testnet) {
             return testnet ? "wss://wspap.okx.com:8443/ws/v5/public" : "wss://ws.okx.com:8443/ws/v5/public";
         }
+        /** Имя символа на бирже. */
         public String venueSymbol(String s) { return base(s) + "-" + quote(s); }
+        /** Сообщения подписки на стаканы символов. */
         public List<String> subscribe(List<String> v, int d) { return op("subscribe", v); }
+        /** Сообщения подписки на стаканы символов. */
         public List<String> unsubscribe(List<String> v, int d) { return op("unsubscribe", v); }
+        /** Сообщения подписки/отписки пачками. */
         private List<String> op(String op, List<String> v) {
             List<String> out = new ArrayList<>();
             for (int i = 0; i < v.size(); i += 20) {
@@ -94,6 +109,7 @@ public final class WsDialects {
         @Override public String pingMessage() { return "ping"; }
         @Override public long pingIntervalMs() { return 20_000; }
 
+        /** Разобрать сообщение биржи в out; служебные — пропустить, ошибки — исключение. */
         public String parse(char[] c, int len, BookBatch out) throws Exception {
             out.reset();
             if (FastJson.equals(c, len, "pong")) return null;
@@ -151,13 +167,19 @@ public final class WsDialects {
 
     // ───────────────────────── Gate ─────────────────────────
 
+    /** Gate: spot.order_book (снимки), пинг spot.ping. */
     static final class Gate implements WsDialect {
+        /** Адрес по умолчанию (основная или тестовая сеть). */
         public String defaultUrl(boolean testnet) {
             return testnet ? "wss://ws-testnet.gate.com/v4/ws/spot" : "wss://api.gateio.ws/ws/v4/";
         }
+        /** Имя символа на бирже. */
         public String venueSymbol(String s) { return base(s) + "_" + quote(s); }
+        /** Сообщения подписки на стаканы символов. */
         public List<String> subscribe(List<String> v, int d) { return ev("subscribe", v); }
+        /** Сообщения подписки на стаканы символов. */
         public List<String> unsubscribe(List<String> v, int d) { return ev("unsubscribe", v); }
+        /** Сообщения подписки/отписки пачками. */
         private List<String> ev(String event, List<String> v) {
             List<String> out = new ArrayList<>();
             for (String s : v) {
@@ -172,6 +194,7 @@ public final class WsDialects {
             return msg(JSON.createObjectNode().put("time", System.currentTimeMillis() / 1000).put("channel", "spot.ping"));
         }
 
+        /** Разобрать сообщение биржи в out; служебные — пропустить, ошибки — исключение. */
         public String parse(char[] c, int len, BookBatch out) throws Exception {
             out.reset();
             boolean orderBook = false, pong = false, update = false, sub = false;
@@ -223,11 +246,16 @@ public final class WsDialects {
 
     // ───────────────────────── BingX ─────────────────────────
 
+    /** BingX: depth20 (снимки в gzip), пинг Ping/Pong. */
     static final class Bingx implements WsDialect {
         public String defaultUrl(boolean testnet) { return "wss://open-api-ws.bingx.com/market"; }
+        /** Имя символа на бирже. */
         public String venueSymbol(String s) { return base(s) + "-" + quote(s); }
+        /** Сообщения подписки на стаканы символов. */
         public List<String> subscribe(List<String> v, int d) { return op("sub", v); }
+        /** Сообщения подписки на стаканы символов. */
         public List<String> unsubscribe(List<String> v, int d) { return op("unsub", v); }
+        /** Сообщения подписки/отписки пачками. */
         private List<String> op(String type, List<String> v) {
             List<String> out = new ArrayList<>();
             for (String s : v)
@@ -241,6 +269,7 @@ public final class WsDialects {
             }
         }
 
+        /** Разобрать сообщение биржи в out; служебные — пропустить, ошибки — исключение. */
         public String parse(char[] c, int len, BookBatch out) throws Exception {
             out.reset();
             if (FastJson.equals(c, len, "Ping") || FastJson.equals(c, len, "ping")) return "Pong";
@@ -292,11 +321,16 @@ public final class WsDialects {
 
     // ───────────────────────── LBank ─────────────────────────
 
+    /** LBank: depth (снимки), пинг ping/pong. */
     static final class Lbank implements WsDialect {
         public String defaultUrl(boolean testnet) { return "wss://www.lbkex.net/ws/V2/"; }
+        /** Имя символа на бирже. */
         public String venueSymbol(String s) { return (base(s) + "_" + quote(s)).toLowerCase(Locale.ROOT); }
+        /** Сообщения подписки на стаканы символов. */
         public List<String> subscribe(List<String> v, int d) { return op("subscribe", v); }
+        /** Сообщения подписки на стаканы символов. */
         public List<String> unsubscribe(List<String> v, int d) { return op("unsubscribe", v); }
+        /** Сообщения подписки/отписки пачками. */
         private List<String> op(String action, List<String> v) {
             List<String> out = new ArrayList<>();
             for (String s : v)
@@ -305,6 +339,7 @@ public final class WsDialects {
             return out;
         }
 
+        /** Разобрать сообщение биржи в out; служебные — пропустить, ошибки — исключение. */
         public String parse(char[] c, int len, BookBatch out) throws Exception {
             out.reset();
             boolean ping = false, isDepth = false, hasDepth = false;
@@ -347,13 +382,19 @@ public final class WsDialects {
 
     // ───────────────────────── Hyperliquid ─────────────────────────
 
+    /** Hyperliquid: l2Book (снимки), пинг {"method":"ping"}. */
     static final class Hyperliquid implements WsDialect {
+        /** Адрес по умолчанию (основная или тестовая сеть). */
         public String defaultUrl(boolean testnet) {
             return testnet ? "wss://api.hyperliquid-testnet.xyz/ws" : "wss://api.hyperliquid.xyz/ws";
         }
+        /** Имя символа на бирже. */
         public String venueSymbol(String s) { return base(s); }
+        /** Сообщения подписки на стаканы символов. */
         public List<String> subscribe(List<String> v, int d) { return op("subscribe", v); }
+        /** Сообщения подписки на стаканы символов. */
         public List<String> unsubscribe(List<String> v, int d) { return op("unsubscribe", v); }
+        /** Сообщения подписки/отписки пачками. */
         private List<String> op(String method, List<String> v) {
             List<String> out = new ArrayList<>();
             for (String s : v) {
@@ -366,6 +407,7 @@ public final class WsDialects {
         @Override public String pingMessage() { return "{\"method\":\"ping\"}"; }
         @Override public long pingIntervalMs() { return 20_000; }
 
+        /** Разобрать сообщение биржи в out; служебные — пропустить, ошибки — исключение. */
         public String parse(char[] c, int len, BookBatch out) throws Exception {
             out.reset();
             int kind = -1;                  // 0 — служебное, 1 — ошибка, 2 — стакан
@@ -416,11 +458,15 @@ public final class WsDialects {
 
     // ───────────────────────── dYdX v4 (indexer) ─────────────────────────
 
+    /** dYdX v4: v4_orderbook (снимок + изменения). */
     static final class Dydx implements WsDialect {
+        /** Адрес по умолчанию (основная или тестовая сеть). */
         public String defaultUrl(boolean testnet) {
             return testnet ? "wss://indexer.v4testnet.dydx.exchange/v4/ws" : "wss://indexer.dydx.trade/v4/ws";
         }
+        /** Имя символа на бирже. */
         public String venueSymbol(String s) { return base(s) + "-" + quote(s); }
+        /** Сообщения подписки на стаканы символов. */
         public List<String> subscribe(List<String> v, int d) {
             List<String> out = new ArrayList<>();
             for (String s : v)
@@ -428,6 +474,7 @@ public final class WsDialects {
                         .put("id", s).put("batched", true)));
             return out;
         }
+        /** Сообщения подписки на стаканы символов. */
         public List<String> unsubscribe(List<String> v, int d) {
             List<String> out = new ArrayList<>();
             for (String s : v)
@@ -435,6 +482,7 @@ public final class WsDialects {
             return out;
         }
 
+        /** Уровни из contents сообщения dYdX. */
         private static void contents(JsonParser p, BookBatch out) throws Exception {
             if (p.currentToken() != JsonToken.START_OBJECT) throw new IllegalStateException("dYdX: contents не объект");
             while (p.nextToken() == JsonToken.FIELD_NAME) {
@@ -447,6 +495,7 @@ public final class WsDialects {
             }
         }
 
+        /** Разобрать сообщение биржи в out; служебные — пропустить, ошибки — исключение. */
         public String parse(char[] c, int len, BookBatch out) throws Exception {
             out.reset();
             String type = null, message = null;
@@ -505,7 +554,9 @@ public final class WsDialects {
     static final class Uniswap implements WsDialect {
         // keccak256("Sync(uint112,uint112)") — сверяется тестом независимым keccak
         static final String SYNC_TOPIC = "0x1c411e9a96e071241c2f21f7726b17ae89e3cab4c78be50e062b03a9fffbbad1";
+        /** REST-диалект пулов: формула синтетического стакана. */
         private final Dialects.UniswapV2 amm;
+        /** Пул по адресу пары (события Sync приходят с адресом). */
         private final Map<String, Dialects.UniswapV2.Pool> byAddr = new ConcurrentHashMap<>();
 
         Uniswap(String poolsSpec) { amm = new Dialects.UniswapV2(poolsSpec); }
@@ -515,6 +566,7 @@ public final class WsDialects {
             return restUrl == null || restUrl.isBlank() ? defaultUrl(testnet) : restUrl.replaceFirst("^http", "ws");
         }
 
+        /** Имя символа на бирже. */
         public String venueSymbol(String s) {
             Dialects.UniswapV2.Pool p = amm.pools.get(s.toUpperCase());
             if (p == null) throw new IllegalArgumentException("Нет пула для " + s + " в UNISWAPV2_POOLS");
@@ -523,6 +575,7 @@ public final class WsDialects {
             return addr;
         }
 
+        /** Сообщения подписки на стаканы символов. */
         public List<String> subscribe(List<String> v, int d) {
             List<String> out = new ArrayList<>();
             ObjectNode sub = JSON.createObjectNode().put("jsonrpc", "2.0").put("id", "sub:logs").put("method", "eth_subscribe");
@@ -542,10 +595,12 @@ public final class WsDialects {
             return out;
         }
 
+        /** Сообщения подписки на стаканы символов. */
         public List<String> unsubscribe(List<String> v, int d) { return List.of(); }
 
         @Override public String pingMessage() { return "{\"jsonrpc\":\"2.0\",\"id\":\"hb\",\"method\":\"eth_blockNumber\",\"params\":[]}"; }
 
+        /** Разобрать сообщение биржи в out; служебные — пропустить, ошибки — исключение. */
         public String parse(char[] c, int len, BookBatch out) throws Exception {
             out.reset();
             JsonNode n = JSON.readTree(new String(c, 0, len));
@@ -564,6 +619,7 @@ public final class WsDialects {
             throw new IllegalStateException("Uniswap WS: неожиданное сообщение " + abbreviate(c, len));
         }
 
+        /** Синтетический стакан Uniswap по резервам пула из Sync или getReserves. */
         private void fill(BookBatch out, String addr, String hex) {
             Dialects.UniswapV2.Pool p = byAddr.get(addr);
             if (p == null) throw new IllegalStateException("Uniswap WS: неизвестная пара " + addr);
@@ -588,9 +644,12 @@ public final class WsDialects {
     static final class Kucoin implements WsDialect {
         private static final java.net.http.HttpClient HTTP = java.net.http.HttpClient.newBuilder()
                 .connectTimeout(java.time.Duration.ofSeconds(5)).build();
+        /** Интервал пинга из bullet-public, мс. */
         private volatile long pingMs = 18_000;
+        /** Номера сообщений подписки и пинга. */
         private final java.util.concurrent.atomic.AtomicLong ids = new java.util.concurrent.atomic.AtomicLong();
 
+        /** Адрес по умолчанию (основная или тестовая сеть). */
         public String defaultUrl(boolean testnet) { return "kucoin:bullet-public"; }
 
         @Override public String connectUrl(String url, String restUrl) throws Exception {
@@ -610,9 +669,13 @@ public final class WsDialects {
             return server.path("endpoint").asText() + "?token=" + d.path("token").asText() + "&connectId=hft" + System.nanoTime();
         }
 
+        /** Имя символа на бирже. */
         public String venueSymbol(String s) { return base(s) + "-" + quote(s); }
+        /** Сообщения подписки на стаканы символов. */
         public List<String> subscribe(List<String> v, int d) { return op("subscribe", v); }
+        /** Сообщения подписки на стаканы символов. */
         public List<String> unsubscribe(List<String> v, int d) { return op("unsubscribe", v); }
+        /** Сообщения подписки/отписки пачками. */
         private List<String> op(String type, List<String> v) {
             List<String> out = new ArrayList<>();
             for (int i = 0; i < v.size(); i += 100) {
@@ -626,6 +689,7 @@ public final class WsDialects {
         @Override public String pingMessage() { return "{\"id\":\"" + ids.incrementAndGet() + "\",\"type\":\"ping\"}"; }
         @Override public long pingIntervalMs() { return pingMs; }
 
+        /** Разобрать сообщение биржи в out; служебные — пропустить, ошибки — исключение. */
         public String parse(char[] c, int len, BookBatch out) throws Exception {
             out.reset();
             String type = null, code = null, data = null;
@@ -684,14 +748,20 @@ public final class WsDialects {
      * lastUpdateId, bids, asks}} (у фьючерсного формата — b/a и E). Каждое сообщение — снимок.
      */
     static final class Aster implements WsDialect {
+        /** Номера сообщений подписки. */
         private final java.util.concurrent.atomic.AtomicLong ids = new java.util.concurrent.atomic.AtomicLong();
 
+        /** Адрес по умолчанию (основная или тестовая сеть). */
         public String defaultUrl(boolean testnet) {
             return testnet ? "wss://sstream.asterdex-testnet.com/stream" : "wss://sstream.asterdex.com/stream";
         }
+        /** Имя символа на бирже. */
         public String venueSymbol(String s) { return s.toLowerCase(java.util.Locale.ROOT); }
+        /** Сообщения подписки на стаканы символов. */
         public List<String> subscribe(List<String> v, int d) { return op("SUBSCRIBE", v, d); }
+        /** Сообщения подписки на стаканы символов. */
         public List<String> unsubscribe(List<String> v, int d) { return op("UNSUBSCRIBE", v, d); }
+        /** Сообщения подписки/отписки пачками. */
         private List<String> op(String method, List<String> v, int d) {
             String depth = d <= 5 ? "5" : d <= 10 ? "10" : "20";
             List<String> out = new ArrayList<>();
@@ -704,6 +774,7 @@ public final class WsDialects {
             return out;
         }
 
+        /** Разобрать сообщение биржи в out; служебные — пропустить, ошибки — исключение. */
         public String parse(char[] c, int len, BookBatch out) throws Exception {
             out.reset();
             boolean reply = false, book = false;

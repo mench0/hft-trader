@@ -13,27 +13,36 @@ import org.HdrHistogram.Histogram;
  */
 public final class Latency {
 
+    /** Название замера для логов. */
     private final String name;
+    /** Гистограмма от 1 нс до 60 с с точностью 3 значащих цифры. */
     private final Histogram histogram = new Histogram(1, 60_000_000_000L, 3);
 
+    /** @param name название замера */
     public Latency(String name) {
         this.name = name;
     }
 
+    /** Учесть длительность в наносекундах. */
     public void record(long nanos) {
         if (nanos > 0 && nanos < 60_000_000_000L) {
             histogram.recordValue(nanos);
         }
     }
 
+    /** Учесть время от startNanos (System.nanoTime) до сейчас. */
     public void recordSince(long startNanos) {
         record(System.nanoTime() - startNanos);
     }
 
+    /** Медиана, мкс. */
     public long p50Micros() { return histogram.getValueAtPercentile(50) / 1000; }
+    /** 99-й перцентиль, мкс. */
     public long p99Micros() { return histogram.getValueAtPercentile(99) / 1000; }
+    /** Сколько замеров. */
     public long count() { return histogram.getTotalCount(); }
 
+    /** Начать замер заново. */
     public void reset() {
         histogram.reset();
     }

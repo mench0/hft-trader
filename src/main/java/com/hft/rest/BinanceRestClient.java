@@ -34,20 +34,34 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class BinanceRestClient implements ExchangeOrderApi {
 
+    /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(BinanceRestClient.class);
 
+    /** REST-адрес. */
     private final String baseUrl;
+    /** API-ключи. */
     private final Credentials credentials;
+    /** Окно годности подписи, мс. */
     private final int recvWindow;
+    /** HTTP/2-клиент. */
     private final HttpClient http;
+    /** Разбор JSON. */
     private final ObjectMapper mapper = new ObjectMapper();
+    /** Подпись HMAC-SHA256. */
     private final Signer signer;
+    /** Правила символов. */
     private final SymbolFilters filters;
+    /** Счётчик для newClientOrderId. */
     private final AtomicLong clientOrderSeq = new AtomicLong(System.currentTimeMillis());
 
     /** Разница между временем биржи и локальным. Без неё подпись может отвергаться. */
     private volatile long timeOffsetMs = 0;
 
+    /**
+     * @param config подключение и параметры
+     * @param credentials ключи
+     * @param filters правила символов
+     */
     public BinanceRestClient(ExchangeConfig config, Credentials credentials, SymbolFilters filters) {
         this.baseUrl = config.restUrl();
         this.credentials = credentials;
@@ -275,6 +289,7 @@ public final class BinanceRestClient implements ExchangeOrderApi {
         return getSigned("/api/v3/openOrders", "symbol=" + symbol.toUpperCase());
     }
 
+    /** Ответ на ордер в OrderResult (средняя цена — по fills или cummulativeQuoteQty). */
     private OrderResult parseOrderResult(JsonNode json, String symbol, Side side, long latency) {
         long orderId = json.path("orderId").asLong();
         String clientId = json.path("clientOrderId").asText("");
@@ -293,10 +308,12 @@ public final class BinanceRestClient implements ExchangeOrderApi {
 
     // ======================= HTTP =======================
 
+    /** Время с поправкой на расхождение часов с биржей. */
     private long timestamp() {
         return System.currentTimeMillis() + timeOffsetMs;
     }
 
+    /** Публичный GET. */
     private JsonNode getPublic(String path) throws Exception {
         HttpRequest req = HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl + path))
@@ -306,6 +323,7 @@ public final class BinanceRestClient implements ExchangeOrderApi {
         return send(req);
     }
 
+    /** Добавить timestamp, recvWindow и подпись. */
     private String withSignature(String params) {
         String full = params.isEmpty()
                 ? "timestamp=" + timestamp() + "&recvWindow=" + recvWindow
@@ -313,6 +331,7 @@ public final class BinanceRestClient implements ExchangeOrderApi {
         return full + "&signature=" + signer.sign(full);
     }
 
+    /** Подписанный GET. */
     private JsonNode getSigned(String path, String params) throws Exception {
         HttpRequest req = HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl + path + "?" + withSignature(params)))
@@ -323,6 +342,7 @@ public final class BinanceRestClient implements ExchangeOrderApi {
         return send(req);
     }
 
+    /** Подписанный POST (параметры в теле). */
     private JsonNode postSigned(String path, String params) throws Exception {
         String body = withSignature(params);
         HttpRequest req = HttpRequest.newBuilder()
@@ -335,6 +355,7 @@ public final class BinanceRestClient implements ExchangeOrderApi {
         return send(req);
     }
 
+    /** Подписанный DELETE. */
     private JsonNode deleteSigned(String path, String params) throws Exception {
         HttpRequest req = HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl + path + "?" + withSignature(params)))
@@ -348,6 +369,7 @@ public final class BinanceRestClient implements ExchangeOrderApi {
     /** Общий бюджет запросов Binance: вес по документации, заголовки X-MBX-* подтягивают счёт к счёту биржи. */
     private final RateBudget budget = RateBudget.of("binance");
 
+    /** Отправить с учётом общего бюджета лимитов; ошибка HTTP — ExchangeException. */
     private JsonNode send(HttpRequest req) throws Exception {
         String path = req.uri().getPath();
         boolean order = path.equals("/api/v3/order") && !"GET".equals(req.method())
@@ -365,13 +387,19 @@ public final class BinanceRestClient implements ExchangeOrderApi {
 
     /** Ошибка от биржи с кодом и телом ответа — по ним понятно, что именно не так. */
     public static final class ExchangeException extends RuntimeException implements RateLimited {
+        /** HTTP-код. */
         private final int httpStatus;
 
+        /**
+         * @param httpStatus HTTP-код
+         * @param body тело ответа
+         */
         public ExchangeException(int httpStatus, String body) {
             super("HTTP " + httpStatus + ": " + body);
             this.httpStatus = httpStatus;
         }
 
+        /** HTTP-код. */
         public int httpStatus() { return httpStatus; }
 
         /** 429 и 418 — превышен лимит запросов, нужно притормозить. */

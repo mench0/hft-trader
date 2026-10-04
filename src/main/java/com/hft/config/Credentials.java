@@ -11,6 +11,7 @@ package com.hft.config;
  */
 public record Credentials(String apiKey, String apiSecret) {
 
+    /** Ключи биржи из окружения: ID_API_KEY и ID_API_SECRET (например BINANCE_API_KEY). */
     public static Credentials fromEnv(String exchangeId) {
         String prefix = exchangeId.toUpperCase();
         String key = System.getenv(prefix + "_API_KEY");
@@ -21,10 +22,12 @@ public record Credentials(String apiKey, String apiSecret) {
         return new Credentials(key.trim(), secret.trim());
     }
 
+    /** Заданы ли оба ключа. */
     public boolean isPresent() {
         return apiKey != null && apiSecret != null;
     }
 
+    /** Бросает IllegalStateException, если ключей нет: подписанный запрос без них невозможен. */
     public void require() {
         if (!isPresent()) {
             throw new IllegalStateException(
@@ -32,6 +35,7 @@ public record Credentials(String apiKey, String apiSecret) {
         }
     }
 
+    /** Без секрета: ключи не должны попадать в логи. */
     @Override
     public String toString() {
         return isPresent()

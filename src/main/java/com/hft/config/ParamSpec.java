@@ -42,6 +42,7 @@ public record ParamSpec(String name, String def, double min, double max, String 
     /** Тот же параметр, но применяется только после перезапуска биржи. */
     public ParamSpec needsRestart() { return new ParamSpec(name, def, min, max, regex, true, help); }
 
+    /** Число без хвоста «.0» для целых значений (в описаниях и сообщениях об ошибках). */
     private static String plain(double v) {
         return v == Math.rint(v) && Math.abs(v) < 1e15 ? String.valueOf((long) v) : String.valueOf(v);
     }
@@ -106,6 +107,9 @@ public record ParamSpec(String name, String def, double min, double max, String 
         return out;
     }
 
+    /**
+     * Разобрать строку в тип поля record'а и проверить по описанию: true/false, формат строки, диапазон и целочисленность.
+     */
     private static Object parse(ParamSpec s, Class<?> t, String v) {
         if (t == boolean.class) {
             if (!v.equalsIgnoreCase("true") && !v.equalsIgnoreCase("false"))

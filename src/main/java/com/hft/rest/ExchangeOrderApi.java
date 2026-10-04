@@ -15,12 +15,16 @@ import com.hft.model.OrderResult;
  */
 public interface ExchangeOrderApi {
 
+    /** Лимитная покупка qty по price с указанным временем жизни. */
     OrderResult buyLimit(String symbol, double qty, double price, TimeInForce tif) throws Exception;
 
+    /** Лимитная продажа qty по price. */
     OrderResult sellLimit(String symbol, double qty, double price, TimeInForce tif) throws Exception;
 
+    /** Рыночная покупка qty базовой валюты. */
     OrderResult buyMarket(String symbol, double qty) throws Exception;
 
+    /** Рыночная продажа qty базовой валюты. */
     OrderResult sellMarket(String symbol, double qty) throws Exception;
 
     /**
@@ -31,7 +35,9 @@ public interface ExchangeOrderApi {
      */
     OrderResult buyMarketForQuote(String symbol, double quoteAmount) throws Exception;
 
+    /** Отменить ордер по id. */
     void cancelOrder(String symbol, long orderId) throws Exception;
 
+    /** Отменить все открытые ордера по символу; возвращает число отменённых. */
     int cancelAll(String symbol) throws Exception;
 }

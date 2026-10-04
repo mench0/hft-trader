@@ -41,7 +41,9 @@ public record ExchangeInfo(
     /** WebSocket-адрес с учётом testnet (null — по умолчанию диалекта/фида). */
     public String wsUrl(boolean testnet) { return testnet && hasTestnet() ? testnetWsUrl : wsUrl; }
 
+    /** Тип площадки: крупная/мелкая CEX, перп-DEX, DEX со стаканом, AMM. */
     public enum Kind { CEX_TIER1, CEX_TIER3, PERP_DEX, ORDERBOOK_DEX, AMM_DEX }
 
+    /** Степень готовности адаптера (см. описание record'а). */
     public enum Adapter { NATIVE_LIVE, LIVE_UNVERIFIED, PAPER_BLIND, NOT_IMPLEMENTED }
 }

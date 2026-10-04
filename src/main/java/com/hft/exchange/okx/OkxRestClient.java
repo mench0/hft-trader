@@ -40,11 +40,19 @@ import java.time.format.DateTimeFormatter;
  */
 public final class OkxRestClient extends SignedCexClient {
 
+    /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(OkxRestClient.class);
+    /** Время для подписи OKX (ISO, UTC, миллисекунды). */
     private static final DateTimeFormatter TS = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'");
 
+    /** Фраза API-ключа. */
     private final String passphrase;
 
+    /**
+     * @param config подключение и параметры биржи
+     * @param credentials ключи из окружения
+     * @param filters правила символов
+     */
     public OkxRestClient(ExchangeConfig config, Credentials credentials, SymbolFilters filters) {
         super("okx", config, credentials, filters);
         String p = System.getenv("OKX_PASSPHRASE");
@@ -54,16 +62,19 @@ public final class OkxRestClient extends SignedCexClient {
         this.passphrase = p == null ? "" : p.trim();
     }
 
+    /** Имя символа на бирже. */
     static String instId(String symbol) {
         return BalanceStore.baseAsset(symbol) + "-" + BalanceStore.quoteAsset(symbol);
     }
 
     // ------------------------------------------------------------ HTTP
 
+    /** Публичный GET. */
     private JsonNode publicGet(String pathAndQuery) throws Exception {
         return exec(req(baseUrl + pathAndQuery).GET().build(), false);
     }
 
+    /** Подписанный запрос. */
     private JsonNode signed(String method, String pathAndQuery, String body, boolean order) throws Exception {
         credentials.require();
         String ts = ZonedDateTime.now(ZoneOffset.UTC).format(TS);
@@ -79,6 +90,7 @@ public final class OkxRestClient extends SignedCexClient {
         return exec(b.build(), order);
     }
 
+    /** Ошибка в HTTP-коде или теле ответа — ApiException (лимит — с признаком rateLimit). */
     @Override
     protected void checkError(int http, JsonNode body) {
         String code = body.path("code").asText("");
@@ -93,6 +105,7 @@ public final class OkxRestClient extends SignedCexClient {
         if (!"0".equals(sCode)) throw new ApiException(http, sCode, first.path("sMsg").asText(), "50011".equals(sCode));
     }
 
+    /** Текст первой ошибки из data[].sMsg или msg. */
     private static String firstError(JsonNode body) {
         String s = body.path("data").path(0).path("sMsg").asText("");
         return s.isEmpty() ? body.path("msg").asText(body.toString()) : s;
@@ -100,6 +113,7 @@ public final class OkxRestClient extends SignedCexClient {
 
     // ------------------------------------------------------------ ордера
 
+    /** Отправить ордер (по WebSocket, если можно, иначе REST); исход ждёт вызывающий. */
     @Override
     protected OrderResult placeRaw(Order o) throws Exception {
         ObjectNode b = mapper.createObjectNode();
@@ -130,6 +144,7 @@ public final class OkxRestClient extends SignedCexClient {
                 o.qtyIsQuote() ? 0 : o.qty(), 0, 0, 0);
     }
 
+    /** Статус ордера: из WS-потока, если есть, иначе запрос к бирже. */
     @Override
     public OrderResult orderStatus(String symbol, long orderId) throws Exception {
         OrderResult st = streamed.get(orderId);
@@ -138,6 +153,7 @@ public final class OkxRestClient extends SignedCexClient {
         return fromOrder(r.path("data").path(0), orderId, symbol);
     }
 
+    /** Ответ биржи об ордере в OrderResult. */
     private OrderResult fromOrder(JsonNode o, long orderId, String symbol) {
         if (o.isMissingNode() || o.isNull()) throw new IllegalStateException("Ордер не найден");
         double exec = d(o, "accFillSz");
@@ -153,6 +169,7 @@ public final class OkxRestClient extends SignedCexClient {
                 d(o, "sz"), exec, d(o, "avgPx"), 0);
     }
 
+    /** Отменить ордер. */
     @Override
     public void cancelOrder(String symbol, long orderId) throws Exception {
         ObjectNode b = mapper.createObjectNode().put("instId", instId(symbol)).put("ordId", venueId(orderId));
@@ -164,6 +181,7 @@ public final class OkxRestClient extends SignedCexClient {
         log.info("[okx] ордер {} по {} отменён", orderId, symbol);
     }
 
+    /** Отменить все открытые ордера символа; возвращает их число. */
     @Override
     public int cancelAll(String symbol) throws Exception {
         if (openKnown && wsReady()) {
@@ -200,15 +218,20 @@ public final class OkxRestClient extends SignedCexClient {
 
     // ------------------------------------------------------------ WebSocket: ордера, исполнения, балансы
 
+    /** Адрес приватного WS вместо стандартного (тесты). */
     private volatile String privateWsUrl;
+    /** Куда пишутся балансы из WS. */
     private volatile BalanceStore balanceStore;
+    /** Баланс хотя бы раз пришёл по WS. */
     private volatile boolean openKnown, accountSeen;
     private final Map<String, String> openOrders = new ConcurrentHashMap<>();   // ordId -> instId
+    /** Номера WS-запросов. */
     private final AtomicLong wsSeq = new AtomicLong();
 
     /** Свой адрес приватного WS (тесты, прокси). */
     public void setPrivateWsUrl(String url) { this.privateWsUrl = url; }
 
+    /** Поднять приватный WS-канал: ордера, исполнения, балансы. */
     @Override
     public void startStreams(BalanceStore store) throws Exception {
         if (!credentials.isPresent() || !wsTradeAllowed() || wsChannel != null) return;
@@ -263,6 +286,7 @@ public final class OkxRestClient extends SignedCexClient {
         }
     }
 
+    /** Событие приватного канала: обновить состояние ордера или баланс. */
     private void onEvent(String text) throws Exception {
         JsonNode n = mapper.readTree(text);
         String ch = n.path("arg").path("channel").asText();
@@ -297,6 +321,7 @@ public final class OkxRestClient extends SignedCexClient {
         }
     }
 
+    /** Протокол приватного WS-канала биржи. */
     private final class Private implements WsRpcChannel.Protocol {
         @Override public String url() {
             if (privateWsUrl != null) return privateWsUrl;
@@ -339,6 +364,7 @@ public final class OkxRestClient extends SignedCexClient {
 
     // ------------------------------------------------------------ правила и баланс
 
+    /** Загрузить правила торговли символов (шаги объёма и цены, минимальная сумма). */
     @Override
     public void loadFilters(Iterable<String> symbols) throws Exception {
         JsonNode r = publicGet("/api/v5/public/instruments?instType=SPOT");
@@ -357,6 +383,7 @@ public final class OkxRestClient extends SignedCexClient {
         log.info("[okx] правила загружены для {} символов (minNotional по умолчанию 1.0)", loaded);
     }
 
+    /** Загрузить балансы. */
     @Override
     public void loadBalances(BalanceStore store) throws Exception {
         JsonNode r = signed("GET", "/api/v5/account/balance", "", false);

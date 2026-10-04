@@ -33,6 +33,7 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class MeanReversionStrategy extends Strategy {
 
+    /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(MeanReversionStrategy.class);
 
     /** Параметры биржи из админки; читаются на каждом тике, меняются без перезапуска. */
@@ -41,13 +42,21 @@ public final class MeanReversionStrategy extends Strategy {
     /** Открытые позиции: символ -> детали входа. */
     private final Map<String, Position> positions = new ConcurrentHashMap<>();
 
+    /** Открытая позиция: цена входа, объём, время открытия. */
     private record Position(double entryPrice, double quantity, long openedAtMs) {}
 
+    /** Отправка ордеров вне потока конвейера. */
     private final OrderExecutor executor;
     private final double[] top = new double[4];          // только поток конвейера
     /** Фид в реальном времени? (на REST-запасе стакан старый — новые входы запрещены, выходы разрешены) */
     private volatile java.util.function.BooleanSupplier realtime = () -> true;
 
+    /**
+     * @param market рыночные данные
+     * @param orders сервис ордеров
+     * @param exchangeId биржа (имя потоков)
+     * @param settings параметры биржи
+     */
     public MeanReversionStrategy(MarketDataStore market, OrderService orders, String exchangeId, TradingSettings settings) {
         super("mean-reversion", market, orders);
         this.settings = settings;
@@ -57,8 +66,10 @@ public final class MeanReversionStrategy extends Strategy {
     /** Источник признака «данные в реальном времени» (фид биржи). */
     public void setRealtimeSource(java.util.function.BooleanSupplier s) { this.realtime = s; }
 
+    /** Исполнитель ордеров (для метрик). */
     public OrderExecutor executor() { return executor; }
 
+    /** Решение по тику: вход, если позиции нет, иначе проверка выхода. */
     @Override
     protected void onTick(Tick tick) {
         if (!settings.get().meanReversionEnabled()) return;
@@ -81,6 +92,7 @@ public final class MeanReversionStrategy extends Strategy {
         }
     }
 
+    /** Вход в лонг: перепроданность по z, перевес бидов, узкий спред, свежий стакан и данные в реальном времени. */
     private void checkEntry(String symbol, double z, OrderBook book, TradingParams p) {
         // Ищем только перепроданность — лонг от низа
         if (z > -p.entryZ()) return;
@@ -113,6 +125,7 @@ public final class MeanReversionStrategy extends Strategy {
         });
     }
 
+    /** Выход: z вернулся, стоп-лосс или таймаут. */
     private void checkExit(String symbol, double z, double currentPrice, Position pos, TradingParams p) {
         double pnlPercent = (currentPrice - pos.entryPrice()) / pos.entryPrice() * 100.0;
 
@@ -130,6 +143,7 @@ public final class MeanReversionStrategy extends Strategy {
         executor.submit(symbol, () -> closePosition(symbol, pos));
     }
 
+    /** Продать позицию; результат после комиссий — в дневной PnL риск-менеджера. */
     private void closePosition(String symbol, Position pos) {
         OrderResult result = orders.sellMarket(symbol, pos.quantity());
         if (result.executedQty() <= 0) return;
@@ -154,5 +168,6 @@ public final class MeanReversionStrategy extends Strategy {
         });
     }
 
+    /** Открытых позиций. */
     public int openPositions() { return positions.size(); }
 }

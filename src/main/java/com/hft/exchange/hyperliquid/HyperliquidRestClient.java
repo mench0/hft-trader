@@ -57,20 +57,37 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class HyperliquidRestClient extends SignedCexClient {
 
+    /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(HyperliquidRestClient.class);
-    private static final double MARKET_SLIPPAGE = 0.05;
 
+    /** Подпись secp256k1/keccak (web3j). */
     private final EvmCrypto crypto;
+    /** Адрес основного аккаунта (HYPERLIQUID_API_KEY). */
     private final String account;
+    /** Источник в «фантомном агенте»: "a" — основная сеть, "b" — тестовая. */
     private final String source;
+    /** Nonce действий: миллисекунды, строго возрастают. */
     private final AtomicLong nonce = new AtomicLong(System.currentTimeMillis());
+    /** Номер актива по монете (из meta). */
     private final Map<String, Integer> assetIndex = new ConcurrentHashMap<>();
+    /** Знаков объёма по монете (из meta). */
     private final Map<String, Integer> szDecimals = new ConcurrentHashMap<>();
 
+    /**
+     * @param config подключение и параметры биржи
+     * @param credentials ключи из окружения
+     * @param filters правила символов
+     */
     public HyperliquidRestClient(ExchangeConfig config, Credentials credentials, SymbolFilters filters) {
         this(config, credentials, filters, credentials.isPresent() ? new Web3jCrypto(credentials.apiSecret()) : null);
     }
 
+    /**
+     * @param config подключение и параметры
+     * @param credentials адрес аккаунта и ключ агента
+     * @param filters правила символов
+     * @param crypto подпись (в тестах — заглушка)
+     */
     public HyperliquidRestClient(ExchangeConfig config, Credentials credentials, SymbolFilters filters, EvmCrypto crypto) {
         super("hyperliquid", config, credentials, filters);
         this.crypto = crypto;
@@ -78,6 +95,7 @@ public final class HyperliquidRestClient extends SignedCexClient {
         this.source = config.testnet() ? "b" : "a";
     }
 
+    /** Монета символа (BTC в BTCUSDC). */
     private static String coin(String symbol) { return BalanceStore.baseAsset(symbol); }
 
     // ------------------------------------------------------------ подпись
@@ -95,6 +113,7 @@ public final class HyperliquidRestClient extends SignedCexClient {
         return crypto.keccak256(concat(new byte[]{0x19, 0x01}, domainSep, structHash));
     }
 
+    /** Хеш действия: keccak(msgpack(action) ‖ nonce ‖ vault-флаг) — connectionId «фантомного агента». */
     byte[] connectionId(Map<String, Object> action, long nonceValue) {
         byte[] packed = MsgPack.pack(action);
         ByteBuffer buf = ByteBuffer.allocate(packed.length + 8 + 1);
@@ -117,12 +136,14 @@ public final class HyperliquidRestClient extends SignedCexClient {
         return body;
     }
 
+    /** Число в 32 байта big-endian. */
     private static byte[] uint256(long v) {
         byte[] out = new byte[32];
         for (int i = 0; i < 8; i++) out[31 - i] = (byte) (v >> (8 * i));
         return out;
     }
 
+    /** Склеить массивы байт. */
     private static byte[] concat(byte[]... parts) {
         ByteArrayOutputStream o = new ByteArrayOutputStream();
         for (byte[] p : parts) o.writeBytes(p);
@@ -131,6 +152,7 @@ public final class HyperliquidRestClient extends SignedCexClient {
 
     // ------------------------------------------------------------ HTTP
 
+    /** POST /info (по WS post, если готов); order=true — по лимиту ордеров. */
     private JsonNode info(Map<String, Object> body, boolean order) throws Exception {
         try {
             JsonNode ws = wsPost("info", body, order);
@@ -146,6 +168,7 @@ public final class HyperliquidRestClient extends SignedCexClient {
                 .POST(java.net.http.HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body))).build(), order);
     }
 
+    /** POST /info с типом запроса и парами ключ-значение. */
     private JsonNode infoOf(String type, Object... kv) throws Exception {
         Map<String, Object> b = new LinkedHashMap<>();
         b.put("type", type);
@@ -153,6 +176,7 @@ public final class HyperliquidRestClient extends SignedCexClient {
         return info(b, false);
     }
 
+    /** Подписать действие EIP-712 агентом и отправить на /exchange. */
     private JsonNode exchange(Map<String, Object> action) throws Exception {
         if (crypto == null) credentials.require();
         long n = nonce.incrementAndGet();
@@ -179,6 +203,7 @@ public final class HyperliquidRestClient extends SignedCexClient {
                 .POST(java.net.http.HttpRequest.BodyPublishers.ofString(body)).build(), true);
     }
 
+    /** Ошибка в HTTP-коде или теле ответа — ApiException (лимит — с признаком rateLimit). */
     @Override
     protected void checkError(int http, JsonNode body) {
         if (http == 429) throw new ApiException(http, "429", "слишком часто", true);
@@ -204,14 +229,17 @@ public final class HyperliquidRestClient extends SignedCexClient {
         return bd.stripTrailingZeros().toPlainString();
     }
 
+    /** Номер актива символа; неизвестный — IllegalArgumentException. */
     private int asset(String symbol) {
         Integer i = assetIndex.get(coin(symbol));
         if (i == null) throw new IllegalStateException("Hyperliquid: неизвестная монета " + coin(symbol) + " (вызовите loadFilters)");
         return i;
     }
 
+    /** Знаков объёма по монете (из meta). */
     private int szDec(String symbol) { return szDecimals.getOrDefault(coin(symbol), 4); }
 
+    /** Середина по allMids (для цены IOC «рыночного» ордера). */
     private double mid(String symbol) throws Exception {
         double m = d(infoOf("allMids"), coin(symbol));
         if (m <= 0) throw new IllegalStateException("Hyperliquid: нет средней цены для " + coin(symbol));
@@ -220,6 +248,7 @@ public final class HyperliquidRestClient extends SignedCexClient {
 
     // ------------------------------------------------------------ ордера
 
+    /** Отправить ордер (по WebSocket, если можно, иначе REST); исход ждёт вызывающий. */
     @Override
     protected OrderResult placeRaw(Order o) throws Exception {
         int sd = szDec(o.symbol());
@@ -229,7 +258,7 @@ public final class HyperliquidRestClient extends SignedCexClient {
         if (o.type() == Type.MARKET || o.qtyIsQuote()) {
             double m = mid(o.symbol());
             if (o.qtyIsQuote()) size = o.qty() / m;
-            if (o.type() == Type.MARKET) { px = m * (buy ? 1 + MARKET_SLIPPAGE : 1 - MARKET_SLIPPAGE); tif = "Ioc"; }
+            if (o.type() == Type.MARKET) { px = m * (buy ? 1 + (config.params().marketPriceBandPercent() / 100.0) : 1 - (config.params().marketPriceBandPercent() / 100.0)); tif = "Ioc"; }
         }
         if (o.type() == Type.LIMIT) {
             tif = switch (o.tif()) { case GTC -> "Gtc"; case IOC, FOK -> "Ioc"; };   // FOK на бирже нет: IOC
@@ -268,6 +297,7 @@ public final class HyperliquidRestClient extends SignedCexClient {
         throw new ApiException(200, "NO_STATUS", "неожиданный ответ на ордер: " + r, false);
     }
 
+    /** Статус ордера: из WS-потока, если есть, иначе запрос к бирже. */
     @Override
     public OrderResult orderStatus(String symbol, long orderId) throws Exception {
         OrderResult cached = streamed.get(orderId);
@@ -288,12 +318,14 @@ public final class HyperliquidRestClient extends SignedCexClient {
         return new OrderResult(orderId, "", symbol.toUpperCase(), side, status, orig, exec, d(o, "limitPx"), 0);
     }
 
+    /** Отменить ордер. */
     @Override
     public void cancelOrder(String symbol, long orderId) throws Exception {
         cancel(List.of(cancelItem(asset(symbol), Long.parseLong(venueId(orderId)))));
         log.info("[hyperliquid] ордер {} по {} отменён", orderId, symbol);
     }
 
+    /** Отменить все открытые ордера символа; возвращает их число. */
     @Override
     public int cancelAll(String symbol) throws Exception {
         JsonNode open = infoOf("openOrders", "user", account);
@@ -306,6 +338,7 @@ public final class HyperliquidRestClient extends SignedCexClient {
         return items.size();
     }
 
+    /** Элемент списка отмены {a: актив, o: id}. */
     private static Map<String, Object> cancelItem(int asset, long oid) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("a", asset);
@@ -313,6 +346,7 @@ public final class HyperliquidRestClient extends SignedCexClient {
         return m;
     }
 
+    /** Отменить ордера одним действием. */
     private void cancel(List<?> items) throws Exception {
         Map<String, Object> action = new LinkedHashMap<>();
         action.put("type", "cancel");
@@ -322,14 +356,20 @@ public final class HyperliquidRestClient extends SignedCexClient {
 
     // ------------------------------------------------------------ WebSocket: post, orderUpdates, userFills
 
+    /** Адрес WebSocket вместо стандартного (тесты). */
     private volatile String wsUrlOverride;
+    /** Номера WS-запросов. */
     private final AtomicLong wsSeq = new AtomicLong();
+    /** Последнее обновление ордера из WS: символ, сторона, объём, остаток, статус, цена. */
     private record Upd(String symbol, Side side, double orig, double left, String status, double limitPx) {}
+    /** Обновления ордеров из WS (последние 10 000). */
     private final Map<Long, Upd> updates = BoundedMap.create(MAX_TRACKED_ORDERS);
     private final Map<Long, double[]> fills = BoundedMap.create(MAX_TRACKED_ORDERS);   // oid -> {объём, объём*цена}
 
+    /** Адрес WebSocket вместо стандартного (тесты). */
     public void setWsUrl(String url) { this.wsUrlOverride = url; }
 
+    /** Поднять приватный WS-канал: ордера, исполнения, балансы. */
     @Override
     public void startStreams(BalanceStore store) {
         if (crypto == null || !wsTradeAllowed() || wsChannel != null) return;
@@ -379,11 +419,13 @@ public final class HyperliquidRestClient extends SignedCexClient {
         };
     }
 
+    /** Наш символ по монете (из выбранных). */
     private String symbolFor(String coin) {
         for (String s : config.symbols()) if (coin(s).equals(coin)) return s.toUpperCase();
         return coin;
     }
 
+    /** Собрать состояние ордера из обновлений и исполнений и положить в streamed. */
     private void publish(long oid) {
         Upd u = updates.get(oid);
         if (u == null) return;
@@ -401,6 +443,7 @@ public final class HyperliquidRestClient extends SignedCexClient {
         streamed.put(id, new OrderResult(id, "", u.symbol(), u.side(), status, u.orig(), exec, avg, 0));
     }
 
+    /** Событие приватного канала: обновить состояние ордера или баланс. */
     private void onEvent(String text) throws Exception {
         JsonNode n = mapper.readTree(text);
         String ch = n.path("channel").asText();
@@ -425,6 +468,7 @@ public final class HyperliquidRestClient extends SignedCexClient {
         }
     }
 
+    /** Протокол WS-канала Hyperliquid: post-запросы и подписки orderUpdates/userFills. */
     private final class Stream implements WsRpcChannel.Protocol {
         @Override public String url() {
             if (wsUrlOverride != null) return wsUrlOverride;
@@ -460,6 +504,7 @@ public final class HyperliquidRestClient extends SignedCexClient {
 
     // ------------------------------------------------------------ правила и баланс
 
+    /** Загрузить правила торговли символов (шаги объёма и цены, минимальная сумма). */
     @Override
     public void loadFilters(Iterable<String> symbols) throws Exception {
         JsonNode universe = infoOf("meta").path("universe");
@@ -480,6 +525,7 @@ public final class HyperliquidRestClient extends SignedCexClient {
         log.info("[hyperliquid] правила загружены для {} символов", loaded);
     }
 
+    /** Загрузить балансы. */
     @Override
     public void loadBalances(BalanceStore store) throws Exception {
         JsonNode r = infoOf("clearinghouseState", "user", account);

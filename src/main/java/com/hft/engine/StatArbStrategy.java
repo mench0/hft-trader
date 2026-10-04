@@ -33,16 +33,23 @@ import java.util.function.BooleanSupplier;
  */
 public final class StatArbStrategy extends Strategy {
 
+    /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(StatArbStrategy.class);
 
     /** Окно отсчётов одной пары и её позиция. Отсчёты пишет только поток конвейера. */
     static final class Pair {
+        /** Символы пары: A и B. */
         final String a, b;
+        /** Окна ln-цен A и B (кольцевые). */
         final double[] la, lb;
+        /** Сколько отсчётов в окне и куда пишется следующий. */
         int n, head;
+        /** Последние z-score спреда, β и корреляция доходностей (читает админка). */
         volatile double z = Double.NaN, beta = Double.NaN, corr = Double.NaN;
         Pair(String a, String b, int window) { this.a = a; this.b = b; la = new double[window]; lb = new double[window]; }
+        /** Имя пары A/B. */
         String name() { return a + "/" + b; }
+        /** Добавить отсчёт: логарифмы середин стаканов. */
         void add(double pa, double pb) {
             la[head] = Math.log(pa); lb[head] = Math.log(pb);
             head = (head + 1) % la.length;
@@ -86,23 +93,39 @@ public final class StatArbStrategy extends Strategy {
     /** Открытая позиция по паре: какая нога куплена, сколько и почём. */
     record Position(String symbol, boolean longA, double qty, double entryPrice, long openedAtMs) {}
 
+    /** Параметры биржи. */
     private final TradingSettings settings;
+    /** Отправка ордеров вне потока конвейера. */
     private final OrderExecutor executor;
+    /** Данные в реальном времени. */
     private volatile BooleanSupplier realtime = () -> true;
+    /** Пары с окнами отсчётов. */
     private volatile List<Pair> pairs = List.of();
+    /** Для какого statArbPairs построены пары (null — ещё не строились). */
     private volatile String builtFor = null;
+    /** Для какого окна построены пары. */
     private int builtWindow;
+    /** Время последнего отсчёта (поток конвейера). */
     private long lastSampleMs;
     private final Map<String, Position> positions = new ConcurrentHashMap<>();   // имя пары -> позиция
+    /** Счётчики: закрыто сделок, из них по стопу. */
     private final AtomicLong trades = new AtomicLong(), stops = new AtomicLong();
+    /** Результат с запуска. */
     private volatile double totalPnl;
 
+    /**
+     * @param market рыночные данные
+     * @param orders сервис ордеров
+     * @param exchangeId биржа (имя потоков)
+     * @param settings параметры биржи
+     */
     public StatArbStrategy(MarketDataStore market, OrderService orders, String exchangeId, TradingSettings settings) {
         super("stat-arb", market, orders);
         this.settings = settings;
         this.executor = new OrderExecutor(exchangeId + "-statarb", 2);
     }
 
+    /** Источник признака «данные в реальном времени»: на REST-запасе новых входов нет. */
     public void setRealtimeSource(BooleanSupplier s) { this.realtime = s; }
 
     /** Пары из параметра "A/B,C/D" или все пары выбранных символов с одной котируемой валютой. */
@@ -123,10 +146,12 @@ public final class StatArbStrategy extends Strategy {
         return out;
     }
 
+    /** Котируемая валюта символа; для неразборчивого — уникальная строка (пару не образует). */
     private static String quote(String s) {
         try { return BalanceStore.quoteAsset(s); } catch (IllegalArgumentException e) { return "?" + s; }
     }
 
+    /** Построить пары (при первом тике и смене statArbPairs/окна). */
     private void ensureBuilt(TradingParams p) {
         if (p.statArbPairs().equals(builtFor) && p.statArbWindow() == builtWindow) return;
         List<Pair> ps = new ArrayList<>();
@@ -137,6 +162,7 @@ public final class StatArbStrategy extends Strategy {
         log.info("[{}] пары: {} (окно {} × {} мс)", name(), ps.stream().map(Pair::name).toList(), p.statArbWindow(), p.statArbSampleMs());
     }
 
+    /** Раз в statArbSampleMs снять отсчёты по всем парам и принять решения. */
     @Override
     protected void onTick(Tick tick) {
         TradingParams p = settings.get();
@@ -154,12 +180,14 @@ public final class StatArbStrategy extends Strategy {
         }
     }
 
+    /** Середина стакана, если он свежий; иначе NaN. */
     private double mid(String symbol, long maxAgeMs) {
         OrderBook b = market.book(symbol);
         if (b == null || !b.isReady() || b.ageMs() > maxAgeMs) return Double.NaN;
         return b.midPrice();
     }
 
+    /** Вход или выход по паре по z-score и корреляции. */
     private void decide(Pair pr, TradingParams p, long now) {
         Position pos = positions.get(pr.name());
         double z = pr.z;
@@ -190,11 +218,13 @@ public final class StatArbStrategy extends Strategy {
         executor.submit(pos.symbol(), () -> close(pr.name(), pos));
     }
 
+    /** Символ уже куплен другой парой — не входим, чтобы не путать позиции. */
     private boolean heldByOtherPair(String symbol) {
         for (Position x : positions.values()) if (x.symbol().equals(symbol)) return true;
         return false;
     }
 
+    /** Продать позицию пары; результат после комиссий — в дневной PnL. */
     private void close(String pairName, Position pos) {
         OrderResult r = orders.sellMarket(pos.symbol(), pos.qty());
         if (r.executedQty() <= 0) return;
@@ -215,8 +245,10 @@ public final class StatArbStrategy extends Strategy {
         positions.forEach((pairName, pos) -> close(pairName, pos));
     }
 
+    /** Число с двумя знаками для логов. */
     private static String fmt(double v) { return String.format("%.2f", v); }
 
+    /** Состояние для GET /strategies. */
     public Map<String, Object> stats() {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("enabled", settings.get().statArbEnabled());
@@ -241,6 +273,7 @@ public final class StatArbStrategy extends Strategy {
         return m;
     }
 
+    /** Пары (для тестов). */
     List<Pair> pairs() { return pairs; }
 
     /** z-score каждой пары (NaN — окно ещё не заполнено). */
@@ -249,7 +282,10 @@ public final class StatArbStrategy extends Strategy {
         for (Pair pr : pairs) m.put(pr.name(), pr.z);
         return m;
     }
+    /** Открытых позиций. */
     public int openPositions() { return positions.size(); }
+    /** Закрыто сделок. */
     public long tradesCount() { return trades.get(); }
+    /** Результат с запуска. */
     public double totalPnl() { return totalPnl; }
 }

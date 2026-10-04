@@ -23,6 +23,7 @@ import com.hft.store.PriceWindow;
  */
 public final class PrometheusExporter {
 
+    /** Все метрики в текстовом формате Prometheus. */
     public String render(BotController controller) {
         StringBuilder sb = new StringBuilder(4096);
 
@@ -112,6 +113,7 @@ public final class PrometheusExporter {
         return sb.toString();
     }
 
+    /** Метрики JVM: heap, сборки мусора, потоки. */
     private void jvm(StringBuilder sb) {
         var heap = java.lang.management.ManagementFactory.getMemoryMXBean().getHeapMemoryUsage();
         help(sb, "hft_jvm_heap_used_bytes", "Занято heap");
@@ -154,21 +156,25 @@ public final class PrometheusExporter {
         }
     }
 
+    /** HELP и TYPE gauge для метрики. */
     private void help(StringBuilder sb, String name, String description) {
         sb.append("# HELP ").append(name).append(' ').append(description).append('\n');
         sb.append("# TYPE ").append(name).append(" gauge\n");
     }
 
+    /** HELP и TYPE counter для метрики. */
     private void counter(StringBuilder sb, String name, String description) {
         sb.append("# HELP ").append(name).append(' ').append(description).append('\n');
         sb.append("# TYPE ").append(name).append(" counter\n");
     }
 
+    /** Значение с меткой exchange. */
     private void line(StringBuilder sb, String name, String exchange, double value) {
         sb.append(name).append("{exchange=\"").append(exchange).append("\"} ")
           .append(formatNumber(value)).append('\n');
     }
 
+    /** Значение с метками exchange и symbol (NaN пропускается). */
     private void lineSymbol(StringBuilder sb, String name, String exchange, String symbol, double value) {
         if (Double.isNaN(value) || Double.isInfinite(value)) return;
         sb.append(name).append("{exchange=\"").append(exchange)
@@ -176,6 +182,7 @@ public final class PrometheusExporter {
           .append(formatNumber(value)).append('\n');
     }
 
+    /** Число без «.0» для целых. */
     private String formatNumber(double v) {
         if (v == Math.floor(v) && !Double.isInfinite(v)) return String.valueOf((long) v);
         return String.valueOf(v);

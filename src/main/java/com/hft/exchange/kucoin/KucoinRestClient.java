@@ -30,10 +30,17 @@ import java.util.Set;
  */
 public final class KucoinRestClient extends SignedCexClient {
 
+    /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(KucoinRestClient.class);
 
+    /** Фраза API-ключа. */
     private final String passphrase;
 
+    /**
+     * @param config подключение и параметры биржи
+     * @param credentials ключи из окружения
+     * @param filters правила символов
+     */
     public KucoinRestClient(ExchangeConfig config, Credentials credentials, SymbolFilters filters) {
         super("kucoin", config, credentials, filters);
         String p = System.getenv("KUCOIN_PASSPHRASE");
@@ -51,10 +58,12 @@ public final class KucoinRestClient extends SignedCexClient {
 
     // ------------------------------------------------------------ HTTP
 
+    /** Публичный GET. */
     private JsonNode publicGet(String pathAndQuery) throws Exception {
         return exec(req(baseUrl + pathAndQuery).GET().build(), false);
     }
 
+    /** Подписанный запрос. */
     JsonNode signed(String method, String pathAndQuery, String body, boolean order) throws Exception {
         credentials.require();
         String ts = String.valueOf(System.currentTimeMillis());
@@ -71,6 +80,7 @@ public final class KucoinRestClient extends SignedCexClient {
         return exec(r, order);
     }
 
+    /** Ошибка в HTTP-коде или теле ответа — ApiException (лимит — с признаком rateLimit). */
     @Override
     protected void checkError(int http, JsonNode body) {
         String code = body.path("code").asText("");
@@ -82,6 +92,7 @@ public final class KucoinRestClient extends SignedCexClient {
 
     // ------------------------------------------------------------ ордера
 
+    /** Отправить ордер (по WebSocket, если можно, иначе REST); исход ждёт вызывающий. */
     @Override
     protected OrderResult placeRaw(Order o) throws Exception {
         ObjectNode b = mapper.createObjectNode()
@@ -104,6 +115,7 @@ public final class KucoinRestClient extends SignedCexClient {
         return new OrderResult(registerId(id), o.clientId(), o.symbol(), o.side(), "NEW", o.qtyIsQuote() ? 0 : o.qty(), 0, 0, 0);
     }
 
+    /** Статус ордера: из WS-потока, если есть, иначе запрос к бирже. */
     @Override
     public OrderResult orderStatus(String symbol, long orderId) throws Exception {
         return fromOrder(signed("GET", "/api/v1/orders/" + venueId(orderId), "", false).path("data"), orderId, symbol.toUpperCase());
@@ -118,12 +130,14 @@ public final class KucoinRestClient extends SignedCexClient {
         return new OrderResult(id, o.path("clientOid").asText(""), symbol, side, status, d(o, "size"), exec, exec > 0 ? funds / exec : 0, 0);
     }
 
+    /** Отменить ордер. */
     @Override
     public void cancelOrder(String symbol, long orderId) throws Exception {
         signed("DELETE", "/api/v1/orders/" + venueId(orderId), "", true);
         log.info("[kucoin] ордер {} по {} отменён", orderId, symbol);
     }
 
+    /** Отменить все открытые ордера символа; возвращает их число. */
     @Override
     public int cancelAll(String symbol) throws Exception {
         JsonNode r = signed("DELETE", "/api/v1/orders?symbol=" + venue(symbol), "", true);
@@ -134,6 +148,7 @@ public final class KucoinRestClient extends SignedCexClient {
 
     // ------------------------------------------------------------ правила и баланс
 
+    /** Загрузить правила торговли символов (шаги объёма и цены, минимальная сумма). */
     @Override
     public void loadFilters(Iterable<String> symbols) throws Exception {
         Set<String> want = new HashSet<>();
@@ -152,6 +167,7 @@ public final class KucoinRestClient extends SignedCexClient {
         log.info("[kucoin] правила загружены для {} символов", loaded);
     }
 
+    /** Загрузить балансы. */
     @Override
     public void loadBalances(BalanceStore store) throws Exception {
         for (JsonNode a : signed("GET", "/api/v1/accounts?type=trade", "", false).path("data")) {

@@ -19,15 +19,20 @@ import com.hft.model.OrderEnums.Type;
  */
 public final class OrderRequest {
 
+    /** Символ в нашем формате (BTCUSDT). */
     private final String symbol;
+    /** Покупка или продажа. */
     private final Side side;
+    /** Рыночный или лимитный. */
     private final Type type;
 
     private double quantity;        // -1 означает "весь доступный баланс"
     private double price;           // только для LIMIT
+    /** Время жизни лимитного ордера; по умолчанию GTC. */
     private TimeInForce timeInForce = TimeInForce.GTC;
     private double quotePortion = 1.0;  // доля баланса при fullBalance(), 1.0 = 100%
 
+    /** Создаётся через фабричные методы limit()/market(). */
     private OrderRequest(String symbol, Side side, Type type) {
         this.symbol = symbol.toUpperCase();
         this.side = side;
@@ -92,18 +97,26 @@ public final class OrderRequest {
 
     // ---------- Геттеры ----------
 
+    /** Символ. */
     public String symbol() { return symbol; }
+    /** Сторона. */
     public Side side() { return side; }
+    /** Тип ордера. */
     public Type type() { return type; }
+    /** Цена лимитного ордера (0 для рыночного). */
     public double price() { return price; }
+    /** Время жизни лимитного ордера. */
     public TimeInForce timeInForce() { return timeInForce; }
+    /** Доля баланса для ордера «на весь баланс» (1.0 — весь). */
     public double quotePortion() { return quotePortion; }
 
     /** Заданный объём, либо -1 если нужно взять из баланса. */
     public double rawQuantity() { return quantity; }
 
+    /** Объём не задан явно — считается от баланса. */
     public boolean isFullBalance() { return quantity < 0; }
 
+    /** Кратко для логов: тип, сторона, символ, объём/доля, цена. */
     @Override
     public String toString() {
         String qty = isFullBalance()

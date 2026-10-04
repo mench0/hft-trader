@@ -18,10 +18,13 @@ import static com.hft.rest.RateBudget.Kind.*;
  */
 public final class RateLimits {
 
+    /** Утилитный класс — экземпляры не создаются. */
     private RateLimits() {}
 
+    /** Все виды REST-запросов. */
     private static final Kind[] REST = {PUBLIC, PRIVATE, ORDER};
 
+    /** Вёдра лимитов биржи по её документации. */
     public static List<Limit> forExchange(String id) {
         return switch (id) {
             // Binance Spot: вес 6000/мин на IP, ордера 50/10 с и 160 000/сутки на аккаунт, сырые запросы 61 000/5 мин,
@@ -128,6 +131,7 @@ public final class RateLimits {
         };
     }
 
+    /** Вес запроса Binance по пути и параметрам. */
     private static double binanceWeight(String method, String path, String q) {
         boolean symbol = q.contains("symbol=");
         return switch (path) {
@@ -144,6 +148,7 @@ public final class RateLimits {
         };
     }
 
+    /** Вес запроса Aster (формат Binance, свои значения). */
     private static double asterWeight(String method, String path, String q) {
         boolean symbol = q.contains("symbol=");
         if (path.endsWith("/order")) return "GET".equals(method) ? 1 : 1;
@@ -161,6 +166,7 @@ public final class RateLimits {
         return limit <= 100 ? 5 : limit <= 500 ? 25 : limit <= 1000 ? 50 : 250;
     }
 
+    /** Вес запроса KuCoin по эндпоинту. */
     private static double kucoinWeight(String method, String path) {
         if (path.startsWith("/api/v1/market/orderbook/level2_20")) return 2;
         if (path.startsWith("/api/v1/market/orderbook/level2_100")) return 4;
@@ -175,6 +181,7 @@ public final class RateLimits {
         return 2;
     }
 
+    /** Значение limit= из строки параметров или def. */
     private static int limitParam(String q, int def) {
         int i = q.indexOf("limit=");
         if (i < 0) return def;

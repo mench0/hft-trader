@@ -19,17 +19,27 @@ import com.lmax.disruptor.EventHandler;
  */
 public abstract class Strategy implements EventHandler<Tick> {
 
+    /** Рыночные данные биржи. */
     protected final MarketDataStore market;
+    /** Отправка ордеров через проверки риска. */
     protected final OrderService orders;
+    /** Имя стратегии для логов и метрик. */
     private final String name;
+    /** Общий выключатель торговли (включается /trading/start). */
     private volatile boolean enabled = false;
 
+    /**
+     * @param name имя для логов
+     * @param market рыночные данные биржи
+     * @param orders сервис ордеров биржи
+     */
     protected Strategy(String name, MarketDataStore market, OrderService orders) {
         this.name = name;
         this.market = market;
         this.orders = orders;
     }
 
+    /** Вызывается конвейером на каждый тик; ошибки стратегии логируются и не останавливают конвейер. */
     @Override
     public final void onEvent(Tick tick, long sequence, boolean endOfBatch) {
         if (!enabled) return;
@@ -44,8 +54,12 @@ public abstract class Strategy implements EventHandler<Tick> {
     /** Здесь пишется торговая логика. */
     protected abstract void onTick(Tick tick);
 
+    /** Имя стратегии. */
     public String name() { return name; }
+    /** Торговля разрешена. */
     public boolean isEnabled() { return enabled; }
+    /** Разрешить торговлю. */
     public void enable() { this.enabled = true; }
+    /** Запретить торговлю (позиции не закрываются). */
     public void disable() { this.enabled = false; }
 }

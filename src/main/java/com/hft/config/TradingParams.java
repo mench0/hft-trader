@@ -31,8 +31,12 @@ public record TradingParams(
         long wsReconnectBaseMs,
         long restFallbackGraceMs,
         long pollBackoffMs,
+        int feedMaxFailures,
+        int wsMaxParseErrors,
+        int wsMaxCrossedBooks,
         long balanceSyncMs,
         long marketFillWaitMs,
+        double marketPriceBandPercent,
         int orderThreads,
         // ---- риск ----
         boolean tradingEnabled,
@@ -86,6 +90,7 @@ public record TradingParams(
 ) {
 
     private static final String URL = "(|https?://\\S+|wss?://\\S+)";
+    /** Формат адреса Ethereum (0x + 40 hex) или пусто. */
     private static final String ADDR = "(|0x[0-9a-fA-F]{40})";
 
     /** Описания всех параметров: по умолчанию, границы, перезапуск, справка. */
@@ -103,8 +108,12 @@ public record TradingParams(
             num("wsReconnectBaseMs", 500, 50, 60_000, "Начальная пауза перед переподключением WebSocket, мс (дальше растёт вдвое)").needsRestart(),
             num("restFallbackGraceMs", 2000, 0, 600_000, "Сколько ждать восстановления WebSocket, прежде чем включить REST-опрос стакана, мс").needsRestart(),
             num("pollBackoffMs", 60_000, 1000, 3_600_000, "Пауза REST-опроса после ответа «слишком часто», мс (повторы — вдвое дольше)").needsRestart(),
+            num("feedMaxFailures", 15, 1, 10_000, "Неудач подряд (подключений WS или циклов REST-опроса), после которых источник данных сдаётся: заявки снимаются, торговля останавливается").needsRestart(),
+            num("wsMaxParseErrors", 5, 1, 10_000, "Ошибок разбора сообщений WS подряд, после которых соединение сбрасывается").needsRestart(),
+            num("wsMaxCrossedBooks", 200, 1, 1_000_000, "Перекрещённых стаканов подряд (bid ≥ ask), после которых символ переподписывается").needsRestart(),
             num("balanceSyncMs", 300_000, 5_000, 86_400_000, "Как часто сверять баланс с биржей по REST, мс (если баланс приходит по WebSocket)"),
             num("marketFillWaitMs", 400, 0, 10_000, "Сколько ждать исполнения рыночного/IOC-ордера в WebSocket перед запросом статуса, мс"),
+            num("marketPriceBandPercent", 5, 0.1, 50, "Hyperliquid: «рыночный» ордер — это IOC с ценой не дальше этого % от середины"),
             num("orderThreads", 4, 1, 64, "Потоков для отправки ордеров стратегией возврата к среднему").needsRestart(),
             // риск
             flag("tradingEnabled", false, "Торговля на бирже разрешена (также /trading/start и /trading/stop)"),

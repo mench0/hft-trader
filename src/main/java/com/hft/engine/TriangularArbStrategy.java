@@ -36,6 +36,7 @@ import java.util.function.BooleanSupplier;
  */
 public final class TriangularArbStrategy extends Strategy {
 
+    /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(TriangularArbStrategy.class);
 
     /** Нога: символ и направление (buy — получаем базовую валюту символа за котируемую). */
@@ -47,25 +48,40 @@ public final class TriangularArbStrategy extends Strategy {
     /** Результат оценки круга по текущим стаканам. */
     record Quote(double profitPct, double maxStart) {}
 
+    /** Параметры биржи. */
     private final TradingSettings settings;
+    /** Исполнение кругов вне потока конвейера (один поток — один круг за раз). */
     private final OrderExecutor executor;
+    /** Данные в реальном времени (не REST-запас). */
     private volatile BooleanSupplier realtime = () -> true;
 
+    /** Для какой базовой валюты построены треугольники (null — ещё не строились). */
     private volatile String builtFor = null;
+    /** Все круги. */
     private volatile List<Cycle> cycles = List.of();
+    /** Круги, в которые входит символ. */
     private volatile Map<String, List<Cycle>> bySymbol = Map.of();
     private final Map<String, Long> lastRun = new HashMap<>();   // только поток конвейера
     private final double[] top = new double[4];                  // только поток конвейера
 
+    /** Счётчики: найдено выгодных кругов, исполнено, прервано. */
     private final AtomicLong opportunities = new AtomicLong(), executed = new AtomicLong(), failed = new AtomicLong();
+    /** Прибыль последнего круга, % и сумма с запуска. */
     private volatile double lastProfitPct = Double.NaN, totalPnl;
 
+    /**
+     * @param market рыночные данные
+     * @param orders сервис ордеров
+     * @param exchangeId биржа (имя потока)
+     * @param settings параметры биржи
+     */
     public TriangularArbStrategy(MarketDataStore market, OrderService orders, String exchangeId, TradingSettings settings) {
         super("triangular-arb", market, orders);
         this.settings = settings;
         this.executor = new OrderExecutor(exchangeId + "-tri", 1);
     }
 
+    /** Источник признака «данные в реальном времени»: на REST-запасе новых входов нет. */
     public void setRealtimeSource(BooleanSupplier s) { this.realtime = s; }
 
     // ------------------------------------------------------------ построение треугольников
@@ -97,15 +113,18 @@ public final class TriangularArbStrategy extends Strategy {
         return out;
     }
 
+    /** Вторая валюта пары, если cur — одна из её валют, иначе null. */
     private static String other(String[] bq, String cur) {
         return bq[0].equals(cur) ? bq[1] : bq[1].equals(cur) ? bq[0] : null;
     }
 
+    /** Нога из валюты from по символу: покупка базовой, если from — котируемая. */
     private static Leg leg(String symbol, String[] bq, String from) {
         boolean buy = bq[1].equals(from);                                 // отдаём котируемую — покупаем базовую
         return new Leg(symbol, buy, from, buy ? bq[0] : bq[1]);
     }
 
+    /** Построить треугольники для базовой валюты (один раз и при её смене). */
     private void ensureBuilt(String home) {
         if (home.equals(builtFor)) return;
         List<Cycle> cs = buildCycles(market.symbols(), home);
@@ -135,6 +154,7 @@ public final class TriangularArbStrategy extends Strategy {
         return new Quote((amount - 1) * 100, maxStart);
     }
 
+    /** Пересчитать круги символа тика; выгодный — отправить на исполнение. */
     @Override
     protected void onTick(Tick tick) {
         TradingParams p = settings.get();
@@ -161,6 +181,7 @@ public final class TriangularArbStrategy extends Strategy {
 
     // ------------------------------------------------------------ исполнение
 
+    /** Исполнить круг тремя рыночными ордерами; результат после комиссий — в дневной PnL. */
     private void run(Cycle c, double start, TradingParams p) {
         double f = 1 - p.takerFeePercent() / 100.0;
         double amount = start;
@@ -211,6 +232,7 @@ public final class TriangularArbStrategy extends Strategy {
         log.error("[{}] остаток {} {} не вернуть в {}: нет пары {}{} в выборе", name(), amountHeld, held, home, held, home);
     }
 
+    /** Состояние для GET /strategies. */
     public Map<String, Object> stats() {
         Map<String, Object> m = new LinkedHashMap<>();
         // до первого тика треугольники ещё не построены — показываем, какие будут
@@ -225,11 +247,17 @@ public final class TriangularArbStrategy extends Strategy {
         return m;
     }
 
+    /** Найдено выгодных кругов. */
     public long opportunities() { return opportunities.get(); }
+    /** Исполнено кругов. */
     public long executedCount() { return executed.get(); }
+    /** Прервано кругов. */
     public long failedCount() { return failed.get(); }
+    /** Результат с запуска в базовой валюте. */
     public double totalPnl() { return totalPnl; }
+    /** Сколько кругов. */
     public int triangles() { return cycles.size(); }
 
+    /** Дождаться исполняемого круга (не дольше ms). */
     public boolean drain(long ms) { return executor.drain(ms); }
 }

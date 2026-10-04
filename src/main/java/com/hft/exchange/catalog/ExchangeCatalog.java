@@ -17,12 +17,16 @@ import java.util.Optional;
  */
 public final class ExchangeCatalog {
 
+    /** Утилитный класс — экземпляры не создаются. */
     private ExchangeCatalog() {}
 
+    /** Все биржи каталога по id в порядке добавления. */
     private static final Map<String, ExchangeInfo> ALL = new LinkedHashMap<>();
 
+    /** Добавить биржу в каталог. */
     private static void add(ExchangeInfo i) { ALL.put(i.id(), i); }
 
+    /** Список бирж: адреса, лимиты, комиссии, testnet, заметки. */
     static {
         add(new ExchangeInfo("binance", "Binance", Kind.CEX_TIER1, Adapter.NATIVE_LIVE,
                 "https://api.binance.com", 20, 0.10, 0.10, "USDT", "BTCUSDT",
@@ -75,8 +79,10 @@ public final class ExchangeCatalog {
                 "", 0, 0.30, 0.30, "USDC", "-", "Концентрированная ликвидность, не реализовано."));
     }
 
+    /** Все биржи каталога. */
     public static List<ExchangeInfo> all() { return List.copyOf(ALL.values()); }
 
+    /** Биржа по id. */
     public static Optional<ExchangeInfo> find(String id) {
         return Optional.ofNullable(ALL.get(id == null ? "" : id.toLowerCase()));
     }

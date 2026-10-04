@@ -8,14 +8,19 @@ package com.hft.discovery;
  */
 public final class MeanReversionBacktest {
 
+    /** Параметры бэктеста: пороги z, стоп-лосс %, окно и максимальное удержание в свечах. */
     public record Params(double entryZ, double exitZ, double stopLossPct, int window, int maxHoldBars) {}
 
+    /** Итог: сделки, выигрышные, чистый результат %, средняя сделка %, максимальная просадка %, свечей. */
     public record Result(int trades, int wins, double netPct, double avgTradePct, double maxDrawdownPct, int bars) {
+        /** Доля выигрышных сделок, %. */
         public double winRate() { return trades == 0 ? 0 : wins * 100.0 / trades; }
     }
 
+    /** Утилитный класс — экземпляры не создаются. */
     private MeanReversionBacktest() {}
 
+    /** Прогнать правила возврата к среднему по ценам закрытия с комиссией тейкера на обеих ногах. */
     public static Result run(double[] closes, Params p, double takerFeePct) {
         int n = closes.length, w = p.window();
         int trades = 0, wins = 0;

@@ -15,20 +15,33 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 public final class DiscoveryService {
 
+    /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(DiscoveryService.class);
 
+    /** Источники сводок бирж. */
     private final List<MarketSource> sources;
+    /** Профили стратегий. */
     private final List<StrategyProfile> profiles;
+    /** Период пересчёта, мин. */
     private final long refreshMinutes;
+    /** Пересчёт идёт. */
     private final AtomicBoolean running = new AtomicBoolean();
+    /** Поток пересчёта по расписанию (демон). */
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "discovery");
         t.setDaemon(true);
         return t;
     });
+    /** Результат последнего пересчёта. */
     private volatile Map<String, Object> last = Map.of("status", "ещё не запускался");
+    /** Расписание запущено. */
     private volatile boolean started;
 
+    /**
+     * @param sources источники сводок
+     * @param profiles профили стратегий
+     * @param refreshMinutes период пересчёта, мин
+     */
     public DiscoveryService(List<MarketSource> sources, List<StrategyProfile> profiles, long refreshMinutes) {
         this.sources = sources;
         this.profiles = profiles;
@@ -58,6 +71,7 @@ public final class DiscoveryService {
     /** Сколько запросов свечей на биржу за один пересчёт. */
     private volatile int klineBudget = 12;
 
+    /** Запустить пересчёт сейчас и далее по расписанию. */
     public synchronized void start() {
         if (started) return;
         started = true;
@@ -65,6 +79,7 @@ public final class DiscoveryService {
         log.info("Подбор тикеров: {} бирж, обновление раз в {} мин", sources.size(), refreshMinutes);
     }
 
+    /** Остановить расписание. */
     public void stop() { scheduler.shutdownNow(); }
 
     /** Запустить пересчёт сейчас (в фоне). false — уже идёт. */
@@ -74,8 +89,10 @@ public final class DiscoveryService {
         return true;
     }
 
+    /** Пересчёт идёт. */
     public boolean isRunning() { return running.get(); }
 
+    /** Результат последнего пересчёта и признак «идёт». */
     public Map<String, Object> result() {
         Map<String, Object> m = new LinkedHashMap<>(last);
         m.put("running", running.get());

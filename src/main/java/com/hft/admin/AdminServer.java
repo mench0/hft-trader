@@ -49,20 +49,31 @@ import java.util.concurrent.Executors;
  */
 public final class AdminServer {
 
+    /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(AdminServer.class);
 
+    /** Порт и токен админки. */
     private final AppConfig config;
+    /** Управление ботом. */
     private final BotController controller;
+    /** Сборка JSON-ответов. */
     private final ObjectMapper mapper = new ObjectMapper();
+    /** Метрики для /metrics. */
     private final PrometheusExporter prometheus = new PrometheusExporter();
 
+    /** HTTP-сервер JDK. */
     private HttpServer server;
 
+    /**
+     * @param config порт и токен
+     * @param controller управление ботом
+     */
     public AdminServer(AppConfig config, BotController controller) {
         this.config = config;
         this.controller = controller;
     }
 
+    /** Зарегистрировать все эндпоинты и запустить сервер. */
     public void start() throws IOException {
         server = HttpServer.create(new InetSocketAddress(config.adminPort()), 0);
         server.setExecutor(Executors.newFixedThreadPool(4));
@@ -107,10 +118,12 @@ public final class AdminServer {
                 config.adminToken().isBlank() ? " (без токена)" : " (с токеном)");
     }
 
+    /** Остановить сервер. */
     public void stop() {
         if (server != null) server.stop(1);
     }
 
+    /** Зарегистрировать обработчик: CORS, OPTIONS, проверка токена, ошибки 400/500 в JSON. */
     private void route(String path, Handler handler) {
         server.createContext(path, exchange -> {
             try {
@@ -135,17 +148,21 @@ public final class AdminServer {
         });
     }
 
+    /** CORS для веб-панели на другом домене. */
     private void setCors(HttpExchange ex) {
         ex.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
         ex.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
         ex.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type, X-Admin-Token");
     }
 
+    /** Обработчик одного эндпоинта. */
     @FunctionalInterface
     private interface Handler {
+        /** Обработать запрос. */
         void handle(HttpExchange exchange) throws Exception;
     }
 
+    /** Токен из X-Admin-Token или Authorization: Bearer; пустой токен в конфиге — без проверки. */
     private boolean authorized(HttpExchange ex) {
         String token = config.adminToken();
         if (token.isBlank()) return true;
@@ -208,6 +225,7 @@ public final class AdminServer {
         send(ex, 200, root);
     }
 
+    /** GET /control/exchanges — биржи, которые можно выбрать. */
     private void handleSupportedExchanges(HttpExchange ex) throws IOException {
         ObjectNode root = mapper.createObjectNode();
         ArrayNode list = root.putArray("поддерживаемые");
@@ -215,6 +233,7 @@ public final class AdminServer {
         send(ex, 200, root);
     }
 
+    /** GET /control/status — запущен ли бот, выбор, поддерживаемые биржи, торговля по биржам. */
     private void handleControlStatus(HttpExchange ex) throws IOException {
         ObjectNode root = mapper.createObjectNode();
         root.put("запущен", controller.isRunning());
@@ -368,6 +387,7 @@ public final class AdminServer {
         send(ex, 200, root);
     }
 
+    /** Параметры биржи с признаками «выбрана» и «есть testnet». */
     private ObjectNode paramsNode(String exId) {
         ObjectNode n = mapper.createObjectNode();
         n.put("биржа", exId);
@@ -390,6 +410,7 @@ public final class AdminServer {
 
     // ======================= ТОРГОВЛЯ =======================
 
+    /** POST /trading/start?exchange=… — включить торговлю. */
     private void handleTradingStart(HttpExchange ex) throws IOException {
         requirePost(ex);
         String target = query(ex).getOrDefault("exchange", "all");
@@ -397,6 +418,7 @@ public final class AdminServer {
         send(ex, 200, ok("Торговля включена"));
     }
 
+    /** POST /trading/stop?exchange=… — выключить торговлю. */
     private void handleTradingStop(HttpExchange ex) throws IOException {
         requirePost(ex);
         String target = query(ex).getOrDefault("exchange", "all");
@@ -404,6 +426,7 @@ public final class AdminServer {
         send(ex, 200, ok("Торговля остановлена"));
     }
 
+    /** POST /trading/panic?exchange=… — выключить торговлю и отменить все ордера. */
     private void handlePanic(HttpExchange ex) throws IOException {
         requirePost(ex);
         String target = query(ex).getOrDefault("exchange", "all");
@@ -416,6 +439,7 @@ public final class AdminServer {
 
     // ======================= ДАННЫЕ =======================
 
+    /** GET /status — состояние активных бирж: соединение, риск, стратегии, символы. */
     private void handleStatus(HttpExchange ex) throws IOException {
         ObjectNode root = mapper.createObjectNode();
         root.put("бот_запущен", controller.isRunning());
@@ -438,6 +462,7 @@ public final class AdminServer {
         send(ex, 200, root);
     }
 
+    /** GET /market?exchange=… — верх стакана, спред, дисбаланс, z-score по символам. */
     private void handleMarket(HttpExchange ex) throws IOException {
         ExchangeGateway gw = resolveActive(query(ex));
         var market = gw.marketData();
@@ -469,6 +494,7 @@ public final class AdminServer {
         send(ex, 200, root);
     }
 
+    /** GET /balances?exchange=… — свободные остатки. */
     private void handleBalances(HttpExchange ex) throws IOException {
         ExchangeGateway gw = resolveActive(query(ex));
         ObjectNode root = mapper.createObjectNode();
@@ -479,6 +505,7 @@ public final class AdminServer {
         send(ex, 200, root);
     }
 
+    /** POST /order — ручной ордер: тип, сторона, объём, доля баланса или весь баланс. */
     private void handleOrder(HttpExchange ex) throws IOException {
         requirePost(ex);
         Map<String, String> q = query(ex);
@@ -517,6 +544,7 @@ public final class AdminServer {
         send(ex, 200, root);
     }
 
+    /** POST /cancel-all?exchange=…&symbol=… — отменить ордера символа. */
     private void handleCancelAll(HttpExchange ex) throws IOException {
         requirePost(ex);
         Map<String, String> q = query(ex);
@@ -536,6 +564,7 @@ public final class AdminServer {
 
     // ======================= СЛУЖЕБНОЕ =======================
 
+    /** Активная биржа из параметра exchange (по умолчанию первая); бот не запущен — IllegalStateException. */
     private ExchangeGateway resolveActive(Map<String, String> q) {
         var active = controller.active();
         if (active.isEmpty()) {
@@ -549,12 +578,14 @@ public final class AdminServer {
         return gw;
     }
 
+    /** Обязательный параметр запроса или IllegalArgumentException. */
     private String require(Map<String, String> q, String key) {
         String v = q.get(key);
         if (v == null || v.isBlank()) throw new IllegalArgumentException("Не указан обязательный параметр: " + key);
         return v;
     }
 
+    /** Только POST; иначе 405. */
     private void requirePost(HttpExchange ex) throws IOException {
         if (!"POST".equalsIgnoreCase(ex.getRequestMethod())) {
             send(ex, 405, error("Требуется POST"));
@@ -562,6 +593,7 @@ public final class AdminServer {
         }
     }
 
+    /** Параметры строки запроса (URL-декодированные). */
     private static Map<String, String> query(HttpExchange ex) {
         Map<String, String> result = new HashMap<>();
         String raw = ex.getRequestURI().getRawQuery();
@@ -577,6 +609,7 @@ public final class AdminServer {
         return result;
     }
 
+    /** Ответ «успех» с сообщением. */
     private ObjectNode ok(String message) {
         ObjectNode n = mapper.createObjectNode();
         n.put("результат", "успех");
@@ -584,6 +617,7 @@ public final class AdminServer {
         return n;
     }
 
+    /** Ответ «ошибка» с сообщением. */
     private ObjectNode error(String message) {
         ObjectNode n = mapper.createObjectNode();
         n.put("результат", "ошибка");
@@ -591,6 +625,7 @@ public final class AdminServer {
         return n;
     }
 
+    /** Отправить JSON с кодом ответа. */
     private void send(HttpExchange ex, int code, ObjectNode body) throws IOException {
         byte[] bytes = mapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(body);
         ex.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
@@ -598,6 +633,7 @@ public final class AdminServer {
         try (OutputStream os = ex.getResponseBody()) { os.write(bytes); }
     }
 
+    /** Округлить для ответа; NaN и бесконечность — 0. */
     private static double round(double v, int scale) {
         if (Double.isNaN(v) || Double.isInfinite(v)) return 0;
         double factor = Math.pow(10, scale);

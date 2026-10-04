@@ -41,10 +41,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 public final class BotController {
 
+    /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(BotController.class);
 
+    /** Биржи с адаптером, которые можно выбрать. */
     private static final List<String> SUPPORTED_EXCHANGES = ExchangeCatalog.runnableIds();
 
+    /** Хранилище состояния. */
     private final SqliteStateStore stateStore;
 
     /** Выбранные биржи -> символы. Меняется до старта. */
@@ -60,8 +63,11 @@ public final class BotController {
     /** Настройки процесса (фоновые задачи, подбор тикеров, лимиты). */
     private volatile GlobalParams global = GlobalParams.DEFAULTS;
 
+    /** Биржи подключены. */
     private final AtomicBoolean running = new AtomicBoolean(false);
+    /** Поднимать биржи при старте процесса. */
     private volatile boolean autoStart;
+    /** Вместе с автозапуском включать торговлю. */
     private volatile boolean autoTrade;
 
     /** Подбор тикеров под стратегии; null — выключен в настройках. */
@@ -80,6 +86,7 @@ public final class BotController {
 
     // ======================= СОСТОЯНИЕ НА ДИСКЕ =======================
 
+    /** Прочитать выбор, параметры выбранных бирж и настройки процесса; нет файла — создать. */
     private void restoreFromDiskOrDefaults() {
         var saved = stateStore.load();
         if (saved.isEmpty()) {
@@ -174,17 +181,20 @@ public final class BotController {
         persist();
     }
 
+    /** Менять выбор можно только при остановленном боте. */
     private void requireNotRunning() {
         if (running.get()) {
             throw new IllegalStateException("Бот запущен. Сначала остановите (/control/stop), чтобы поменять выбор бирж/символов.");
         }
     }
 
+    /** Биржа есть в списке поддерживаемых, иначе IllegalArgumentException. */
     private static void requireSupported(String exchangeId) {
         if (!SUPPORTED_EXCHANGES.contains(exchangeId))
             throw new IllegalArgumentException("Неподдерживаемая биржа: " + exchangeId + ". Доступны: " + SUPPORTED_EXCHANGES);
     }
 
+    /** Символы выбранной биржи, иначе IllegalArgumentException с подсказкой. */
     private List<String> requireSelected(String exchangeId) {
         List<String> list = selection.get(exchangeId);
         if (list == null) throw new IllegalArgumentException("Биржа не выбрана: " + exchangeId + ". Сначала POST /control/select?exchange=" + exchangeId + "&symbols=…");
@@ -262,6 +272,7 @@ public final class BotController {
     /** Подбор тикеров; null — выключен (discoveryEnabled=false). */
     public DiscoveryService discovery() { return discovery; }
 
+    /** Подбор тикеров по настройкам процесса; null — выключен. */
     private DiscoveryService createDiscovery(GlobalParams g) {
         if (!g.discoveryEnabled()) return null;
         // параметры mean-reversion для бэктеста — те, что заданы для выбранной биржи (или по умолчанию)
@@ -354,6 +365,7 @@ public final class BotController {
         persist();
     }
 
+    /** Записать tradingEnabled в параметры биржи (без сохранения на диск — его делает вызывающий). */
     private void setTradingEnabled(String exchangeId, boolean enabled) {
         TradingSettings ts = settings.get(exchangeId);
         if (ts != null) ts.set(ts.get().with(Map.of("tradingEnabled", String.valueOf(enabled))));

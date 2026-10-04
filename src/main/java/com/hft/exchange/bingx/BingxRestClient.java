@@ -28,22 +28,31 @@ import java.util.Map;
  */
 public final class BingxRestClient extends SignedCexClient {
 
+    /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(BingxRestClient.class);
 
+    /**
+     * @param config подключение и параметры биржи
+     * @param credentials ключи из окружения
+     * @param filters правила символов
+     */
     public BingxRestClient(ExchangeConfig config, Credentials credentials, SymbolFilters filters) {
         super("bingx", config, credentials, filters);
     }
 
+    /** Имя символа на бирже. */
     static String sym(String symbol) {
         return BalanceStore.baseAsset(symbol) + "-" + BalanceStore.quoteAsset(symbol);
     }
 
     // ------------------------------------------------------------ HTTP
 
+    /** Публичный GET. */
     private JsonNode publicGet(String path) throws Exception {
         return exec(req(baseUrl + path).GET().build(), false);
     }
 
+    /** Подписанный запрос. */
     private JsonNode signed(String method, String path, Map<String, String> p, boolean order) throws Exception {
         credentials.require();
         p.put("timestamp", String.valueOf(System.currentTimeMillis()));
@@ -55,6 +64,7 @@ public final class BingxRestClient extends SignedCexClient {
         return exec(r, order);
     }
 
+    /** Ошибка в HTTP-коде или теле ответа — ApiException (лимит — с признаком rateLimit). */
     @Override
     protected void checkError(int http, JsonNode body) {
         if (http == 429) throw new ApiException(http, "429", "слишком часто", true);
@@ -68,6 +78,7 @@ public final class BingxRestClient extends SignedCexClient {
 
     // ------------------------------------------------------------ ордера
 
+    /** Отправить ордер (по WebSocket, если можно, иначе REST); исход ждёт вызывающий. */
     @Override
     protected OrderResult placeRaw(Order o) throws Exception {
         Map<String, String> p = params();
@@ -91,6 +102,7 @@ public final class BingxRestClient extends SignedCexClient {
                 o.qtyIsQuote() ? 0 : o.qty(), 0, 0, 0);
     }
 
+    /** Статус ордера: из WS-потока, если есть, иначе запрос к бирже. */
     @Override
     public OrderResult orderStatus(String symbol, long orderId) throws Exception {
         Map<String, String> p = params();
@@ -110,6 +122,7 @@ public final class BingxRestClient extends SignedCexClient {
                 d(o, "origQty"), exec, exec > 0 ? quoteSum / exec : 0, 0);
     }
 
+    /** Отменить ордер. */
     @Override
     public void cancelOrder(String symbol, long orderId) throws Exception {
         Map<String, String> p = params();
@@ -119,6 +132,7 @@ public final class BingxRestClient extends SignedCexClient {
         log.info("[bingx] ордер {} по {} отменён", orderId, symbol);
     }
 
+    /** Отменить все открытые ордера символа; возвращает их число. */
     @Override
     public int cancelAll(String symbol) throws Exception {
         Map<String, String> p = params();
@@ -132,6 +146,7 @@ public final class BingxRestClient extends SignedCexClient {
 
     // ------------------------------------------------------------ правила и баланс
 
+    /** Загрузить правила торговли символов (шаги объёма и цены, минимальная сумма). */
     @Override
     public void loadFilters(Iterable<String> symbols) throws Exception {
         JsonNode list = publicGet("/openApi/spot/v1/common/symbols").path("data").path("symbols");
@@ -150,6 +165,7 @@ public final class BingxRestClient extends SignedCexClient {
         log.info("[bingx] правила загружены для {} символов", loaded);
     }
 
+    /** Загрузить балансы. */
     @Override
     public void loadBalances(BalanceStore store) throws Exception {
         JsonNode r = signed("GET", "/openApi/spot/v1/account/balance", params(), false);

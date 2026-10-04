@@ -7,5 +7,6 @@ package com.hft.rest;
  * знать в общем коде, какая конкретно биржа кинула ошибку.
  */
 public interface RateLimited {
+    /** true — ошибка означает превышение лимита запросов, нужна пауза. */
     boolean isRateLimit();
 }

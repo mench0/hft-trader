@@ -228,10 +228,29 @@ curl -X POST "localhost:8080/trading/stop?exchange=all"
 curl -X POST "localhost:8080/trading/panic?exchange=all"        # отменить всё и заглушить
 ```
 
-### Торговые параметры — отдельно по каждой бирже
+### Параметры биржи — отдельно для каждой выбранной биржи
 
-Все торговые настройки (риск, стратегия, размеры стакана) задаются только здесь,
-в `application.yml` их нет. Хранятся в SQLite и переживают рестарт.
+Все настройки биржи — подключение (testnet, live, адреса), риск, стратегии, работа фидов,
+Uniswap — задаются только через админку и хранятся в SQLite. В `application.yml` остаются
+только порт и токен админки; блоки `risk` и `exchanges` больше не читаются (в лог — предупреждение).
+API-ключи — только в переменных окружения (`<ID>_API_KEY`, `<ID>_API_SECRET`, `<ID>_PASSPHRASE`).
+
+Параметры есть только у выбранных бирж: их можно передать прямо при выборе, при снятии биржи
+с выбора они удаляются. Полный список с границами и справкой — `GET /exchange/params/schema`.
+
+```bash
+# выбрать биржу и сразу задать её параметры
+curl -X POST "localhost:8080/control/select?exchange=bybit&symbols=BTCUSDT,ETHUSDT&testnet=false&live=true&maxPositionQuote=50"
+curl localhost:8080/exchange/params/schema                 # описание всех параметров
+```
+
+**Testnet.** Параметр `testnet` (по умолчанию `true`, если у биржи есть тестовая сеть) переключает
+REST и WebSocket на тестовые адреса: Binance, Bybit, OKX (демо-торговля), Gate, Hyperliquid, dYdX, Aster.
+У KuCoin, MEXC, BingX и LBank тестовой сети нет — для них `testnet=true` отклоняется. Для Uniswap
+тестовая сеть задаётся адресом RPC (`restUrl`). Свои адреса — параметры `restUrl` и `wsUrl`.
+
+**Настройки процесса** (не биржи): `GET/POST /settings` — интервалы фоновых задач, доля лимита
+запросов (`rateLimitSafety`), подбор тикеров (биржи, валюты, период, пороги профилей, бэктест).
 
 ```bash
 curl localhost:8080/exchange/params                      # все выбранные/настроенные биржи
@@ -485,11 +504,11 @@ public final class MyStrategy extends Strategy {
 
 - **KuCoin** — спот: стакан по WebSocket (`level2Depth50`; адрес и токен выдаёт `POST /api/v1/bullet-public`
   перед каждым подключением) + REST-запас, ордера через REST. Нужны `KUCOIN_API_KEY`, `KUCOIN_API_SECRET`,
-  `KUCOIN_PASSPHRASE`, для реальных ордеров `KUCOIN_LIVE=true`.
+  `KUCOIN_PASSPHRASE`, для реальных ордеров — параметр биржи `live=true`. Тестовой сети у KuCoin нет (песочница выключена с 2023 г.).
 - **Aster** — спот, API v3 (`sapi.asterdex.com/api/v3`, формат Binance): стакан по WebSocket
   (`depth20@100ms`) + REST-запас, ордера через REST с подписью EIP-712 кошельком-агентом.
   `ASTER_API_KEY` — адрес основного кошелька (user), `ASTER_API_SECRET` — приватный ключ API-кошелька
-  (signer, без права вывода), `ASTER_LIVE=true`.
+  (signer, без права вывода), для реальных ордеров — параметр `live=true`.
 
 Обе не проверялись на живой бирже (из среды разработки биржи недоступны): начинайте с PAPER и малых сумм.
 
@@ -500,8 +519,8 @@ Hyperliquid, dYdX, Uniswap V2-пулы (PAPER_BLIND), PancakeSwap/Raydium/Orca (
 PAPER_BLIND = живой стакан через REST-опрос + бумажные ордера; реальных ордеров отправить нельзя.
 Форматы ответов взяты из документации по памяти и не сверялись с живыми API — сначала прогоните
 `GET /exchanges/request-stats` и сравните стакан с сайтом биржи.
-Пулы Uniswap V2: `UNISWAPV2_POOLS="WETHUSDC=0xPAIR:true:18:6"` (пара:base это token0:dec base:dec quote).
-Виртуальный баланс: `PAPER_START_BALANCE` (по умолчанию 1000).
+Пулы Uniswap V2: параметр биржи `uniPools="WETHUSDC=0xPAIR:true:18:6"` (пара:base это token0:dec base:dec quote).
+Виртуальный баланс: параметр биржи `paperStartBalance` (по умолчанию 1000).
 
 ## Структура бирж (как BinanceExchange)
 
@@ -513,13 +532,13 @@ PAPER_BLIND = живой стакан через REST-опрос + бумажн�
 | dYdX v4 | PaperExchange | нет (нужны Cosmos-транзакции и сгенерированные protobuf-классы) | только PAPER |
 
 LIVE для OKX/MEXC/Gate/BingX включается двумя условиями сразу: `<ID>_API_KEY` + `<ID>_API_SECRET`
-(у OKX ещё `OKX_PASSPHRASE`) и `<ID>_LIVE=true`. Иначе биржа работает в PAPER и реальных ордеров не шлёт.
+(у OKX и KuCoin ещё `<ID>_PASSPHRASE`) и параметр биржи `live=true` в админке. Иначе биржа работает в PAPER и реальных ордеров не шлёт.
 Если правила торговли не загрузились, LIVE-старт отменяется. Тесты: src/test/java (простые runner-классы).
 
 ### Hyperliquid и Uniswap V2: переменные окружения
-- Hyperliquid: `HYPERLIQUID_API_KEY` = адрес основного аккаунта, `HYPERLIQUID_API_SECRET` = ключ agent-кошелька (без права вывода), `HYPERLIQUID_LIVE=true`.
-- Uniswap V2: `UNISWAPV2_API_KEY` (метка/адрес), `UNISWAPV2_API_SECRET` (ключ горячего кошелька), `UNISWAPV2_LIVE=true`,
-  `UNISWAPV2_ROUTER`, `UNISWAPV2_TOKENS="WETH=0x..:18;USDC=0x..:6"`, `UNISWAPV2_SLIPPAGE_PCT`; GTC-лимиток и отмены на AMM нет.
+- Hyperliquid: `HYPERLIQUID_API_KEY` = адрес основного аккаунта, `HYPERLIQUID_API_SECRET` = ключ agent-кошелька (без права вывода), параметр биржи `live=true`.
+- Uniswap V2: `UNISWAPV2_API_KEY` (метка/адрес), `UNISWAPV2_API_SECRET` (ключ горячего кошелька), параметр `live=true`,
+  параметры биржи `uniRouter`, `uniTokens="WETH=0x..:18;USDC=0x..:6"`, `uniSlippagePercent`, RPC ноды — `restUrl`; GTC-лимиток и отмены на AMM нет.
 - Криптография (secp256k1, keccak, подпись транзакций) — библиотека web3j из pom.xml (класс `Web3jCrypto`); ни её, ни Maven в песочнице не было,
   поэтому `Web3jCrypto` — единственный непроверенный компилятором файл. Остальной код проверен тестами с подменой крипто-слоя.
 
@@ -562,7 +581,7 @@ OKX, Gate, BingX, LBank, Hyperliquid и dYdX получают стакан по 
   (биржа дубликат не исполнит); JSON-RPC повторяется по HTTP (чтения идемпотентны, `eth_sendRawTransaction` с тем же raw даёт тот же хеш);
 - бизнес-ошибка биржи по WS — это ответ, а не сбой: на REST не уходим;
 - пять неверных логинов подряд отключают WS-канал (остаётся REST);
-- отключить WS-торговлю: `<ID>_WS_TRADE=false`.
+- отключить WS-торговлю: параметр биржи `wsTrade=false`.
 
 Лимиты: ордера по WS идут через тот же `PacedLimiter`, что и REST; баланс, пришедший по сокету, сверяется с REST раз в 5 минут.
 Форматы приватных WS-сообщений (особенно Gate и Hyperliquid `post`) записаны по памяти и не проверялись на живых биржах:
@@ -595,18 +614,18 @@ REST-клиент, `RiskManager`, `OrderService`, конвейер `TickPipeline
 
 ## Подбор тикеров под стратегии
 
-При старте (`Main` → `controller.discovery().start()`) и затем раз в `DISCOVERY_REFRESH_MIN` минут (15):
+При старте (`Main` → `controller.discovery().start()`) и затем раз в `discoveryRefreshMin` минут (15, настройка `/settings`):
 
 1. Со всех бирж берётся сводка 24ч — по одному публичному запросу на биржу (`MarketSources`).
 2. Сводки прогоняются через профили стратегий (`Profiles`):
-   - **mean-reversion** (торгует в боте): оборот ≥ `DISCOVERY_MR_MIN_VOLUME` (1 млн), спред ≤ 0.1%, диапазон 1–25%,
-     не тренд; лучшие `DISCOVERY_BACKTEST_PER_EXCHANGE` (8) на биржу прогоняются по 500 минутным свечам
+   - **mean-reversion** (торгует в боте): оборот ≥ `discoveryMinVolume` (1 млн), спред ≤ `discoveryMrMaxSpreadPercent` (0.1%), диапазон 1–25%,
+     не тренд; лучшие `discoveryBacktestPerExchange` (8) на биржу прогоняются по 500 минутным свечам
      теми же правилами (`MeanReversionBacktest`, параметры стратегии этой биржи из админки, taker-комиссия с двух сторон);
    - **cross-exchange-arb** и **spread-capture** — только сканеры.
 3. Результат — `GET /discovery` (под каждой стратегией: тикеры, вердикт, причины, метрики, бэктест; статус бирж);
    `POST /discovery/refresh` — пересчитать сейчас.
 
-Лимиты: свои мягкие паузы на биржу, свечи — не больше `DISCOVERY_KLINE_BUDGET` (12) запросов на биржу за прогон,
+Лимиты: свои мягкие паузы на биржу, свечи — не больше `discoveryKlineBudget` (12) запросов на биржу за прогон,
 пауза 2 мин после 429/418/403. Сводки и свечи берутся по REST: это редкий снимок, а не поток.
-Биржи — `DISCOVERY_EXCHANGES` (по умолчанию все), котировки — `DISCOVERY_QUOTES` (USDT,USDC,USD).
+Биржи — `discoveryExchanges` (по умолчанию все), котировки — `discoveryQuotes` (USDT,USDC,USD); все пороги — в `GET /settings`.
 Форматы публичных API записаны по памяти и проверены только на фейковом сервере; ошибка одной биржи видна в статусе и не мешает остальным.

@@ -21,13 +21,19 @@ import java.util.Map;
  */
 public final class AppConfig {
 
+    /** Логгер конфигурации. */
     private static final Logger log = LoggerFactory.getLogger(AppConfig.class);
+    /** Разбор YAML. */
     private static final ObjectMapper YAML = new ObjectMapper(new YAMLFactory());
 
+    /** Включена ли админка. */
     private boolean adminEnabled = true;
+    /** Порт HTTP-админки. */
     private int adminPort = 8080;
+    /** Токен админки; пусто — без авторизации. */
     private String adminToken = "";
 
+    /** Создаётся через load() или defaults(). */
     private AppConfig() {}
 
     /** Прочитать application.yml (если есть) и переменные окружения. */
@@ -43,6 +49,7 @@ public final class AppConfig {
     /** Значения по умолчанию без файлов и окружения (тесты). */
     public static AppConfig defaults() { return new AppConfig(); }
 
+    /** application.yml рядом с jar (или -Dconfig.file), иначе из ресурсов jar; null — файла нет. */
     @SuppressWarnings("unchecked")
     private static Map<String, Object> readYaml() {
         String path = System.getProperty("config.file", "application.yml");
@@ -61,6 +68,7 @@ public final class AppConfig {
         return null;
     }
 
+    /** Блок admin из YAML; про устаревшие блоки risk и exchanges — предупреждение в лог. */
     @SuppressWarnings("unchecked")
     private void applyAdminYaml(Map<String, Object> root) {
         for (String legacy : new String[]{"risk", "exchanges"}) {
@@ -73,19 +81,24 @@ public final class AppConfig {
         adminToken = str(admin.get("token"), adminToken);
     }
 
+    /** Переменные окружения ADMIN_* важнее YAML. */
     private void applyEnv() {
         adminEnabled = bool(env("ADMIN_ENABLED"), adminEnabled);
         adminPort = intOf(env("ADMIN_PORT"), adminPort);
         adminToken = str(env("ADMIN_TOKEN"), adminToken);
     }
 
+    /** Переменная окружения или null, если не задана или пуста. */
     private static String env(String key) {
         String v = System.getenv(key);
         return v == null || v.isBlank() ? null : v;
     }
 
+    /** Строка или значение по умолчанию. */
     private static String str(Object v, String def) { return v == null ? def : String.valueOf(v); }
+    /** Флаг из строки или значение по умолчанию. */
     private static boolean bool(Object v, boolean def) { return v == null ? def : Boolean.parseBoolean(String.valueOf(v)); }
+    /** Целое из строки; при ошибке — значение по умолчанию. */
     private static int intOf(Object v, int def) {
         if (v == null) return def;
         try { return Integer.parseInt(String.valueOf(v).trim()); } catch (NumberFormatException e) { return def; }

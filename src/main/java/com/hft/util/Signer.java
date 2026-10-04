@@ -14,8 +14,10 @@ import java.util.HexFormat;
  */
 public final class Signer {
 
+    /** Подготовленный HMAC-SHA256 с ключом; Mac не потокобезопасен, отсюда synchronized в sign(). */
     private final Mac mac;
 
+    /** @param secret API-секрет биржи */
     public Signer(String secret) {
         try {
             this.mac = Mac.getInstance("HmacSHA256");
@@ -25,6 +27,7 @@ public final class Signer {
         }
     }
 
+    /** HMAC-SHA256 в hex от строки запроса. */
     public synchronized String sign(String payload) {
         byte[] hash = mac.doFinal(payload.getBytes(StandardCharsets.UTF_8));
         return HexFormat.of().formatHex(hash);

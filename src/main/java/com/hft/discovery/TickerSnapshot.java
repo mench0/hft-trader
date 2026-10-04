@@ -24,6 +24,7 @@ public record TickerSnapshot(
         double quoteVolume24h,
         long trades24h
 ) {
+    /** Спред в процентах от середины; NaN — нет bid/ask. */
     public double spreadPct() {
         if (!(bid > 0) || !(ask > 0) || ask < bid) return Double.NaN;
         return (ask - bid) / ((ask + bid) / 2) * 100.0;
@@ -35,6 +36,7 @@ public record TickerSnapshot(
         return (high24h - low24h) / last * 100.0;
     }
 
+    /** Изменение за 24 ч, %; NaN — нет цены открытия. */
     public double changePct() {
         if (!(open24h > 0) || !(last > 0)) return Double.NaN;
         return (last - open24h) / open24h * 100.0;

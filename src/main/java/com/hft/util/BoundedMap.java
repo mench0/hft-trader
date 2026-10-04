@@ -11,8 +11,10 @@ import java.util.Map;
  */
 public final class BoundedMap {
 
+    /** Утилитный класс — экземпляры не создаются. */
     private BoundedMap() {}
 
+    /** Новая карта, помнящая не больше maxSize последних записей. */
     public static <K, V> Map<K, V> create(int maxSize) {
         return Collections.synchronizedMap(new LinkedHashMap<>(256, 0.75f, false) {
             @Override protected boolean removeEldestEntry(Map.Entry<K, V> e) { return size() > maxSize; }

@@ -36,17 +36,33 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class AsterRestClient extends SignedCexClient {
 
+    /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(AsterRestClient.class);
+    /** Префикс пути API v3. */
     private static final String API = "/api/v3";
 
+    /** Подпись EIP-712 ключом агента. */
     private final EvmCrypto crypto;
+    /** Последний nonce (микросекунды). */
     private final AtomicLong lastNonce = new AtomicLong();
+    /** Хеш домена EIP-712 (считается один раз). */
     private byte[] domainSeparator;
 
+    /**
+     * @param config подключение и параметры биржи
+     * @param credentials ключи из окружения
+     * @param filters правила символов
+     */
     public AsterRestClient(ExchangeConfig config, Credentials credentials, SymbolFilters filters) {
         this(config, credentials, filters, credentials.isPresent() ? new Web3jCrypto(credentials.apiSecret()) : null);
     }
 
+    /**
+     * @param config подключение и параметры
+     * @param credentials адрес кошелька и ключ агента
+     * @param filters правила символов
+     * @param crypto подпись (в тестах — своя)
+     */
     public AsterRestClient(ExchangeConfig config, Credentials credentials, SymbolFilters filters, EvmCrypto crypto) {
         super("aster", config, credentials, filters);
         this.crypto = crypto;
@@ -54,6 +70,7 @@ public final class AsterRestClient extends SignedCexClient {
 
     // ------------------------------------------------------------ подпись
 
+    /** Хеш домена AsterSignTransaction с chainId сети. */
     private synchronized byte[] domainSeparator() {
         if (domainSeparator == null) {
             long chainId = config.testnet() ? 714 : 1666;
@@ -81,8 +98,10 @@ public final class AsterRestClient extends SignedCexClient {
         return lastNonce.updateAndGet(prev -> Math.max(prev + 1, now));
     }
 
+    /** Строка в UTF-8. */
     private static byte[] utf8(String s) { return s.getBytes(StandardCharsets.UTF_8); }
 
+    /** Число в 32 байта big-endian. */
     private static byte[] uint256(BigInteger v) {
         byte[] raw = v.toByteArray(), out = new byte[32];
         System.arraycopy(raw, Math.max(0, raw.length - 32), out, 32 - Math.min(32, raw.length), Math.min(32, raw.length));
@@ -91,11 +110,13 @@ public final class AsterRestClient extends SignedCexClient {
 
     // ------------------------------------------------------------ HTTP
 
+    /** Публичный GET. */
     private JsonNode publicGet(String path, Map<String, String> p) throws Exception {
         String q = p.isEmpty() ? "" : "?" + query(p);
         return exec(req(baseUrl + API + path + q).GET().build(), false);
     }
 
+    /** Подписанный запрос. */
     private JsonNode signed(String method, String path, Map<String, String> p, boolean order) throws Exception {
         credentials.require();
         p.put("recvWindow", String.valueOf(config.recvWindowMs()));
@@ -110,6 +131,7 @@ public final class AsterRestClient extends SignedCexClient {
         return exec(r, order);
     }
 
+    /** Ошибка в HTTP-коде или теле ответа — ApiException (лимит — с признаком rateLimit). */
     @Override
     protected void checkError(int http, JsonNode body) {
         int code = body.path("code").asInt(0);
@@ -120,6 +142,7 @@ public final class AsterRestClient extends SignedCexClient {
 
     // ------------------------------------------------------------ ордера
 
+    /** Отправить ордер (по WebSocket, если можно, иначе REST); исход ждёт вызывающий. */
     @Override
     protected OrderResult placeRaw(Order o) throws Exception {
         Map<String, String> p = params();
@@ -144,6 +167,7 @@ public final class AsterRestClient extends SignedCexClient {
                 o.qtyIsQuote() ? 0 : o.qty(), parsed.executedQty(), parsed.avgPrice(), 0);
     }
 
+    /** Статус ордера: из WS-потока, если есть, иначе запрос к бирже. */
     @Override
     public OrderResult orderStatus(String symbol, long orderId) throws Exception {
         Map<String, String> p = params();
@@ -171,6 +195,7 @@ public final class AsterRestClient extends SignedCexClient {
         return new OrderResult(id, o.path("clientOrderId").asText(""), symbol, side, status, d(o, "origQty"), exec, avg, 0);
     }
 
+    /** Отменить ордер. */
     @Override
     public void cancelOrder(String symbol, long orderId) throws Exception {
         Map<String, String> p = params();
@@ -180,6 +205,7 @@ public final class AsterRestClient extends SignedCexClient {
         log.info("[aster] ордер {} по {} отменён", orderId, symbol);
     }
 
+    /** Отменить все открытые ордера символа; возвращает их число. */
     @Override
     public int cancelAll(String symbol) throws Exception {
         Map<String, String> p = params();
@@ -218,6 +244,7 @@ public final class AsterRestClient extends SignedCexClient {
         log.info("[aster] правила загружены для {} символов", loaded);
     }
 
+    /** Загрузить балансы. */
     @Override
     public void loadBalances(BalanceStore store) throws Exception {
         JsonNode r = signed("GET", "/account", params(), false);

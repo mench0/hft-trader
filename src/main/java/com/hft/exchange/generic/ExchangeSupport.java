@@ -21,8 +21,10 @@ import org.slf4j.LoggerFactory;
  */
 public final class ExchangeSupport {
 
+    /** Логгер общих функций бирж. */
     private static final Logger log = LoggerFactory.getLogger(ExchangeSupport.class);
 
+    /** Утилитный класс — экземпляры не создаются. */
     private ExchangeSupport() {}
 
     /** LIVE только при ключах в окружении и параметре биржи live=true, иначе бумажный движок. */
@@ -59,10 +61,11 @@ public final class ExchangeSupport {
         var p = config.params();
         var ws = WsDialects.forExchange(info.id(), config);
         if (ws.isEmpty()) return new PollingBookFeed(info, config, Dialects.forExchange(info.id(), config), market, onTick, onBook, onGiveUp)
-                .backoff(p.pollBackoffMs());
+                .backoff(p.pollBackoffMs()).maxFailures(p.feedMaxFailures());
         HybridBookFeed f = new HybridBookFeed(info, config, ws.get(), Dialects.forExchange(info.id(), config), market, onTick, onBook, onGiveUp);
-        f.ws().tune(p.wsStaleMs() > 0 ? p.wsStaleMs() : f.ws().staleMs(), p.wsReconnectBaseMs());
-        f.poll().backoff(p.pollBackoffMs());
+        f.ws().tune(p.wsStaleMs() > 0 ? p.wsStaleMs() : f.ws().staleMs(), p.wsReconnectBaseMs())
+                .limits(p.feedMaxFailures(), p.wsMaxParseErrors(), p.wsMaxCrossedBooks());
+        f.poll().backoff(p.pollBackoffMs()).maxFailures(p.feedMaxFailures());
         return f.grace(p.restFallbackGraceMs());
     }
 

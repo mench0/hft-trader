@@ -32,7 +32,9 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class RateBudget {
 
+    /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(RateBudget.class);
+    /** Бюджеты всех бирж процесса. */
     private static final Map<String, RateBudget> ALL = new ConcurrentHashMap<>();
 
     /** Вид запроса: в какие вёдра он попадает, решает {@link RateLimits}. */
@@ -40,6 +42,7 @@ public final class RateBudget {
 
     /** Ведро: capacity жетонов, полностью восполняется за windowMs. */
     public record Limit(String name, double capacity, long windowMs, Set<Kind> kinds) {
+        /** Ведро по официальному лимиту (ёмкость умножается на долю SAFETY); без видов — для всех видов. */
         public static Limit of(String name, double officialCapacity, long windowMs, Kind... kinds) {
             return new Limit(name, officialCapacity * SAFETY, windowMs, kinds.length == 0 ? EnumSet.allOf(Kind.class) : EnumSet.of(kinds[0], kinds));
         }
@@ -51,27 +54,45 @@ public final class RateBudget {
     /** Задать долю лимита. Действует на бюджеты, созданные после вызова (контроллер вызывает при старте). */
     public static void setSafety(double safety) { SAFETY = Math.max(0.1, Math.min(1.0, safety)); }
 
+    /** Биржа. */
     private final String exchange;
+    /** Вёдра лимитов. */
     private final Bucket[] buckets;
+    /** До какого момента все запросы к бирже запрещены. */
     private volatile long blockedUntilMs;
+    /** Почему запрещены (для логов и метрик). */
     private volatile String blockReason = "";
+    /** Когда биржа последний раз сообщала о превышении. */
     private long lastLimitHitMs;
+    /** Сколько превышений подряд (за 5 минут) — для удвоения паузы. */
     private int consecutiveHits;
+    /** Ответов биржи о превышении лимита. */
     private final AtomicLong rateLimitedResponses = new AtomicLong();
+    /** Запросов, не отправленных из-за своего бюджета. */
     private final AtomicLong localRejects = new AtomicLong();
+    /** Суммарное ожидание в очереди, мс. */
     private final AtomicLong waitedMs = new AtomicLong();
 
+    /** Ведро жетонов одного лимита. */
     private static final class Bucket {
+        /** Лимит ведра. */
         final Limit limit;
+        /** Скорость восполнения, жетонов в мс. */
         final double refillPerMs;
         double tokens;          // может уйти в минус: это уже занятые будущие жетоны
+        /** Когда ведро последний раз восполнялось. */
         long lastMs;
         Bucket(Limit l) { limit = l; refillPerMs = l.capacity() / l.windowMs(); tokens = l.capacity(); lastMs = System.currentTimeMillis(); }
+        /** Восполнить жетоны пропорционально прошедшему времени. */
         void refill(long now) {
             if (now > lastMs) { tokens = Math.min(limit.capacity(), tokens + (now - lastMs) * refillPerMs); lastMs = now; }
         }
     }
 
+    /**
+     * @param exchange биржа
+     * @param limits вёдра лимитов
+     */
     RateBudget(String exchange, List<Limit> limits) {
         this.exchange = exchange;
         this.buckets = limits.stream().map(Bucket::new).toArray(Bucket[]::new);
@@ -82,12 +103,17 @@ public final class RateBudget {
         return ALL.computeIfAbsent(exchange, id -> new RateBudget(id, RateLimits.forExchange(id)));
     }
 
+    /** Все созданные бюджеты (для метрик). */
     public static Map<String, RateBudget> all() { return Map.copyOf(ALL); }
 
+    /** Биржа. */
     public String exchange() { return exchange; }
 
     // ------------------------------------------------------------ получение разрешения
 
+    /**
+     * Дождаться разрешения на запрос вида kind весом weight; ApiException(LOCAL), если ждать дольше maxWaitMs или запросы приостановлены надолго.
+     */
     public void acquire(Kind kind, double weight, long maxWaitMs) throws InterruptedException {
         long blocked = blockedForMs();
         if (blocked > 0) {
@@ -133,23 +159,36 @@ public final class RateBudget {
     /** Полоса для одного вида запросов — удобная обёртка для клиентов. */
     public Lane lane(Kind kind, long maxWaitMs) { return new Lane(kind, maxWaitMs); }
 
+    /** Полоса одного вида запросов с фиксированным пределом ожидания. */
     public final class Lane {
+        /** Вид запросов полосы. */
         private final Kind kind;
+        /** Предел ожидания полосы, мс. */
         private final long maxWaitMs;
+        /**
+         * @param kind вид запросов
+         * @param maxWaitMs предел ожидания
+         */
         private Lane(Kind kind, long maxWaitMs) { this.kind = kind; this.maxWaitMs = maxWaitMs; }
+        /** Разрешение на запрос весом 1. */
         public void acquire() throws InterruptedException { RateBudget.this.acquire(kind, 1, maxWaitMs); }
+        /** Разрешение на запрос указанного веса. */
         public void acquire(double weight) throws InterruptedException { RateBudget.this.acquire(kind, weight, maxWaitMs); }
+        /** Приостановить все запросы к бирже на ms. */
         public void blockFor(long ms) { RateBudget.this.blockFor(ms, "локально"); }
+        /** Сколько ещё мс запросы приостановлены. */
         public long blockedForMs() { return RateBudget.this.blockedForMs(); }
     }
 
     // ------------------------------------------------------------ ответы биржи
 
+    /** Приостановить все запросы к бирже на ms с причиной. */
     public void blockFor(long ms, String reason) {
         long until = System.currentTimeMillis() + ms;
         if (until > blockedUntilMs) { blockedUntilMs = until; blockReason = reason; }
     }
 
+    /** Сколько ещё мс запросы приостановлены. */
     public long blockedForMs() { return Math.max(0, blockedUntilMs - System.currentTimeMillis()); }
 
     /**
@@ -169,6 +208,7 @@ public final class RateBudget {
     /** Биржа сообщила о лимите в теле ответа (код ошибки) — та же пауза, что и для 429. */
     public long onLimitError(String what) { return limitHit(what, 10_000); }
 
+    /** Превышение лимита: пауза (удваивается при повторах в течение 5 минут, до 30 минут) и опустошение вёдер. */
     private synchronized long limitHit(String what, long pauseMs) {
         long now = System.currentTimeMillis();
         consecutiveHits = now - lastLimitHitMs < 300_000 ? consecutiveHits + 1 : 1;
@@ -182,6 +222,7 @@ public final class RateBudget {
         return pause;
     }
 
+    /** Подтянуть счёт к счёту биржи по заголовкам ответа (Binance/Aster, Bybit, Gate, KuCoin). */
     private void syncFromHeaders(HttpHeaders h) {
         // Binance / Aster: израсходованный вес за минуту и число ордеров за 10 с / сутки
         h.firstValueAsLong("X-MBX-USED-WEIGHT-1M").ifPresent(used -> syncUsed("weight", used));
@@ -207,6 +248,7 @@ public final class RateBudget {
         }
     }
 
+    /** Остаток почти исчерпан (≤ 2) — приостановить запросы до момента сброса из заголовка. */
     private void remainReset(HttpHeaders h, String remainHeader, String resetHeader, boolean resetIsEpoch) {
         OptionalLong remain = h.firstValueAsLong(remainHeader);
         if (remain.isEmpty() || remain.getAsLong() > 2) return;
@@ -217,6 +259,7 @@ public final class RateBudget {
 
     // ------------------------------------------------------------ метрики
 
+    /** Заполненность каждого ведра (для метрик). */
     public synchronized List<Map<String, Object>> buckets() {
         long now = System.currentTimeMillis();
         List<Map<String, Object>> out = new ArrayList<>();
@@ -232,6 +275,7 @@ public final class RateBudget {
         return out;
     }
 
+    /** Метрики бюджета для админки. */
     public Map<String, Object> stats() {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("blockedForMs", blockedForMs());
@@ -243,7 +287,10 @@ public final class RateBudget {
         return m;
     }
 
+    /** Ответов о превышении лимита. */
     public long rateLimitedResponses() { return rateLimitedResponses.get(); }
+    /** Отказов своего бюджета. */
     public long localRejects() { return localRejects.get(); }
+    /** Суммарное ожидание, мс. */
     public long waitedMs() { return waitedMs.get(); }
 }

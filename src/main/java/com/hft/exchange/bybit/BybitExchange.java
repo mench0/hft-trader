@@ -29,26 +29,44 @@ import java.util.List;
  */
 public final class BybitExchange implements ExchangeGateway {
 
+    /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(BybitExchange.class);
 
+    /** Подключение и параметры биржи. */
     private final ExchangeConfig config;
+    /** API-ключи из окружения. */
     private final Credentials credentials;
 
+    /** Стаканы, окна цен и статистика символов. */
     private final MarketDataStore market;
+    /** Балансы (с биржи или бумажные). */
     private final BalanceStore balances;
+    /** Правила торговли символов. */
     private final SymbolFilters filters;
+    /** REST-клиент биржи. */
     private final BybitRestClient rest;
     /** Бумажный движок, если live=false или нет ключей; иначе null. */
     private final PaperOrderApi paper;
+    /** Когда баланс последний раз сверялся с биржей по REST. */
     private volatile long lastBalanceSyncMs;
+    /** Проверки риска перед ордером. */
     private final RiskManager risk;
+    /** Отправка ордеров с проверками и учётом баланса. */
     private final OrderService orderService;
 
+    /** Первая стадия конвейера: запись тиков в память. */
     private final MarketDataHandler dataHandler;
+    /** Стратегии биржи. */
     private final StrategySet strategy;
+    /** Конвейер тиков (Disruptor). */
     private final TickPipeline pipeline;
+    /** Фид рыночных данных. */
     private final BybitMarketDataFeed feed;
 
+    /**
+     * @param config подключение и параметры биржи
+     * @param settings параметры биржи (общий объект, меняется из админки)
+     */
     public BybitExchange(ExchangeConfig config, TradingSettings settings) {
         this.config = config;
         this.credentials = Credentials.fromEnv(config.id());
@@ -78,9 +96,11 @@ public final class BybitExchange implements ExchangeGateway {
         }
     }
 
+    /** Идентификатор биржи. */
     @Override
     public String id() { return "bybit"; }
 
+    /** Загрузить правила и балансы, запустить конвейер и фид. */
     @Override
     public void start() throws Exception {
         rest.loadFilters(config.symbols());
@@ -98,6 +118,7 @@ public final class BybitExchange implements ExchangeGateway {
         log.info("[bybit] Биржа запущена, символы: {}", config.symbols());
     }
 
+    /** Остановить стратегии, фид и конвейер. */
     @Override
     public void stop() {
         strategy.disable();
@@ -106,32 +127,42 @@ public final class BybitExchange implements ExchangeGateway {
         log.info("[bybit] Биржа остановлена");
     }
 
+    /** Рыночные данные идут. */
     @Override
     public boolean isConnected() { return feed.isConnected(); }
 
+    /** Получено сообщений с биржи. */
     @Override
     public long messageCount() { return feed.messageCount(); }
 
+    /** Символы, по которым идут данные. */
     @Override
     public List<String> symbols() { return feed.activeSymbols(); }
 
+    /** Рыночные данные биржи. */
     @Override
     public MarketDataStore marketData() { return market; }
 
+    /** Балансы биржи. */
     @Override
     public BalanceStore balances() { return balances; }
 
+    /** Сервис ордеров биржи. */
     @Override
     public OrderService orders() { return orderService; }
 
+    /** Риск-менеджер биржи. */
     @Override
     public RiskManager risk() { return risk; }
 
+    /** Стратегии биржи. */
     @Override
     public StrategySet strategy() { return strategy; }
 
+    /** Фид рыночных данных. */
     public BybitMarketDataFeed feed() { return feed; }
 
+    /** Сверить баланс с биржей по REST, не чаще balanceSyncMs (в бумажном режиме — ничего). */
     @Override
     public void syncBalances() {
         if (paper != null) return;                          // бумажный баланс ведёт движок

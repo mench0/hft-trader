@@ -16,11 +16,19 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public final class WsSender {
 
+    /** Сокет JDK: send* нельзя вызывать, пока предыдущая отправка не завершилась. */
     private final WebSocket ws;
+    /** Предел очереди неотправленных сообщений. */
     private final int maxQueued;
+    /** Сколько сообщений ждёт отправки. */
     private final AtomicInteger queued = new AtomicInteger();
+    /** Последняя отправка в цепочке — следующая ставится за ней. */
     private CompletableFuture<?> tail = CompletableFuture.completedFuture(null);
 
+    /**
+     * @param ws открытый сокет
+     * @param maxQueued предел очереди
+     */
     public WsSender(WebSocket ws, int maxQueued) {
         this.ws = ws;
         this.maxQueued = maxQueued;
@@ -42,5 +50,6 @@ public final class WsSender {
         return f.orTimeout(5, TimeUnit.SECONDS);
     }
 
+    /** Сколько сообщений ждёт отправки. */
     public int queued() { return queued.get(); }
 }
