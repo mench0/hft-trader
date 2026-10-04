@@ -7,7 +7,8 @@ import java.util.Map;
  * Всё состояние, которое должно сохраняться между перезапусками процесса.
  *
  * Без этого при рестарте любая настройка, сделанная через админку (выбор бирж,
- * тикеров, торговые параметры каждой биржи), терялась бы.
+ * тикеров, параметры каждой биржи, настройки процесса), терялась бы.
+ * Параметры хранятся только для выбранных бирж.
  */
 public record PersistedState(
         /** Биржа -> список тикеров, как было выбрано через /control/select. */
@@ -21,8 +22,11 @@ public record PersistedState(
          *  (эквивалент вызова /trading/start после /control/start). */
         boolean autoTrade,
 
-        /** Биржа -> торговые параметры ({@link com.hft.config.TradingParams#toStringMap()}).
+        /** Выбранная биржа -> её параметры ({@link com.hft.config.TradingParams#toStringMap()}).
          *  Хранятся как ключ-значение: новый параметр в будущей версии получит значение
          *  по умолчанию, а не сломает чтение старого состояния. */
-        Map<String, Map<String, String>> trading
+        Map<String, Map<String, String>> trading,
+
+        /** Настройки процесса ({@link com.hft.config.GlobalParams#toStringMap()}). */
+        Map<String, String> global
 ) {}

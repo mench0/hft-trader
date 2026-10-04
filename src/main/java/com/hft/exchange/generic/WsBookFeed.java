@@ -109,6 +109,9 @@ public final class WsBookFeed implements BookFeed {
     }
 
     /** Для тестов. */
+    /** Тишина, после которой переподключение, мс (по умолчанию зависит от пинга биржи). */
+    long staleMs() { return staleMs; }
+
     public WsBookFeed tune(long staleMs, long baseBackoffMs) {
         this.staleMs = staleMs;
         this.baseBackoffMs = baseBackoffMs;

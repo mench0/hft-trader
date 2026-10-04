@@ -28,7 +28,7 @@ import java.util.function.BooleanSupplier;
  *
  * На каждом тике по символу треугольника круг пересчитывается по лучшим ценам стаканов: покупка по ask,
  * продажа по bid, на каждой ноге — комиссия тейкера (takerFeePercent). Размер ограничен triOrderQuote и
- * половиной объёма на лучших уровнях всех трёх стаканов. Если чистая прибыль ≥ triMinProfitPercent —
+ * долей triDepthUsage объёма на лучших уровнях всех трёх стаканов. Если чистая прибыль ≥ triMinProfitPercent —
  * круг исполняется тремя рыночными ордерами подряд вне потока конвейера.
  *
  * Риски: ноги идут последовательно (между ними цена может уйти), а не атомарно; если нога не исполнилась,
@@ -148,7 +148,7 @@ public final class TriangularArbStrategy extends Strategy {
             if (q == null || q.profitPct() < p.triMinProfitPercent()) continue;
             Long last = lastRun.get(c.name());
             if (last != null && now - last < p.triCooldownMs()) continue;
-            double start = Math.min(p.triOrderQuote(), q.maxStart() * 0.5);
+            double start = Math.min(p.triOrderQuote(), q.maxStart() * p.triDepthUsage());
             if (start < p.triOrderQuote() * 0.1) continue;               // лучшие уровни слишком тонкие
             opportunities.incrementAndGet();
             lastRun.put(c.name(), now);

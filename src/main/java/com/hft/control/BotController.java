@@ -2,94 +2,110 @@ package com.hft.control;
 
 import com.hft.config.AppConfig;
 import com.hft.config.ExchangeConfig;
+import com.hft.config.GlobalParams;
 import com.hft.config.TradingParams;
 import com.hft.config.TradingSettings;
+import com.hft.discovery.DiscoveryService;
+import com.hft.discovery.MeanReversionBacktest;
 import com.hft.exchange.ExchangeFactory;
 import com.hft.exchange.ExchangeGateway;
 import com.hft.exchange.catalog.ExchangeCatalog;
+import com.hft.exchange.catalog.ExchangeInfo;
 import com.hft.persistence.PersistedState;
 import com.hft.persistence.SqliteStateStore;
+import com.hft.rest.RateBudget;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Управляет тем, какие биржи и какие символы выбраны, и когда бот
- * реально подключается к рынку. Всё, что здесь меняется — выбор бирж,
- * тикеров, торговые параметры каждой биржи — сразу сохраняется на диск через
+ * Управляет тем, какие биржи и какие символы выбраны, их параметрами и тем, когда бот
+ * реально подключается к рынку. Всё, что здесь меняется, сразу сохраняется на диск через
  * {@link SqliteStateStore}, поэтому перезапуск процесса настройки не откатывает.
+ *
+ * Порядок работы: выбрать биржи (сразу можно передать их параметры) → при необходимости поменять
+ * параметры → /control/start. Параметры хранятся только для выбранных бирж: при снятии биржи
+ * с выбора они удаляются и в память бота не попадают.
  *
  * Состояния:
  *   NOT_STARTED — биржи не подключены, можно менять выбор
  *   RUNNING     — биржи подключены и работают
- *   STOPPED     — было запущено, потом остановлено; можно поменять
- *                 выбор и запустить заново
+ *   STOPPED     — было запущено, потом остановлено; можно поменять выбор и запустить заново
  */
 public final class BotController {
 
     private static final Logger log = LoggerFactory.getLogger(BotController.class);
 
-    private static final List<String> SUPPORTED_EXCHANGES = com.hft.exchange.catalog.ExchangeCatalog.runnableIds();
+    private static final List<String> SUPPORTED_EXCHANGES = ExchangeCatalog.runnableIds();
 
-    private final AppConfig config;
     private final SqliteStateStore stateStore;
 
-    /** Что выбрано в текущей сессии: биржа -> список символов. Меняется до старта. */
+    /** Выбранные биржи -> символы. Меняется до старта. */
     private final Map<String, List<String>> selection = new ConcurrentHashMap<>();
 
     /** Живые подключения после start(). Пусто, пока бот не запущен. */
     private final Map<String, ExchangeGateway> active = new LinkedHashMap<>();
 
-    /** Торговые параметры каждой биржи. Объект на биржу живёт всё время процесса: шлюз биржи держит
-     *  на него ссылку, поэтому изменение из админки сразу видно работающей стратегии и риску. */
+    /** Параметры выбранных бирж. Объект на биржу живёт, пока биржа выбрана: шлюз держит на него ссылку,
+     *  поэтому изменение из админки сразу видно работающей стратегии и риску. */
     private final Map<String, TradingSettings> settings = new ConcurrentHashMap<>();
+
+    /** Настройки процесса (фоновые задачи, подбор тикеров, лимиты). */
+    private volatile GlobalParams global = GlobalParams.DEFAULTS;
 
     private final AtomicBoolean running = new AtomicBoolean(false);
     private volatile boolean autoStart;
     private volatile boolean autoTrade;
 
-    /** Подбор тикеров под стратегии (сводки бирж + бэктест); запускается из Main до старта бирж. */
-    private final com.hft.discovery.DiscoveryService discovery;
+    /** Подбор тикеров под стратегии; null — выключен в настройках. */
+    private volatile DiscoveryService discovery;
 
+    /**
+     * @param config     настройки админки (сам контроллер их не использует, оставлены для единообразия создания)
+     * @param stateStore где хранится состояние между перезапусками
+     */
     public BotController(AppConfig config, SqliteStateStore stateStore) {
-        this.config = config;
         this.stateStore = stateStore;
         restoreFromDiskOrDefaults();
-        // параметры mean-reversion для бэктеста — те, что заданы для биржи в админке (или по умолчанию)
-        this.discovery = com.hft.discovery.DiscoveryService.createDefault(ex -> {
-            TradingSettings ts = settings.get(ex);
-            if (ts == null) return null;
-            TradingParams p = ts.get();
-            return new com.hft.discovery.MeanReversionBacktest.Params(p.entryZ(), p.exitZ(), p.stopLossPercent(), 30, 60);
-        });
+        RateBudget.setSafety(global.rateLimitSafety());     // до создания первого бюджета
+        this.discovery = createDiscovery(global);
     }
 
-    public com.hft.discovery.DiscoveryService discovery() { return discovery; }
+    // ======================= СОСТОЯНИЕ НА ДИСКЕ =======================
 
     private void restoreFromDiskOrDefaults() {
         var saved = stateStore.load();
-        if (saved.isPresent()) {
-            PersistedState s = saved.get();
-            if (s.selection() != null) s.selection().forEach((ex, syms) -> selection.put(ex, new CopyOnWriteArrayList<>(syms)));
-            if (s.trading() != null) s.trading().forEach((ex, values) -> {
-                try {
-                    settings.put(ex, new TradingSettings(defaultsFor(ex).with(values)));
-                } catch (IllegalArgumentException e) {
-                    log.error("[{}] сохранённые параметры некорректны ({}) — беру значения по умолчанию", ex, e.getMessage());
-                }
-            });
-            autoStart = s.autoStart();
-            autoTrade = s.autoTrade();
-            log.info("Настройки восстановлены из {}", stateStore.filePath());
+        if (saved.isEmpty()) {
+            persist();                                       // сразу создаём файл состояния
             return;
         }
-        persist(); // сразу создаём файл состояния, чтобы он появился на диске
+        PersistedState s = saved.get();
+        if (s.selection() != null) s.selection().forEach((ex, syms) -> {
+            if (SUPPORTED_EXCHANGES.contains(ex)) selection.put(ex, new CopyOnWriteArrayList<>(syms));
+        });
+        for (String ex : selection.keySet()) {               // параметры — только выбранных бирж
+            Map<String, String> values = s.trading() == null ? null : s.trading().get(ex);
+            TradingParams p = defaultsFor(ex);
+            if (values != null) {
+                try { p = p.with(values); }
+                catch (IllegalArgumentException e) { log.error("[{}] сохранённые параметры некорректны ({}) — беру значения по умолчанию", ex, e.getMessage()); }
+            }
+            settings.put(ex, new TradingSettings(p));
+        }
+        if (s.global() != null) {
+            try { global = GlobalParams.DEFAULTS.with(s.global()); }
+            catch (IllegalArgumentException e) { log.error("сохранённые настройки процесса некорректны ({}) — беру значения по умолчанию", e.getMessage()); }
+        }
+        autoStart = s.autoStart();
+        autoTrade = s.autoTrade();
+        log.info("Настройки восстановлены из {}: биржи {}", stateStore.filePath(), selection.keySet());
     }
 
     /** Собрать текущее состояние и записать на диск. Вызывается после любого изменения. */
@@ -98,104 +114,171 @@ public final class BotController {
         selection.forEach((k, v) -> selectionCopy.put(k, List.copyOf(v)));
         Map<String, Map<String, String>> trading = new LinkedHashMap<>();
         settings.forEach((k, v) -> trading.put(k, v.get().toStringMap()));
-        stateStore.save(new PersistedState(selectionCopy, autoStart, autoTrade, trading));
+        stateStore.save(new PersistedState(selectionCopy, autoStart, autoTrade, trading, global.toStringMap()));
     }
 
     // ======================= ВЫБОР ДО СТАРТА =======================
 
+    /** Биржи, которые можно выбрать (есть адаптер). */
     public List<String> supportedExchanges() { return SUPPORTED_EXCHANGES; }
 
+    /** Копия выбора: биржа -> символы. */
     public Map<String, List<String>> selection() {
         Map<String, List<String>> copy = new LinkedHashMap<>();
         selection.forEach((k, v) -> copy.put(k, List.copyOf(v)));
         return copy;
     }
 
-    public void selectExchange(String exchangeId, List<String> symbols) {
+    /**
+     * Выбрать биржу с символами и (необязательно) её параметрами. Повторный выбор меняет символы
+     * и применяет переданные параметры поверх уже заданных. Ошибка в параметрах — не меняется ничего.
+     */
+    public synchronized void selectExchange(String exchangeId, List<String> symbols, Map<String, String> params) {
         requireNotRunning();
-        if (!SUPPORTED_EXCHANGES.contains(exchangeId)) {
-            throw new IllegalArgumentException("Неподдерживаемая биржа: " + exchangeId
-                    + ". Доступны: " + SUPPORTED_EXCHANGES);
-        }
-        if (symbols.isEmpty()) {
-            throw new IllegalArgumentException("Нужен хотя бы один символ");
-        }
+        requireSupported(exchangeId);
+        if (symbols.isEmpty()) throw new IllegalArgumentException("Нужен хотя бы один символ");
+        TradingSettings current = settings.get(exchangeId);
+        TradingParams p = (current != null ? current.get() : defaultsFor(exchangeId)).with(params);
+        validate(exchangeId, p);
+        if (current != null) current.set(p); else settings.put(exchangeId, new TradingSettings(p));
         selection.put(exchangeId, new CopyOnWriteArrayList<>(symbols));
-        log.info("Биржа {} выбрана с символами {}", exchangeId, symbols);
+        log.info("Биржа {} выбрана с символами {} (testnet={}, live={})", exchangeId, symbols, p.testnet(), p.live());
         persist();
     }
 
-    public void deselectExchange(String exchangeId) {
+    /** Выбрать биржу без параметров (значения по умолчанию или уже заданные). */
+    public void selectExchange(String exchangeId, List<String> symbols) { selectExchange(exchangeId, symbols, Map.of()); }
+
+    /** Убрать биржу из выбора вместе с её параметрами. */
+    public synchronized void deselectExchange(String exchangeId) {
         requireNotRunning();
         selection.remove(exchangeId);
-        log.info("Биржа {} убрана из выбора", exchangeId);
+        settings.remove(exchangeId);
+        log.info("Биржа {} убрана из выбора, её параметры удалены", exchangeId);
         persist();
     }
 
-    public void addSymbol(String exchangeId, String symbol) {
+    /** Добавить символ к выбранной бирже. */
+    public synchronized void addSymbol(String exchangeId, String symbol) {
         requireNotRunning();
-        List<String> list = selection.computeIfAbsent(exchangeId, k -> new CopyOnWriteArrayList<>());
+        List<String> list = requireSelected(exchangeId);
         String s = symbol.toUpperCase();
         if (!list.contains(s)) list.add(s);
         persist();
     }
 
-    public void removeSymbol(String exchangeId, String symbol) {
+    /** Убрать символ у выбранной биржи. */
+    public synchronized void removeSymbol(String exchangeId, String symbol) {
         requireNotRunning();
-        List<String> list = selection.get(exchangeId);
-        if (list != null) list.remove(symbol.toUpperCase());
+        requireSelected(exchangeId).remove(symbol.toUpperCase());
         persist();
     }
 
     private void requireNotRunning() {
         if (running.get()) {
-            throw new IllegalStateException(
-                    "Бот запущен. Сначала остановите (/control/stop), чтобы поменять выбор бирж/символов.");
+            throw new IllegalStateException("Бот запущен. Сначала остановите (/control/stop), чтобы поменять выбор бирж/символов.");
         }
     }
 
-    // ======================= ТОРГОВЫЕ ПАРАМЕТРЫ =======================
+    private static void requireSupported(String exchangeId) {
+        if (!SUPPORTED_EXCHANGES.contains(exchangeId))
+            throw new IllegalArgumentException("Неподдерживаемая биржа: " + exchangeId + ". Доступны: " + SUPPORTED_EXCHANGES);
+    }
 
-    /** Значения по умолчанию для биржи: комиссия тейкера — из каталога. */
-    private static TradingParams defaultsFor(String exchangeId) {
+    private List<String> requireSelected(String exchangeId) {
+        List<String> list = selection.get(exchangeId);
+        if (list == null) throw new IllegalArgumentException("Биржа не выбрана: " + exchangeId + ". Сначала POST /control/select?exchange=" + exchangeId + "&symbols=…");
+        return list;
+    }
+
+    // ======================= ПАРАМЕТРЫ БИРЖ =======================
+
+    /** Значения по умолчанию для биржи: комиссия тейкера — из каталога; testnet — если он у биржи есть. */
+    public static TradingParams defaultsFor(String exchangeId) {
         TradingParams d = TradingParams.DEFAULTS;
         return ExchangeCatalog.find(exchangeId)
-                .map(i -> d.with(Map.of("takerFeePercent", String.valueOf(i.takerFeePct()))))
+                .map(i -> d.with(Map.of("takerFeePercent", String.valueOf(i.takerFeePct()),
+                        "testnet", String.valueOf(i.hasTestnet()))))
                 .orElse(d);
     }
 
-    /** Биржи, для которых параметры уже задавались. */
-    public java.util.Set<String> configuredExchanges() { return java.util.Set.copyOf(settings.keySet()); }
-
-    private TradingSettings settingsFor(String exchangeId) {
-        return settings.computeIfAbsent(exchangeId, id -> new TradingSettings(defaultsFor(id)));
+    /** testnet=true возможен, только если у биржи есть тестовая сеть или задан свой restUrl. */
+    private static void validate(String exchangeId, TradingParams p) {
+        ExchangeInfo info = ExchangeCatalog.find(exchangeId).orElseThrow();
+        if (p.testnet() && !info.hasTestnet() && p.restUrl().isBlank())
+            throw new IllegalArgumentException("У биржи " + exchangeId + " нет тестовой сети: задайте testnet=false"
+                    + (exchangeId.equals("uniswapv2") ? " или restUrl тестовой сети (RPC Sepolia и т.п.)" : ""));
     }
 
-    /** Текущие параметры биржи (значения по умолчанию, если их ещё не меняли). */
+    /** Выбранные биржи (у них и только у них есть параметры). */
+    public Set<String> configuredExchanges() { return Set.copyOf(settings.keySet()); }
+
+    /** Параметры выбранной биржи; для невыбранной — значения по умолчанию (в память бота не сохраняются). */
     public TradingParams params(String exchangeId) {
         TradingSettings ts = settings.get(exchangeId);
         return ts != null ? ts.get() : defaultsFor(exchangeId);
     }
 
+    /** Биржа выбрана. */
+    public boolean isSelected(String exchangeId) { return selection.containsKey(exchangeId); }
+
     /**
-     * Частичное изменение параметров биржи: переданные ключи меняются, остальные остаются.
-     * Работающая биржа подхватывает их на следующем тике; bookDepth/priceWindow — после перезапуска.
+     * Частичное изменение параметров выбранной биржи: переданные ключи меняются, остальные остаются.
+     * Работающая биржа подхватывает их на следующем тике; помеченные «restart» — после перезапуска.
      */
     public synchronized TradingParams updateParams(String exchangeId, Map<String, String> updates) {
-        if (!SUPPORTED_EXCHANGES.contains(exchangeId)) {
-            throw new IllegalArgumentException("Неподдерживаемая биржа: " + exchangeId + ". Доступны: " + SUPPORTED_EXCHANGES);
-        }
-        TradingSettings ts = settingsFor(exchangeId);
+        requireSupported(exchangeId);
+        requireSelected(exchangeId);
+        TradingSettings ts = settings.get(exchangeId);
         TradingParams updated = ts.get().with(updates);
+        validate(exchangeId, updated);
         ts.set(updated);
         persist();
-        log.info("[{}] торговые параметры изменены: {}", exchangeId, updates);
+        log.info("[{}] параметры изменены: {}", exchangeId, updates);
         return updated;
+    }
+
+    // ======================= НАСТРОЙКИ ПРОЦЕССА =======================
+
+    /** Текущие настройки процесса. */
+    public GlobalParams global() { return global; }
+
+    /** Частичное изменение настроек процесса; подбор тикеров пересоздаётся с новыми значениями. */
+    public synchronized GlobalParams updateGlobal(Map<String, String> updates) {
+        GlobalParams updated = global.with(updates);
+        boolean discoveryChanged = updates.keySet().stream().anyMatch(k -> k.startsWith("discovery"));
+        global = updated;
+        persist();
+        if (discoveryChanged) {
+            DiscoveryService old = discovery;
+            if (old != null) old.stop();
+            discovery = createDiscovery(updated);
+            if (discovery != null) discovery.start();
+        }
+        log.info("Настройки процесса изменены: {}", updates);
+        return updated;
+    }
+
+    /** Подбор тикеров; null — выключен (discoveryEnabled=false). */
+    public DiscoveryService discovery() { return discovery; }
+
+    private DiscoveryService createDiscovery(GlobalParams g) {
+        if (!g.discoveryEnabled()) return null;
+        // параметры mean-reversion для бэктеста — те, что заданы для выбранной биржи (или по умолчанию)
+        return DiscoveryService.createDefault(ex -> {
+            TradingSettings ts = settings.get(ex);
+            if (ts == null) return null;
+            TradingParams p = ts.get();
+            return new MeanReversionBacktest.Params(p.entryZ(), p.exitZ(), p.stopLossPercent(), g.discoveryBacktestWindow(), g.discoveryBacktestMaxHoldBars());
+        }, g);
     }
 
     // ======================= АВТОЗАПУСК =======================
 
+    /** Поднимать биржи сами при старте процесса. */
     public boolean autoStart() { return autoStart; }
+
+    /** Вместе с автозапуском сразу включать торговлю. */
     public boolean autoTrade() { return autoTrade; }
 
     /** Управляется через POST /control/autostart. Действует при следующем перезапуске процесса. */
@@ -207,29 +290,25 @@ public final class BotController {
 
     // ======================= ЗАПУСК/ОСТАНОВКА =======================
 
+    /** Биржи подключены. */
     public boolean isRunning() { return running.get(); }
 
+    /** Работающие шлюзы бирж. */
     public Map<String, ExchangeGateway> active() { return Map.copyOf(active); }
 
+    /** Подключить все выбранные биржи с их текущими параметрами. */
     public synchronized void start() throws Exception {
-        if (running.get()) {
-            throw new IllegalStateException("Бот уже запущен");
-        }
+        if (running.get()) throw new IllegalStateException("Бот уже запущен");
         if (selection.isEmpty()) {
-            throw new IllegalStateException(
-                    "Не выбрано ни одной биржи. Сначала POST /control/select?exchange=binance&symbols=BTCUSDT");
+            throw new IllegalStateException("Не выбрано ни одной биржи. Сначала POST /control/select?exchange=binance&symbols=BTCUSDT");
         }
-
         active.clear();
         for (var entry : selection.entrySet()) {
             String id = entry.getKey();
-            List<String> symbols = entry.getValue();
-            TradingSettings ts = settingsFor(id);
-            ExchangeConfig ec = buildExchangeConfig(id, symbols, ts.get());
-            ExchangeGateway gw = ExchangeFactory.create(id, ec, ts);
-            active.put(id, gw);
+            TradingSettings ts = settings.get(id);
+            ExchangeConfig ec = buildExchangeConfig(id, entry.getValue(), ts.get());
+            active.put(id, ExchangeFactory.create(id, ec, ts));
         }
-
         for (ExchangeGateway gw : active.values()) {
             try {
                 gw.start();
@@ -240,11 +319,11 @@ public final class BotController {
                 throw e;
             }
         }
-
         running.set(true);
         log.info("Бот запущен. Активные биржи: {}", active.keySet());
     }
 
+    /** Отключить все биржи; выбор и параметры сохраняются. */
     public synchronized void stop() {
         if (!running.get()) return;
         for (ExchangeGateway gw : active.values()) {
@@ -265,6 +344,7 @@ public final class BotController {
         persist();
     }
 
+    /** Выключить торговлю (стратегии и риск) на всех активных биржах или на одной. */
     public synchronized void stopTrading(String targetId, String reason) {
         for (ExchangeGateway gw : resolveTargets(targetId)) {
             setTradingEnabled(gw.id(), false);
@@ -275,10 +355,11 @@ public final class BotController {
     }
 
     private void setTradingEnabled(String exchangeId, boolean enabled) {
-        TradingSettings ts = settingsFor(exchangeId);
-        ts.set(ts.get().with(Map.of("tradingEnabled", String.valueOf(enabled))));
+        TradingSettings ts = settings.get(exchangeId);
+        if (ts != null) ts.set(ts.get().with(Map.of("tradingEnabled", String.valueOf(enabled))));
     }
 
+    /** Активные шлюзы: все ("all"/null) или один по id. */
     public List<ExchangeGateway> resolveTargets(String id) {
         if (id == null || "all".equalsIgnoreCase(id)) return List.copyOf(active.values());
         ExchangeGateway gw = active.get(id);
@@ -286,12 +367,12 @@ public final class BotController {
         return List.of(gw);
     }
 
-    private ExchangeConfig buildExchangeConfig(String id, List<String> symbols, TradingParams p) {
-        ExchangeConfig base = config.exchanges().stream()
-                .filter(e -> e.id().equals(id))
-                .findFirst()
-                .orElseGet(() -> config.defaultExchangeConfig(id));
-        return new ExchangeConfig(base.id(), base.testnet(), base.restUrl(), base.wsUrl(),
-                base.recvWindowMs(), symbols, p.bookDepth(), p.priceWindow());
+    /** Подключение биржи: адреса из параметров или каталога (с учётом testnet), символы из выбора. */
+    static ExchangeConfig buildExchangeConfig(String id, List<String> symbols, TradingParams p) {
+        ExchangeInfo info = ExchangeCatalog.find(id).orElseThrow();
+        String rest = p.restUrl().isBlank() ? info.restUrl(p.testnet()) : p.restUrl();
+        String catalogWs = info.wsUrl(p.testnet());
+        String ws = p.wsUrl().isBlank() ? (catalogWs == null ? "" : catalogWs) : p.wsUrl();
+        return new ExchangeConfig(id, p.testnet(), rest, ws, p.recvWindowMs(), List.copyOf(symbols), p.bookDepth(), p.priceWindow(), p);
     }
 }

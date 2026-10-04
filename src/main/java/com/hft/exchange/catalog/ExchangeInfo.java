@@ -21,8 +21,26 @@ public record ExchangeInfo(
         double takerFeePct,
         String defaultQuote,        // в какой валюте считаем бумажный баланс
         String symbolHint,          // как писать тикер в админке
-        String notes
+        String notes,
+        String wsUrl,               // WebSocket рыночных данных (null — адрес знает диалект/фид биржи)
+        String testnetRestUrl,      // REST тестовой сети; null — у биржи нет testnet
+        String testnetWsUrl         // WebSocket тестовой сети
 ) {
+    /** Биржа без отдельных адресов WebSocket и testnet (их знает диалект или их нет). */
+    public ExchangeInfo(String id, String title, Kind kind, Adapter adapter, String restUrl, double maxRequestsPerSec,
+                        double makerFeePct, double takerFeePct, String defaultQuote, String symbolHint, String notes) {
+        this(id, title, kind, adapter, restUrl, maxRequestsPerSec, makerFeePct, takerFeePct, defaultQuote, symbolHint, notes, null, null, null);
+    }
+
+    /** Есть ли у биржи тестовая сеть. */
+    public boolean hasTestnet() { return testnetRestUrl != null; }
+
+    /** REST-адрес с учётом testnet. */
+    public String restUrl(boolean testnet) { return testnet && hasTestnet() ? testnetRestUrl : restUrl; }
+
+    /** WebSocket-адрес с учётом testnet (null — по умолчанию диалекта/фида). */
+    public String wsUrl(boolean testnet) { return testnet && hasTestnet() ? testnetWsUrl : wsUrl; }
+
     public enum Kind { CEX_TIER1, CEX_TIER3, PERP_DEX, ORDERBOOK_DEX, AMM_DEX }
 
     public enum Adapter { NATIVE_LIVE, LIVE_UNVERIFIED, PAPER_BLIND, NOT_IMPLEMENTED }

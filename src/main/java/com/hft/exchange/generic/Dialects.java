@@ -29,6 +29,12 @@ public final class Dialects {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Duration TIMEOUT = Duration.ofSeconds(3);
 
+    /** Диалект биржи с её параметрами (для Uniswap — пулы из uniPools). */
+    public static BookDialect forExchange(String id, com.hft.config.ExchangeConfig cfg) {
+        return id.equals("uniswapv2") ? new UniswapV2(cfg.params().uniPools()) : forExchange(id);
+    }
+
+    /** Диалект REST-стакана биржи (без параметров: для Uniswap пулы пусты). */
     public static BookDialect forExchange(String id) {
         return switch (id) {
             case "okx" -> new Okx();
@@ -38,7 +44,7 @@ public final class Dialects {
             case "lbank" -> new Lbank();
             case "hyperliquid" -> new Hyperliquid();
             case "dydx" -> new Dydx();
-            case "uniswapv2" -> new UniswapV2();
+            case "uniswapv2" -> new UniswapV2("");
             case "kucoin" -> new Kucoin();
             case "aster" -> new Aster();
             default -> throw new IllegalArgumentException("Нет диалекта для биржи: " + id);
@@ -214,8 +220,8 @@ public final class Dialects {
 
     /**
      * Пул Uniswap V2: читаем getReserves() через eth_call и строим синтетический
-     * стакан по формуле x*y=k. Пулы задаются переменной окружения
-     * UNISWAPV2_POOLS="WETHUSDC=0xPAIR:true:18:6;WBTCUSDC=0x...:false:8:6", где
+     * стакан по формуле x*y=k. Пулы задаются параметром биржи uniPools
+     * "WETHUSDC=0xPAIR:true:18:6;WBTCUSDC=0x...:false:8:6", где
      * поля — адрес пары, base это token0?, decimals base, decimals quote.
      * Газ и MEV не учитываются: это только оценка цены.
      */
@@ -224,8 +230,6 @@ public final class Dialects {
         private static final double FEE = 0.003;
         private static final int STEPS = 10;
         final Map<String, Pool> pools = new HashMap<>();
-
-        UniswapV2() { this(System.getenv("UNISWAPV2_POOLS")); }
 
         UniswapV2(String raw) {
             if (raw == null || raw.isBlank()) return;
@@ -239,7 +243,7 @@ public final class Dialects {
 
         public HttpRequest request(String b, String s, int d) {
             Pool p = pools.get(s.toUpperCase());
-            if (p == null) throw new IllegalArgumentException("Нет пула для " + s + " в UNISWAPV2_POOLS");
+            if (p == null) throw new IllegalArgumentException("Нет пула для " + s + " в параметре uniPools");
             String body = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"eth_call\",\"params\":[{\"to\":\""
                     + p.pair + "\",\"data\":\"0x0902f1ac\"},\"latest\"]}";
             return HttpRequest.newBuilder(URI.create(b)).timeout(TIMEOUT)

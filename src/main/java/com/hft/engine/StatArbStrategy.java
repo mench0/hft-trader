@@ -34,7 +34,6 @@ import java.util.function.BooleanSupplier;
 public final class StatArbStrategy extends Strategy {
 
     private static final Logger log = LoggerFactory.getLogger(StatArbStrategy.class);
-    private static final int MAX_AUTO_PAIRS = 15;
 
     /** Окно отсчётов одной пары и её позиция. Отсчёты пишет только поток конвейера. */
     static final class Pair {
@@ -107,7 +106,7 @@ public final class StatArbStrategy extends Strategy {
     public void setRealtimeSource(BooleanSupplier s) { this.realtime = s; }
 
     /** Пары из параметра "A/B,C/D" или все пары выбранных символов с одной котируемой валютой. */
-    static List<String[]> pairList(String spec, java.util.Collection<String> symbols) {
+    static List<String[]> pairList(String spec, java.util.Collection<String> symbols, int maxAutoPairs) {
         List<String[]> out = new ArrayList<>();
         if (spec != null && !spec.isBlank()) {
             for (String p : spec.split(",")) {
@@ -119,7 +118,7 @@ public final class StatArbStrategy extends Strategy {
         List<String> syms = new ArrayList<>(symbols);
         java.util.Collections.sort(syms);
         for (int i = 0; i < syms.size(); i++)
-            for (int j = i + 1; j < syms.size() && out.size() < MAX_AUTO_PAIRS; j++)
+            for (int j = i + 1; j < syms.size() && out.size() < maxAutoPairs; j++)
                 if (quote(syms.get(i)).equals(quote(syms.get(j)))) out.add(new String[]{syms.get(i), syms.get(j)});
         return out;
     }
@@ -131,7 +130,7 @@ public final class StatArbStrategy extends Strategy {
     private void ensureBuilt(TradingParams p) {
         if (p.statArbPairs().equals(builtFor) && p.statArbWindow() == builtWindow) return;
         List<Pair> ps = new ArrayList<>();
-        for (String[] ab : pairList(p.statArbPairs(), market.symbols())) ps.add(new Pair(ab[0], ab[1], p.statArbWindow()));
+        for (String[] ab : pairList(p.statArbPairs(), market.symbols(), p.statArbMaxAutoPairs())) ps.add(new Pair(ab[0], ab[1], p.statArbWindow()));
         pairs = ps;
         builtFor = p.statArbPairs();
         builtWindow = p.statArbWindow();
@@ -223,7 +222,7 @@ public final class StatArbStrategy extends Strategy {
         m.put("enabled", settings.get().statArbEnabled());
         List<Map<String, Object>> ps = new ArrayList<>();
         if (builtFor == null) {                       // до первого тика — какие пары будут
-            for (String[] ab : pairList(settings.get().statArbPairs(), market.symbols())) ps.add(Map.of("pair", ab[0] + "/" + ab[1], "samples", 0));
+            for (String[] ab : pairList(settings.get().statArbPairs(), market.symbols(), settings.get().statArbMaxAutoPairs())) ps.add(Map.of("pair", ab[0] + "/" + ab[1], "samples", 0));
         }
         for (Pair pr : pairs) {
             Map<String, Object> x = new LinkedHashMap<>();

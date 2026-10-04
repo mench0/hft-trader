@@ -33,6 +33,11 @@ public final class WsDialects {
     private static final ObjectMapper JSON = new ObjectMapper();
 
     /** Есть ли WS-диалект для биржи (у MEXC нет: спотовый WS отдаёт protobuf). */
+    /** WS-диалект биржи с её параметрами (для Uniswap — пулы из uniPools). */
+    public static Optional<WsDialect> forExchange(String id, com.hft.config.ExchangeConfig cfg) {
+        return id.equals("uniswapv2") ? Optional.of(new Uniswap(cfg.params().uniPools())) : forExchange(id);
+    }
+
     public static Optional<WsDialect> forExchange(String id) {
         return switch (id) {
             case "okx" -> Optional.of(new Okx());
@@ -41,7 +46,7 @@ public final class WsDialects {
             case "lbank" -> Optional.of(new Lbank());
             case "hyperliquid" -> Optional.of(new Hyperliquid());
             case "dydx" -> Optional.of(new Dydx());
-            case "uniswapv2" -> Optional.of(new Uniswap(System.getenv("UNISWAPV2_POOLS")));
+            case "uniswapv2" -> Optional.of(new Uniswap(""));
             case "kucoin" -> Optional.of(new Kucoin());
             case "aster" -> Optional.of(new Aster());
             default -> Optional.empty();
@@ -148,7 +153,7 @@ public final class WsDialects {
 
     static final class Gate implements WsDialect {
         public String defaultUrl(boolean testnet) {
-            return testnet ? "wss://ws-testnet.gate.io/v4/ws/spot" : "wss://api.gateio.ws/ws/v4/";
+            return testnet ? "wss://ws-testnet.gate.com/v4/ws/spot" : "wss://api.gateio.ws/ws/v4/";
         }
         public String venueSymbol(String s) { return base(s) + "_" + quote(s); }
         public List<String> subscribe(List<String> v, int d) { return ev("subscribe", v); }

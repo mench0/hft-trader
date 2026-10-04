@@ -54,6 +54,8 @@ public final class PollingBookFeed implements BookFeed {
     private volatile boolean gaveUp;
     private volatile long blockedUntilMs;
     private volatile long backoffMs = 60_000;
+    /** Начальная пауза после «слишком часто» (параметр pollBackoffMs). */
+    private volatile long baseBackoffMs = 60_000;
     private volatile long lastSuccessMs;
     private volatile int consecutiveFailures;
     private volatile String lastError = "";
@@ -79,6 +81,9 @@ public final class PollingBookFeed implements BookFeed {
         this.minGapNanos = (long) (1_000_000_000d / Math.max(0.1, info.maxRequestsPerSec()));
         this.budget = RateBudget.of(info.id());
     }
+
+    /** Задать начальную паузу после ответа «слишком часто», мс. */
+    public PollingBookFeed backoff(long ms) { this.baseBackoffMs = ms; this.backoffMs = ms; return this; }
 
     private volatile boolean paused;
     /** Пока WS жив, опрос молчит (не тратит лимит). */
@@ -191,7 +196,7 @@ public final class PollingBookFeed implements BookFeed {
             long now = System.currentTimeMillis();
             market.book(symbol).applySnapshot(b.bp(), b.bq(), b.bp().length, b.ap(), b.aq(), b.ap().length, now, now);
             lastSuccessMs = now;
-            backoffMs = 60_000;
+            backoffMs = baseBackoffMs;
 
             onTick.onTick(symbol, (b.bp()[0] + b.ap()[0]) / 2, 0, false, b.tsMs(), System.nanoTime());
             onBook.accept(symbol);

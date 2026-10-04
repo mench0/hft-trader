@@ -45,8 +45,11 @@ public final class RateBudget {
         }
     }
 
-    /** Доля официального лимита, которую мы себе позволяем. */
-    static final double SAFETY = 0.8;
+    /** Доля официального лимита, которую мы себе позволяем (настройка rateLimitSafety). */
+    static volatile double SAFETY = 0.8;
+
+    /** Задать долю лимита. Действует на бюджеты, созданные после вызова (контроллер вызывает при старте). */
+    public static void setSafety(double safety) { SAFETY = Math.max(0.1, Math.min(1.0, safety)); }
 
     private final String exchange;
     private final Bucket[] buckets;

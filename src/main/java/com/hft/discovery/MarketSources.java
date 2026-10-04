@@ -21,14 +21,11 @@ public final class MarketSources {
     private MarketSources() {}
 
     /** Котируемые валюты, которые берём в подбор. */
-    static final List<String> QUOTES = quotes();
+    static volatile List<String> QUOTES = List.of("USDT", "USDC", "USD");
 
-    private static List<String> quotes() {
-        String env = System.getenv("DISCOVERY_QUOTES");
-        if (env == null || env.isBlank()) return List.of("USDT", "USDC", "USD");
-        List<String> out = new ArrayList<>();
-        for (String q : env.split(",")) if (!q.isBlank()) out.add(q.trim().toUpperCase());
-        return out;
+    /** Задать котируемые валюты подбора (из настроек процесса, discoveryQuotes). */
+    public static void setQuotes(List<String> quotes) {
+        if (!quotes.isEmpty()) QUOTES = List.copyOf(quotes);
     }
 
     public static List<String> supported() {

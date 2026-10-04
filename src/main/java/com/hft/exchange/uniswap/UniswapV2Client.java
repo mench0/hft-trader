@@ -61,17 +61,17 @@ public final class UniswapV2Client extends SignedCexClient {
 
     public UniswapV2Client(ExchangeConfig config, Credentials credentials, SymbolFilters filters) {
         this(config, credentials, filters, credentials.isPresent() ? new Web3jCrypto(credentials.apiSecret()) : null,
-                System.getenv("UNISWAPV2_ROUTER"), System.getenv("UNISWAPV2_TOKENS"), System.getenv("UNISWAPV2_SLIPPAGE_PCT"));
+                config.params().uniRouter(), config.params().uniTokens(), String.valueOf(config.params().uniSlippagePercent()));
     }
 
     public UniswapV2Client(ExchangeConfig config, Credentials credentials, SymbolFilters filters, EvmCrypto crypto,
                            String router, String tokenSpec, String slippagePct) {
         super("uniswapv2", config, credentials, filters);
         this.crypto = crypto;
-        if (router == null || router.isBlank()) throw new IllegalStateException("Задайте UNISWAPV2_ROUTER (адрес Router02)");
+        if (router == null || router.isBlank()) throw new IllegalStateException("Задайте параметр биржи uniRouter (адрес Router02)");
         this.router = router.toLowerCase();
         this.slippage = (slippagePct == null || slippagePct.isBlank() ? 0.5 : Double.parseDouble(slippagePct)) / 100.0;
-        if (tokenSpec == null || tokenSpec.isBlank()) throw new IllegalStateException("Задайте UNISWAPV2_TOKENS=\"WETH=0x..:18;USDC=0x..:6\"");
+        if (tokenSpec == null || tokenSpec.isBlank()) throw new IllegalStateException("Задайте параметр биржи uniTokens=\"WETH=0x..:18;USDC=0x..:6\"");
         for (String item : tokenSpec.split(";")) {
             String[] kv = item.trim().split("=");
             String[] f = kv[1].split(":");

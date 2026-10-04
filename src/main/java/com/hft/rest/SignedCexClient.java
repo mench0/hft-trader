@@ -134,10 +134,8 @@ public abstract class SignedCexClient implements ExchangeOrderApi {
         while (wsChannel != null && !wsReady() && !wsChannel.isDisabled() && System.currentTimeMillis() < until) Thread.sleep(50);
     }
 
-    /** Отключить WS-торговлю переменной окружения <ID>_WS_TRADE=false. */
-    protected boolean wsTradeAllowed() {
-        return !"false".equalsIgnoreCase(System.getenv(exchangeId.toUpperCase() + "_WS_TRADE"));
-    }
+    /** Ордера по WebSocket разрешены параметром биржи wsTrade. */
+    protected boolean wsTradeAllowed() { return config.params().wsTrade(); }
 
     // ------------------------------------------------------------ ExchangeOrderApi
 
@@ -173,7 +171,7 @@ public abstract class SignedCexClient implements ExchangeOrderApi {
     private OrderResult awaitTerminal(OrderResult r, TimeInForce tif) throws Exception {
         OrderResult cur = r;
         if (wsReady()) {                                   // сначала ждём событие из WS: REST тратит лимит
-            long until = System.currentTimeMillis() + 400;
+            long until = System.currentTimeMillis() + config.params().marketFillWaitMs();
             while (System.currentTimeMillis() < until) {
                 OrderResult s = streamed.get(r.orderId());
                 if (s != null && !"NEW".equals(s.status())) { cur = s; break; }

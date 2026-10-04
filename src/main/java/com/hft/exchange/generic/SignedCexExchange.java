@@ -68,7 +68,7 @@ public final class SignedCexExchange implements ExchangeGateway, RequestStatsSou
         this.filters = new SymbolFilters();
         config.symbols().forEach(market::register);
 
-        boolean live = ExchangeSupport.isLive(info, credentials);
+        boolean live = ExchangeSupport.isLive(info, config, credentials);
         this.rest = live ? clientFactory.create(config, credentials, filters) : null;
         this.paper = live ? null : new PaperOrderApi(market, balances, info.makerFeePct(), info.takerFeePct());
         ExchangeOrderApi api = live ? rest : paper;
@@ -152,8 +152,8 @@ public final class SignedCexExchange implements ExchangeGateway, RequestStatsSou
     @Override
     public void syncBalances() {
         if (rest == null) return;
-        // баланс приходит по WS — сверяемся с REST лишь раз в 5 минут
-        if (rest.balancesStreamed() && System.currentTimeMillis() - lastRestSyncMs < 300_000) return;
+        // баланс приходит по WS или обновляется после ордеров — сверяемся с REST раз в balanceSyncMs
+        if (System.currentTimeMillis() - lastRestSyncMs < config.params().balanceSyncMs()) return;
         lastRestSyncMs = System.currentTimeMillis();
         try { rest.loadBalances(balances); }
         catch (Exception e) { log.warn("[{}] Не удалось обновить балансы: {}", info.id(), e.getMessage()); }

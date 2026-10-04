@@ -258,7 +258,7 @@ public final class GateRestClient extends SignedCexClient {
     private final class Private implements WsRpcChannel.Protocol {
         @Override public String url() {
             if (privateWsUrl != null) return privateWsUrl;
-            return config.testnet() ? "wss://ws-testnet.gate.io/v4/ws/spot" : "wss://api.gateio.ws/ws/v4/";
+            return config.testnet() ? "wss://ws-testnet.gate.com/v4/ws/spot" : "wss://api.gateio.ws/ws/v4/";
         }
 
         @Override public List<String> login() {

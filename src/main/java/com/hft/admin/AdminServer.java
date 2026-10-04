@@ -82,7 +82,9 @@ public final class AdminServer {
         route("/control/autostart", this::handleAutoStart);
 
         // Параметры — всё, что можно менять без пересборки
+        route("/exchange/params/schema", this::handleParamsSchema);
         route("/exchange/params", this::handleExchangeParams);
+        route("/settings", this::handleSettings);
         route("/strategies", this::handleStrategies);
 
         // Торговля поверх уже запущенных подключений
@@ -157,13 +159,17 @@ public final class AdminServer {
 
     /** GET /discovery — тикеры, подходящие под каждую стратегию (с причинами и бэктестом), и статус бирж. */
     private void handleDiscovery(HttpExchange ex) throws IOException {
-        send(ex, 200, mapper.valueToTree(controller.discovery().result()));
+        var d = controller.discovery();
+        if (d == null) { send(ex, 200, ok("Подбор тикеров выключен (POST /settings?discoveryEnabled=true)")); return; }
+        send(ex, 200, mapper.valueToTree(d.result()));
     }
 
     /** POST /discovery/refresh — пересчитать сейчас (в фоне). */
     private void handleDiscoveryRefresh(HttpExchange ex) throws IOException {
         requirePost(ex);
-        boolean started = controller.discovery().refreshAsync();
+        var d = controller.discovery();
+        if (d == null) { send(ex, 400, error("Подбор тикеров выключен (POST /settings?discoveryEnabled=true)")); return; }
+        boolean started = d.refreshAsync();
         ObjectNode r = mapper.createObjectNode();
         r.put("started", started);
         r.put("message", started ? "Пересчёт запущен" : "Пересчёт уже идёт");
@@ -224,7 +230,10 @@ public final class AdminServer {
         send(ex, 200, root);
     }
 
-    /** POST /control/select?exchange=binance&symbols=BTCUSDT,ETHUSDT */
+    /**
+     * POST /control/select?exchange=binance&symbols=BTCUSDT,ETHUSDT[&testnet=false&live=true&maxPositionQuote=50…]
+     * Выбрать биржу и сразу (необязательно) задать её параметры — любые из GET /exchange/params/schema.
+     */
     private void handleSelect(HttpExchange ex) throws IOException {
         requirePost(ex);
         Map<String, String> q = query(ex);
@@ -232,9 +241,49 @@ public final class AdminServer {
         String symbolsRaw = require(q, "symbols");
         List<String> symbols = Arrays.stream(symbolsRaw.split(","))
                 .map(String::trim).filter(s -> !s.isEmpty()).map(String::toUpperCase).toList();
+        Map<String, String> params = paramsOnly(q);
+        controller.selectExchange(exchangeId, symbols, params);
+        ObjectNode root = paramsNode(exchangeId);
+        root.put("сообщение", "Биржа " + exchangeId + " выбрана с символами " + symbols);
+        send(ex, 200, root);
+    }
 
-        controller.selectExchange(exchangeId, symbols);
-        send(ex, 200, ok("Биржа " + exchangeId + " выбрана с символами " + symbols));
+    /** Из запроса — только ключи параметров биржи; неизвестный ключ — ошибка (опечатка не должна пройти молча). */
+    private static Map<String, String> paramsOnly(Map<String, String> q) {
+        Map<String, String> out = new HashMap<>(q);
+        out.remove("exchange");
+        out.remove("symbols");
+        var known = com.hft.config.TradingParams.SPECS.keySet();
+        for (String k : out.keySet()) {
+            if (!known.contains(k)) throw new IllegalArgumentException("Неизвестный параметр: " + k + ". Список: GET /exchange/params/schema");
+        }
+        return out;
+    }
+
+    /** GET /exchange/params/schema — описание всех параметров биржи: по умолчанию, границы, перезапуск, справка. */
+    private void handleParamsSchema(HttpExchange ex) throws IOException {
+        send(ex, 200, mapper.valueToTree(com.hft.config.TradingParams.schema()));
+    }
+
+    /**
+     * Настройки процесса (подбор тикеров, фоновые задачи, лимиты запросов).
+     * GET /settings — значения и описание; POST /settings?discoveryRefreshMin=30&statusLogSec=120
+     */
+    private void handleSettings(HttpExchange ex) throws IOException {
+        Map<String, String> q = query(ex);
+        if ("POST".equalsIgnoreCase(ex.getRequestMethod())) {
+            for (String k : q.keySet()) {
+                if (!com.hft.config.GlobalParams.SPECS.containsKey(k))
+                    throw new IllegalArgumentException("Неизвестная настройка: " + k + ". Доступны: " + com.hft.config.GlobalParams.SPECS.keySet());
+            }
+            controller.updateGlobal(q);
+        }
+        ObjectNode root = mapper.createObjectNode();
+        root.set("настройки", mapper.valueToTree(controller.global()));
+        root.set("описание", mapper.valueToTree(com.hft.config.GlobalParams.schema()));
+        if (q.keySet().stream().anyMatch(com.hft.config.GlobalParams::requiresRestart))
+            root.put("внимание", "rateLimitSafety применится после перезапуска процесса");
+        send(ex, 200, root);
     }
 
     /** POST /control/deselect?exchange=bybit */
@@ -304,32 +353,28 @@ public final class AdminServer {
         String exId = q.get("exchange");
         if ("POST".equalsIgnoreCase(ex.getRequestMethod())) {
             if (exId == null || exId.isBlank()) throw new IllegalArgumentException("Не указан обязательный параметр: exchange");
-            Map<String, String> updates = new HashMap<>(q);
-            updates.remove("exchange");
-            var known = com.hft.config.TradingParams.DEFAULTS.toStringMap().keySet();
-            for (String k : updates.keySet()) {
-                if (!known.contains(k)) throw new IllegalArgumentException("Неизвестный параметр: " + k + ". Доступны: " + known);
-            }
+            Map<String, String> updates = paramsOnly(q);
             controller.updateParams(exId, updates);
             ObjectNode root = paramsNode(exId);
-            boolean restart = controller.active().containsKey(exId)
-                    && updates.keySet().stream().anyMatch(com.hft.config.TradingParams::requiresRestart);
-            if (restart) root.put("внимание", "bookDepth/priceWindow применятся после /control/stop и /control/start");
+            List<String> restart = updates.keySet().stream().filter(com.hft.config.TradingParams::requiresRestart).sorted().toList();
+            if (controller.active().containsKey(exId) && !restart.isEmpty())
+                root.put("внимание", restart + " применятся после /control/stop и /control/start");
             send(ex, 200, root);
             return;
         }
         if (exId != null && !exId.isBlank()) { send(ex, 200, paramsNode(exId)); return; }
         ObjectNode root = mapper.createObjectNode();
-        java.util.Set<String> ids = new java.util.LinkedHashSet<>(controller.selection().keySet());
-        ids.addAll(controller.active().keySet());
-        ids.addAll(new java.util.TreeSet<>(controller.configuredExchanges()));
-        for (String id : ids) root.set(id, paramsNode(id));
+        for (String id : controller.selection().keySet()) root.set(id, paramsNode(id));   // параметры есть только у выбранных
         send(ex, 200, root);
     }
 
     private ObjectNode paramsNode(String exId) {
         ObjectNode n = mapper.createObjectNode();
         n.put("биржа", exId);
+        n.put("выбрана", controller.isSelected(exId));
+        var info = com.hft.exchange.catalog.ExchangeCatalog.find(exId);
+        n.put("testnet_доступен", info.map(com.hft.exchange.catalog.ExchangeInfo::hasTestnet).orElse(false));
+        if (!controller.isSelected(exId)) n.put("внимание", "биржа не выбрана: показаны значения по умолчанию; задать — POST /control/select?exchange=" + exId + "&symbols=…&параметр=значение");
         n.set("параметры", mapper.valueToTree(controller.params(exId)));
         return n;
     }

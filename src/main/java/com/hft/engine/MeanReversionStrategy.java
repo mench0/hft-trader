@@ -51,7 +51,7 @@ public final class MeanReversionStrategy extends Strategy {
     public MeanReversionStrategy(MarketDataStore market, OrderService orders, String exchangeId, TradingSettings settings) {
         super("mean-reversion", market, orders);
         this.settings = settings;
-        this.executor = new OrderExecutor(exchangeId, 4);
+        this.executor = new OrderExecutor(exchangeId, settings.get().orderThreads());
     }
 
     /** Источник признака «данные в реальном времени» (фид биржи). */

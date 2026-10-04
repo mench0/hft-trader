@@ -51,6 +51,12 @@ public final class HybridBookFeed implements BookFeed {
 
     public HybridBookFeed grace(long ms) { this.graceMs = ms; return this; }
 
+    /** WebSocket-половина (для настройки таймаутов). */
+    WsBookFeed ws() { return ws; }
+
+    /** REST-половина (для настройки паузы после 429). */
+    PollingBookFeed poll() { return poll; }
+
     @Override public synchronized void start() {
         if (running) return;
         running = true;

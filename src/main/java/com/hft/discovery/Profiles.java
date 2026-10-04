@@ -3,6 +3,8 @@ package com.hft.discovery;
 import com.hft.exchange.catalog.ExchangeCatalog;
 import com.hft.exchange.catalog.ExchangeInfo;
 
+import com.hft.config.GlobalParams;
+import com.hft.config.TradingParams;
 import java.util.*;
 import java.util.function.Function;
 
@@ -14,10 +16,6 @@ public final class Profiles {
     static double takerPct(String ex) { return ExchangeCatalog.find(ex).map(ExchangeInfo::takerFeePct).orElse(0.1); }
     static double makerPct(String ex) { return ExchangeCatalog.find(ex).map(ExchangeInfo::makerFeePct).orElse(0.1); }
 
-    static double envD(String name, double def) {
-        String v = System.getenv(name);
-        try { return v == null || v.isBlank() ? def : Double.parseDouble(v.trim()); } catch (NumberFormatException e) { return def; }
-    }
 
     static String pct(double v) { return Double.isNaN(v) ? "—" : String.format(Locale.ROOT, "%.3f%%", v); }
     static String money(double v) {
@@ -45,14 +43,27 @@ public final class Profiles {
 
     public static final class MeanReversion implements StrategyProfile {
         private final Function<String, MeanReversionBacktest.Params> paramsFor;
-        private final double minVolume = envD("DISCOVERY_MR_MIN_VOLUME", 1_000_000);
-        private final double maxSpread = 0.1;               // тот же порог, что в MeanReversionStrategy
-        private final int perExchange = (int) envD("DISCOVERY_BACKTEST_PER_EXCHANGE", 8);
+        private final GlobalParams g;
+        private final double minVolume, maxSpread;
+        private final int perExchange;
 
-        /** @param paramsFor параметры стратегии конкретной биржи (из админки) или null — по умолчанию */
-        public MeanReversion(Function<String, MeanReversionBacktest.Params> paramsFor) { this.paramsFor = paramsFor; }
+        /**
+         * @param paramsFor параметры стратегии конкретной биржи (из админки) или null — по умолчанию
+         * @param g         пороги отбора и бэктеста из настроек процесса
+         */
+        public MeanReversion(Function<String, MeanReversionBacktest.Params> paramsFor, GlobalParams g) {
+            this.paramsFor = paramsFor;
+            this.g = g;
+            this.minVolume = g.discoveryMinVolume();
+            this.maxSpread = g.discoveryMrMaxSpreadPercent();
+            this.perExchange = g.discoveryBacktestPerExchange();
+        }
 
-        static MeanReversionBacktest.Params defaults() { return new MeanReversionBacktest.Params(2.0, 0.3, 0.5, 30, 60); }
+        /** Параметры бэктеста, если для биржи ничего не задано. */
+        MeanReversionBacktest.Params defaults() {
+            TradingParams d = TradingParams.DEFAULTS;
+            return new MeanReversionBacktest.Params(d.entryZ(), d.exitZ(), d.stopLossPercent(), g.discoveryBacktestWindow(), g.discoveryBacktestMaxHoldBars());
+        }
 
         public String id() { return "mean-reversion"; }
         public String title() { return "Возврат к среднему (mean reversion)"; }
@@ -65,8 +76,8 @@ public final class Profiles {
         public List<String> criteria() {
             return List.of("оборот за 24ч ≥ " + money(minVolume),
                     "спред ≤ " + maxSpread + "% (как в стратегии)",
-                    "дневной диапазон 1–25%",
-                    "|изменение за 24ч| ≤ 70% диапазона (не тренд)",
+                    "дневной диапазон " + g.discoveryMrMinRangePercent() + "–" + g.discoveryMrMaxRangePercent() + "%",
+                    "|изменение за 24ч| ≤ " + Math.round(g.discoveryMrMaxTrend() * 100) + "% диапазона (не тренд)",
                     "бэктест по 1-мин свечам: ≥ 3 сделок и плюс после комиссий");
         }
 
@@ -85,10 +96,10 @@ public final class Profiles {
                     double sp = t.spreadPct(), range = t.rangePct(), ch = t.changePct();
                     if (!Double.isNaN(sp) && sp > maxSpread) continue;
                     why.add(Double.isNaN(sp) ? "спред неизвестен (сводка без bid/ask)" : "спред " + pct(sp));
-                    if (!Double.isNaN(range) && (range < 1.0 || range > 25)) continue;
+                    if (!Double.isNaN(range) && (range < g.discoveryMrMinRangePercent() || range > g.discoveryMrMaxRangePercent())) continue;
                     if (!Double.isNaN(range)) why.add("диапазон " + pct(range));
                     double trend = Double.isNaN(range) || Double.isNaN(ch) || range == 0 ? 0.3 : Math.abs(ch) / range;
-                    if (trend > 0.7) continue;
+                    if (trend > g.discoveryMrMaxTrend()) continue;
                     if (!Double.isNaN(ch)) why.add("изменение " + pct(ch));
                     double s = Math.log10(t.quoteVolume24h())
                             * (Double.isNaN(range) ? 1 : Math.min(range, 10) / ((Double.isNaN(sp) ? 0.05 : sp) + 2 * fee))
@@ -135,6 +146,11 @@ public final class Profiles {
     // ═════════════════════════ Межбиржевой арбитраж (сканер) ═════════════════════════
 
     public static final class CrossExchange implements StrategyProfile {
+        private final GlobalParams g;
+
+        /** @param g пороги отбора из настроек процесса */
+        public CrossExchange(GlobalParams g) { this.g = g; }
+
         public String id() { return "cross-exchange-arb"; }
         public String title() { return "Межбиржевой арбитраж"; }
         public String description() {
@@ -153,7 +169,7 @@ public final class Profiles {
             Map<String, List<TickerSnapshot>> bySymbol = new HashMap<>();
             for (var l : byExchange.values())
                 for (TickerSnapshot t : l)
-                    if (t.bid() > 0 && t.ask() > 0 && t.ask() >= t.bid() && t.quoteVolume24h() >= 50_000)
+                    if (t.bid() > 0 && t.ask() > 0 && t.ask() >= t.bid() && t.quoteVolume24h() >= g.discoveryArbMinVolume())
                         bySymbol.computeIfAbsent(t.symbol() + (t.perp() ? ":perp" : ""), k -> new ArrayList<>()).add(t);
             List<Candidate> out = new ArrayList<>();
             for (var e : bySymbol.entrySet()) {
@@ -166,7 +182,7 @@ public final class Profiles {
                 }
                 if (buy.exchange().equals(sell.exchange())) continue;
                 double gross = (sell.bid() - buy.ask()) / buy.ask() * 100.0;
-                if (Math.abs(gross) > 5) continue;
+                if (Math.abs(gross) > g.discoveryArbMaxGrossPercent()) continue;
                 double net = gross - takerPct(buy.exchange()) - takerPct(sell.exchange());
                 if (net < -0.2) continue;
                 Map<String, Object> m = new LinkedHashMap<>();
@@ -191,6 +207,11 @@ public final class Profiles {
     // ═════════════════════════ Сбор широкого спреда (сканер) ═════════════════════════
 
     public static final class SpreadCapture implements StrategyProfile {
+        private final GlobalParams g;
+
+        /** @param g пороги отбора из настроек процесса */
+        public SpreadCapture(GlobalParams g) { this.g = g; }
+
         public String id() { return "spread-capture"; }
         public String title() { return "Сбор широкого спреда (маркет-мейкинг на неликвиде)"; }
         public String description() {
@@ -207,9 +228,9 @@ public final class Profiles {
                 double maker = makerPct(e.getKey());
                 for (TickerSnapshot t : e.getValue()) {
                     double sp = t.spreadPct(), vol = t.quoteVolume24h();
-                    if (Double.isNaN(sp) || !(vol >= 50_000) || vol > 5_000_000) continue;
+                    if (Double.isNaN(sp) || !(vol >= g.discoverySpreadMinVolume()) || vol > g.discoverySpreadMaxVolume()) continue;
                     double edge = sp - 2 * maker;
-                    if (edge < 0.1 || sp > 3) continue;
+                    if (edge < g.discoverySpreadMinEdgePercent() || sp > g.discoverySpreadMaxPercent()) continue;
                     Map<String, Object> m = metrics(t);
                     m.put("edgePct", r4(edge));
                     m.put("makerFeePct", maker);

@@ -3,6 +3,10 @@ package com.hft.exchange.bybit;
 import com.hft.config.TradingSettings;
 import com.hft.config.Credentials;
 import com.hft.config.ExchangeConfig;
+import com.hft.exchange.generic.ExchangeSupport;
+import com.hft.exchange.catalog.ExchangeInfo;
+import com.hft.exchange.catalog.ExchangeCatalog;
+import com.hft.paper.PaperOrderApi;
 import com.hft.engine.MarketDataHandler;
 import com.hft.engine.StrategySet;
 import com.hft.engine.OrderService;
@@ -34,6 +38,9 @@ public final class BybitExchange implements ExchangeGateway {
     private final BalanceStore balances;
     private final SymbolFilters filters;
     private final BybitRestClient rest;
+    /** Бумажный движок, если live=false или нет ключей; иначе null. */
+    private final PaperOrderApi paper;
+    private volatile long lastBalanceSyncMs;
     private final RiskManager risk;
     private final OrderService orderService;
 
@@ -53,7 +60,12 @@ public final class BybitExchange implements ExchangeGateway {
 
         this.rest = new BybitRestClient(config, credentials, filters);
         this.risk = new RiskManager(settings, market, config.id());
-        this.orderService = new OrderService(rest, market, balances, filters, risk, settings);
+        boolean live = config.params().live() && credentials.isPresent();
+        this.paper = live ? null : new PaperOrderApi(market, balances,
+                ExchangeCatalog.find(config.id()).map(ExchangeInfo::makerFeePct).orElse(0.1),
+                ExchangeCatalog.find(config.id()).map(ExchangeInfo::takerFeePct).orElse(0.1));
+        this.orderService = new OrderService(live ? rest : paper, market, balances, filters, risk, settings);
+        log.info("[bybit] режим {}", live ? "LIVE — ордера пойдут на биржу" : "PAPER (для LIVE нужны ключи и live=true)");
 
         this.dataHandler = new MarketDataHandler(market);
         this.strategy = new StrategySet(market, orderService, "bybit", settings);
@@ -72,12 +84,14 @@ public final class BybitExchange implements ExchangeGateway {
     @Override
     public void start() throws Exception {
         rest.loadFilters(config.symbols());
-        if (credentials.isPresent()) {
+        if (paper == null) {
             try {
                 rest.loadBalances(balances);
             } catch (Exception e) {
                 log.error("[bybit] Не удалось загрузить балансы: {}", e.getMessage());
             }
+        } else {
+            ExchangeSupport.seedPaperBalances(balances, config);
         }
         pipeline.start();
         feed.start();
@@ -120,7 +134,10 @@ public final class BybitExchange implements ExchangeGateway {
 
     @Override
     public void syncBalances() {
-        if (!credentials.isPresent()) return;
+        if (paper != null) return;                          // бумажный баланс ведёт движок
+        long now = System.currentTimeMillis();
+        if (now - lastBalanceSyncMs < config.params().balanceSyncMs()) return;
+        lastBalanceSyncMs = now;
         try { rest.loadBalances(balances); }
         catch (Exception e) { log.warn("[bybit] Не удалось обновить балансы: {}", e.getMessage()); }
     }

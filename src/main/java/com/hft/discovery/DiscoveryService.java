@@ -35,15 +35,28 @@ public final class DiscoveryService {
         this.refreshMinutes = refreshMinutes;
     }
 
-    /** По умолчанию: все биржи из MarketSources (или DISCOVERY_EXCHANGES), три профиля стратегий. */
-    public static DiscoveryService createDefault(java.util.function.Function<String, MeanReversionBacktest.Params> mrParams) {
-        String env = System.getenv("DISCOVERY_EXCHANGES");
-        List<String> ids = env == null || env.isBlank() ? MarketSources.supported() : Arrays.stream(env.split(",")).map(String::trim).toList();
+    /**
+     * Подбор по настройкам процесса: биржи (discoveryExchanges, пусто — все с источником сводок),
+     * котируемые валюты, период пересчёта, бюджет свечей и пороги профилей.
+     *
+     * @param mrParams параметры бэктеста возврата к среднему для биржи (null — по умолчанию)
+     * @param g        настройки процесса
+     */
+    public static DiscoveryService createDefault(java.util.function.Function<String, MeanReversionBacktest.Params> mrParams,
+                                                 com.hft.config.GlobalParams g) {
+        MarketSources.setQuotes(Arrays.stream(g.discoveryQuotes().split(",")).map(String::trim).filter(q -> !q.isEmpty()).toList());
+        List<String> ids = g.discoveryExchanges().isBlank() ? MarketSources.supported()
+                : Arrays.stream(g.discoveryExchanges().split(",")).map(String::trim).toList();
         List<MarketSource> src = new ArrayList<>();
         for (String id : ids) MarketSources.create(id).ifPresent(src::add);
-        long every = (long) Profiles.envD("DISCOVERY_REFRESH_MIN", 15);
-        return new DiscoveryService(src, List.of(new Profiles.MeanReversion(mrParams), new Profiles.CrossExchange(), new Profiles.SpreadCapture()), every);
+        DiscoveryService d = new DiscoveryService(src, List.of(new Profiles.MeanReversion(mrParams, g), new Profiles.CrossExchange(g),
+                new Profiles.SpreadCapture(g)), g.discoveryRefreshMin());
+        d.klineBudget = g.discoveryKlineBudget();
+        return d;
     }
+
+    /** Сколько запросов свечей на биржу за один пересчёт. */
+    private volatile int klineBudget = 12;
 
     public synchronized void start() {
         if (started) return;
@@ -108,7 +121,7 @@ public final class DiscoveryService {
 
             Map<String, Integer> budget = new ConcurrentHashMap<>();
             Map<String, double[]> cache = new ConcurrentHashMap<>();
-            int perExchangeBudget = (int) Profiles.envD("DISCOVERY_KLINE_BUDGET", 12);
+            int perExchangeBudget = klineBudget;
             StrategyProfile.ClosesProvider closes = (t, limit) -> {
                 String key = t.exchange() + ":" + t.symbol();
                 double[] c = cache.get(key);
