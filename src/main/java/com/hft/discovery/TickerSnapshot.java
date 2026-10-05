@@ -2,7 +2,7 @@ package com.hft.discovery;
 
 /**
  * Сводка по одному тикеру биржи за 24 часа. NaN — биржа это поле не отдаёт
- * (например, у dYdX и LBank в общей сводке нет bid/ask).
+ * (например, у dYdX в общей сводке нет bid/ask).
  *
  * @param symbol      наш формат: BTCUSDT, BTCUSDC (перп Hyperliquid), BTCUSD (перп dYdX)
  * @param venueSymbol как символ называется на бирже (BTC-USDT, btc_usdt, BTC…)

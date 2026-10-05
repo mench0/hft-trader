@@ -152,7 +152,7 @@ public final class AdminServer {
     private void setCors(HttpExchange ex) {
         ex.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
         ex.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-        ex.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type, X-Admin-Token");
+        ex.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type, X-Admin-Token, Authorization");
     }
 
     /** Обработчик одного эндпоинта. */

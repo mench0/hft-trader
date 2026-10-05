@@ -1,139 +1,75 @@
-# hft-starter: Краткое резюме структуры
+# hft-trader: структура проекта
 
-## Структура проекта
+Java 21, Maven, один fat-jar (`target/hft-trader.jar`). Бот стартует без бирж; выбор бирж, тикеров,
+параметров и запуск торговли — через веб-админку (отдельный проект hft-admin-panel) или HTTP API.
+Состояние хранится в SQLite (`data/state.db`), API-ключи — только в переменных окружения.
 
 ```
-hft-starter/
+hft-trader/
 ├── src/main/java/com/hft/
-│   ├── Main.java                      # Точка входа, ручная инициализация компонентов
-│   ├── config/
-│   │   ├── AppConfig.java             # Загрузка конфига из YAML + переменные окружения
-│   │   └── ApiCredentials.java        # API-ключи из переменных окружения
-│   ├── net/
-│   │   └── BinanceWsClient.java       # WebSocket-клиент на Netty к Binance
-│   ├── rest/
-│   │   ├── BinanceRestClient.java     # REST-клиент для HTTP-запросов (покупка/продажа)
-│   │   ├── RestClientExample.java     # Пример использования REST-клиента
-│   │   ├── TickerInfo.java            # POJO для данных тикера
-│   │   └── OrderSide.java             # Enum: BUY / SELL
-│   ├── engine/
-│   │   ├── TickDisruptor.java         # Lock-free кольцевой буфер между стадиями
-│   │   └── SignalEngine.java          # Обработчик сигнала (EMA + метрики)
-│   ├── model/
-│   │   └── Tick.java                  # POJO одного тика рынка
-│   ├── metrics/
-│   │   └── LatencyTracker.java        # HdrHistogram для честного замера латентности
-│   └── util/
-│       └── HmacSigner.java            # HMAC-SHA256 подпись запросов
+│   ├── Main.java                     # точка входа: конфиг, SQLite, BotController, AdminServer
+│   ├── admin/AdminServer.java        # HTTP API (JDK HttpServer), CORS для внешней админки
+│   ├── control/BotController.java    # выбор бирж/символов, параметры, старт/стоп, торговля, автостарт
+│   ├── config/                       # AppConfig (порт/токен админки), TradingParams (параметры биржи),
+│   │                                 # GlobalParams (настройки процесса), ParamSpec (схема и проверка),
+│   │                                 # Credentials (<ID>_API_KEY/_SECRET/_PASSPHRASE), ExchangeConfig
+│   ├── persistence/                  # SqliteStateStore, PersistedState
+│   ├── exchange/
+│   │   ├── ExchangeGateway.java      # общий контракт биржи
+│   │   ├── ExchangeFactory.java      # id биржи -> реализация
+│   │   ├── catalog/                  # ExchangeCatalog/ExchangeInfo: список бирж, комиссии, лимиты, статус адаптера
+│   │   ├── binance/, bybit/          # нативные адаптеры (свой WS-фид на Netty + REST)
+│   │   ├── okx/, gate/, mexc/, bingx/, kucoin/, aster/, hyperliquid/, uniswap/
+│   │   │                             # REST-клиенты на общем скелете SignedCexClient
+│   │   └── generic/                  # SignedCexExchange, PaperExchange (dYdX), фиды стакана:
+│   │                                 # WsBookFeed, PollingBookFeed, HybridBookFeed; диалекты
+│   │                                 # Dialects (REST) и WsDialects (WS), LocalBook, FastJson
+│   ├── rest/                         # SignedCexClient, BinanceRestClient, RateBudget/RateLimits/PacedLimiter,
+│   │                                 # WsRpcChannel (ордера по WS), WsSender, ExchangeOrderApi
+│   ├── engine/                       # TickPipeline (Disruptor), MarketDataHandler, OrderService, OrderExecutor,
+│   │                                 # стратегии: MeanReversion, StatArb, TriangularArb (StrategySet)
+│   ├── risk/RiskManager.java         # проверки перед ордером, дневной лимит, kill switch
+│   ├── paper/PaperOrderApi.java      # бумажное исполнение против живого стакана
+│   ├── discovery/                    # подбор тикеров под стратегии: MarketSources (сводки 24ч бирж),
+│   │                                 # профили стратегий, бэктест возврата к среднему
+│   ├── store/                        # MarketDataStore, OrderBook (StampedLock), PriceWindow, BalanceStore, SymbolFilters
+│   ├── metrics/                      # Latency (HdrHistogram), PrometheusExporter (/metrics)
+│   ├── net/AbstractWsFeed.java       # общий Netty WS-клиент для Binance/Bybit
+│   ├── crypto/                       # Keccak, Hex, EvmCrypto/Web3jCrypto (Hyperliquid, Uniswap)
+│   ├── model/                        # Tick, OrderRequest, OrderResult, OrderEnums
+│   └── util/                         # Signer/Hmac, Numbers, BoundedMap, MsgPack
 ├── src/main/resources/
-│   ├── application.yml                # Конфигурация (читается и переопределяется через env)
-│   └── logback.xml                    # Конфигурация логирования
-├── pom.xml                            # Maven (Netty, Jackson, Disruptor, HdrHistogram, SLF4J)
-├── Dockerfile                         # Контейнеризация
-├── docker-compose.yml                 # Docker Compose для локальной разработки/VPS
-├── run.sh                             # Скрипт запуска с рекомендуемыми JVM-флагами
-├── README.md                          # Основная документация
-├── DEPLOYMENT.md                      # Инструкции по deployменту на VPS/systemd/Docker
-├── .env.example                       # Пример файла с API-ключами (копируй в .env)
-└── .gitignore                         # Исключаем ключи, target, логи из git
+│   └── logback.xml
+├── src/test/java/                    # проверки-раннеры с main(): *Check.java (без JUnit)
+├── run.sh                            # запуск с JVM-флагами под низкую задержку
+├── .env.example                      # пример переменных окружения
+├── README.md                         # основная документация и все эндпоинты
+├── REST_CLIENT_GUIDE.md              # REST-клиенты бирж и ручные ордера
+└── JVM_CONFIG_GUIDE.md               # JVM-флаги и конфигурация процесса
 ```
 
-## Ключевые компоненты и их роль
+## Поддерживаемые биржи
 
-### WebSocket (получение рыночных данных)
-- **BinanceWsClient.java** — подключается к Binance через WebSocket
-- Парсит JSON сделок в реальном времени
-- Публикует в Disruptor с таймстампом получения
-
-### Обработка сигнала (latency-чувствительно)
-- **TickDisruptor.java** — lock-free ring buffer без блокировок между потоками
-- **SignalEngine.java** — обработчик событий (пока EMA, позже добавите z-score для стат-арба)
-- **LatencyTracker.java** — замер задержки обработки с перцентилями (p50/p99/p999)
-
-### Торговля (покупка/продажа)
-- **BinanceRestClient.java** — REST API для размещения ордеров
-  - `placeLimitOrder()` — разместить LIMIT ордер
-  - `cancelOrder()` — отменить ордер
-  - `getBalance()` — получить баланс аккаунта
-  - `getTickerPrice()` — получить текущую цену
-  - Все приватные методы подписываются HMAC-SHA256
-
-### Конфигурация (без переделоя jar)
-- **AppConfig.java** — загружает application.yml
-- Переопределение через переменные окружения: `BINANCE_USE_TESTNET`, `TRADING_SYMBOLS` и т.д.
-- Приоритет: env-переменные > YAML > жёсткие умолчания в коде
-
-## Для чего какой файл
-
-| Если вам нужно... | Файл | Метод |
+| Биржа | Реализация | Режим по умолчанию |
 |---|---|---|
-| Запустить локально | `run.sh` или `README.md` | `./run.sh` |
-| Настроить JVM | `JVM_CONFIG_GUIDE.md` или `run.sh` | Отредактировать флаги в скрипте |
-| Развернуть на VPS | `DEPLOYMENT.md` | systemd или Docker |
-| Добавить новый символ | `application.yml` или переменная `TRADING_SYMBOLS` | Отредактировать без пересборки |
-| Включить реальную торговлю | `application.yml` + переменная `BINANCE_USE_TESTNET=false` | export + restart |
-| Получить текущую цену | `BinanceRestClient.getTickerPrice()` | REST публичный метод |
-| Разместить ордер | `BinanceRestClient.placeLimitOrder()` | REST приватный метод (требует ключи) |
-| Замерить задержку | `LatencyTracker` + логи каждые 2000 тиков | Смотрите логи |
-| Добавить свою стратегию | `SignalEngine.onEvent()` | Заменяйте EMA на z-score для стат-арба |
+| Binance, Bybit | BinanceExchange, BybitExchange | LIVE при ключах и `live=true` |
+| OKX, Gate, MEXC, BingX, KuCoin, Aster | SignedCexExchange + свой RestClient | PAPER, LIVE не проверен |
+| Hyperliquid, Uniswap V2 | SignedCexExchange + HyperliquidRestClient / UniswapV2Client | PAPER, LIVE не проверен |
+| dYdX v4 | PaperExchange | только PAPER |
 
-## Запуск по шагам
+Полный список с комиссиями и заметками — `GET /exchanges/catalog` или вкладка «Биржи» в админке.
 
-### Локальный запуск (разработка)
+## Как добавить биржу
+
+1. REST-клиент `exchange/<id>/<Id>RestClient extends SignedCexClient` (подпись, ордера, баланс, правила).
+2. Диалект стакана в `generic/Dialects` (REST) и, если есть WS, в `generic/WsDialects`.
+3. Строка в `ExchangeFactory`, `ExchangeCatalog`, лимиты в `rest/RateLimits`, источник сводок в `discovery/MarketSources`.
+4. Проверки в `src/test/java` (разбор ответов на фиктивном сервере `MiniWsServer`).
+
+## Тесты
+
 ```bash
-mvn clean package
-./run.sh
-# Выведет: "Конфигурация загружена: testnet=true symbols=[btcusdt, ethusdt]"
-# Каждые 200 тиков: "btcusdt: price=... ema=..."
-# Каждые 2000 тиков: "Латентность: p50=... p99=... p999=..."
+mvn -q package -DskipTests
+javac -d target/checks -cp target/hft-trader.jar $(find src/test/java -name '*.java')
+java -cp target/checks:target/hft-trader.jar WsFeedCheck     # любой *Check
 ```
-
-### Переключение на реальную торговлю
-```bash
-export BINANCE_API_KEY="ваш_ключ"
-export BINANCE_API_SECRET="ваш_секрет"
-export BINANCE_USE_TESTNET=false
-export TRADING_MAX_POSITION_SIZE=0.001  # начните с минимума!
-./run.sh
-```
-
-### На VPS через Docker
-```bash
-docker build -t hft-starter .
-docker run -e BINANCE_USE_TESTNET=false -e TRADING_SYMBOLS="btcusdt" hft-starter
-```
-
-### На VPS через systemd
-```bash
-sudo cp target/hft-starter.jar /opt/hft/
-# Отредактируйте /etc/systemd/system/hft-starter.service
-sudo systemctl start hft-starter
-sudo journalctl -u hft-starter -f
-```
-
-## Важные моменты перед реальной торговлей
-
-✅ **Сделайте это:**
-1. Тестируйте в Binance Testnet (https://testnet.binance.vision) перед реальными деньгами
-2. Начните с минимальной позиции (0.001 BTC, а не 0.5)
-3. Мониторьте логи первые часы
-4. Убедитесь, что kill-switch работает (systemctl stop / docker stop)
-5. Проверьте, что ключи лежат только в переменных окружения, не в коде
-
-❌ **Не делайте:**
-- Не коммитьте API-ключи в git
-- Не запускайте реальную торговлю без предварительного тестирования в testnet
-- Не используйте большие позиции до того, как убедитесь в стратегии
-- Не забывайте про остановку бота — "забыл остановить" стоит денег
-
-## Дальнейшие расширения
-
-По мере роста депозита и уверенности в коде:
-1. Добавить вторую, третью биржу (просто ещё инстансы BinanceWsClient)
-2. Заменить EMA на z-score для статистического арбитража
-3. Добавить лимиты на позицию и stop-loss логику
-4. Добавить HTTP-эндпоинт для мониторинга в реальном времени
-5. Перейти на kernel-bypass (Aeron, DPDK) если понадобится микросекундный бюджет
-6. Масштабироваться на 100+ символов и десятки бирж
-
-Но для начала — этот скелет полностью рабочий и достаточный.

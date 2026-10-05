@@ -31,7 +31,7 @@ public final class MarketSources {
 
     /** Биржи, для которых есть источник сводок. */
     public static List<String> supported() {
-        return List.of("binance", "bybit", "okx", "gate", "mexc", "bingx", "lbank", "kucoin", "aster", "hyperliquid", "dydx");
+        return List.of("binance", "bybit", "okx", "gate", "mexc", "bingx", "kucoin", "aster", "hyperliquid", "dydx");
     }
 
     /** Источник сводок биржи по адресу из каталога; пусто — источника нет. */
@@ -57,7 +57,6 @@ public final class MarketSources {
             case "okx" -> new Okx(b, http);
             case "gate" -> new Gate(b, http);
             case "bingx" -> new Bingx(b, http);
-            case "lbank" -> new Lbank(b, http);
             case "hyperliquid" -> new Hyperliquid(b, http);
             case "dydx" -> new Dydx(b, http);
             default -> null;
@@ -285,37 +284,6 @@ public final class MarketSources {
             List<double[]> rows = new ArrayList<>();
             JsonNode r = http.get(base + "/openApi/spot/v2/market/kline?symbol=" + t.venueSymbol() + "&interval=1m&limit=" + Math.min(limit, 1000));
             for (JsonNode k : r.path("data")) rows.add(new double[]{d(k, 0), d(k, 4)});
-            return closes(rows);
-        }
-    }
-
-    // ───────────────────────── LBank ─────────────────────────
-
-    /** LBank: /v2/ticker/24hr.do и /v2/kline.do. */
-    static final class Lbank implements MarketSource {
-        /** REST-адрес биржи и HTTP-клиент с лимитами. */
-        final String base; final Http http;
-        Lbank(String base, Http http) { this.base = base; this.http = http; }
-        /** Идентификатор биржи. */
-        public String exchange() { return "lbank"; }
-        /** Суточная сводка по всем тикерам биржи. */
-        public List<TickerSnapshot> tickers() throws Exception {
-            List<TickerSnapshot> out = new ArrayList<>();
-            for (JsonNode t : http.get(base + "/v2/ticker/24hr.do?symbol=all").path("data")) {
-                JsonNode k = t.path("ticker");
-                double last = d(k, "latest"), ch = d(k, "change");
-                TickerSnapshot s = spot("lbank", t.path("symbol").asText(), last, Double.NaN, Double.NaN,
-                        d(k, "high"), d(k, "low"), Double.isNaN(ch) ? Double.NaN : last / (1 + ch / 100), d(k, "turnover"), -1);
-                if (s != null) out.add(s);
-            }
-            return out;
-        }
-        /** Минутные цены закрытия тикера (не больше limit). */
-        public double[] closes1m(TickerSnapshot t, int limit) throws Exception {
-            long from = System.currentTimeMillis() / 1000 - limit * 60L;
-            List<double[]> rows = new ArrayList<>();
-            for (JsonNode k : http.get(base + "/v2/kline.do?symbol=" + t.venueSymbol() + "&size=" + limit + "&type=minute1&time=" + from).path("data"))
-                rows.add(new double[]{d(k, 0), d(k, 4)});
             return closes(rows);
         }
     }

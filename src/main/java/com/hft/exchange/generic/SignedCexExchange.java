@@ -25,7 +25,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Биржа на клиенте {@link SignedCexClient} (OKX, Gate, MEXC, BingX, LBank, Hyperliquid, Uniswap V2):
+ * Биржа на клиенте {@link SignedCexClient} (OKX, Gate, MEXC, BingX, Hyperliquid, Uniswap V2):
  * свои хранилища, клиент, риск-менеджер, сервис ордеров, конвейер тиков и фид.
  * Биржи отличаются только клиентом — он передаётся фабрикой.
  * LIVE включается только при ID_API_KEY/_SECRET и ID_LIVE=true, иначе — бумажный движок на живых данных.

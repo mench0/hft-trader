@@ -80,13 +80,6 @@ public final class RateLimits {
                     Limit.of("orders", 10, 1_000, ORDER),
                     Limit.of("wsMessages", 10, 1_000, WS_MESSAGE),
                     Limit.of("wsConnects", 60, 60_000, WS_CONNECT));
-            // LBank: 200/10 с на публичные и приватные, ордера 500/10 с — держимся 5/с
-            case "lbank" -> List.of(
-                    Limit.of("public", 200, 10_000, PUBLIC),
-                    Limit.of("private", 200, 10_000, PRIVATE),
-                    Limit.of("orders", 5, 1_000, ORDER),
-                    Limit.of("wsMessages", 10, 1_000, WS_MESSAGE),
-                    Limit.of("wsConnects", 60, 60_000, WS_CONNECT));
             // Hyperliquid: вес 1200/мин на IP (info — 2..20, действие — 1); WS: 2000 сообщений/мин, 100 подключений
             case "hyperliquid" -> List.of(
                     Limit.of("weight", 1200, 60_000, REST),

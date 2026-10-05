@@ -44,7 +44,6 @@ public final class Dialects {
             case "mexc" -> new Mexc();
             case "gate" -> new Gate();
             case "bingx" -> new Bingx();
-            case "lbank" -> new Lbank();
             case "hyperliquid" -> new Hyperliquid();
             case "dydx" -> new Dydx();
             case "uniswapv2" -> new UniswapV2("");
@@ -188,22 +187,6 @@ public final class Dialects {
             JsonNode d = r.get("data");
             return book(levels(d.get("bids"), null, null, true, MAX),
                     levels(d.get("asks"), null, null, false, MAX), d.path("ts").asLong(System.currentTimeMillis()));
-        }
-    }
-
-    /** GET /v2/depth.do?symbol=btc_usdt&size=20 -> {result:"true",data:{asks,bids,timestamp}} */
-    static final class Lbank implements BookDialect {
-        /** Запрос стакана символа. */
-        public HttpRequest request(String b, String s, int d) {
-            return get(b + "/v2/depth.do?symbol=" + (base(s) + "_" + quote(s)).toLowerCase() + "&size=" + Math.min(d, 60));
-        }
-        /** Разобрать ответ в стакан; ошибка биржи — исключение. */
-        public ParsedBook parse(String body, String s) throws Exception {
-            JsonNode r = JSON.readTree(body);
-            if (!"true".equalsIgnoreCase(r.path("result").asText())) throw new IllegalStateException("LBank: " + body);
-            JsonNode d = r.get("data");
-            return book(levels(d.get("bids"), null, null, true, MAX),
-                    levels(d.get("asks"), null, null, false, MAX), d.path("timestamp").asLong(System.currentTimeMillis()));
         }
     }
 
