@@ -572,6 +572,8 @@ public final class AdminServer {
             String p = id.toUpperCase();
             keys.add(p + "_API_KEY");
             keys.add(p + "_API_SECRET");
+            keys.add(p + "_TESTNET");
+            keys.add(p + "_LIVE");
         }
         keys.add("OKX_PASSPHRASE");
         keys.add("KUCOIN_PASSPHRASE");
@@ -592,9 +594,10 @@ public final class AdminServer {
             for (String k : q.keySet())
                 if (!known.contains(k)) throw new IllegalArgumentException("Неизвестная переменная: " + k + ". Доступны: " + known);
             com.hft.config.Env.set(q);
-            boolean restart = q.keySet().stream().anyMatch(k -> k.startsWith("ADMIN_") || k.equals("STATE_DB"));
+            boolean restart = q.keySet().stream().anyMatch(k -> k.startsWith("ADMIN_") || k.equals("STATE_DB")
+                    || k.endsWith("_TESTNET") || k.endsWith("_LIVE"));
             root.put("сообщение", "Записано в .env: " + q.keySet() + (restart
-                    ? ". ADMIN_*/STATE_DB применятся после перезапуска процесса"
+                    ? ". ADMIN_*, STATE_DB и режим бирж (_TESTNET/_LIVE) применятся после перезапуска процесса; ключи — при следующем запуске соединений"
                     : ". Ключи применятся при следующем запуске соединений (Остановить → Поднять)"));
         }
         root.put("файл", com.hft.config.Env.file().toString());
@@ -613,7 +616,8 @@ public final class AdminServer {
 
     /** Секреты не показываются: только первые символы ключа; порт и флаги — как есть. */
     private static String mask(String key, String v) {
-        if (key.equals("ADMIN_PORT") || key.equals("ADMIN_ENABLED") || key.equals("STATE_DB")) return v;
+        if (key.equals("ADMIN_PORT") || key.equals("ADMIN_ENABLED") || key.equals("STATE_DB")
+                || key.endsWith("_TESTNET") || key.endsWith("_LIVE")) return v;
         if (key.endsWith("_API_KEY")) return v.substring(0, Math.min(4, v.length())) + "…";
         return "••••••";
     }
