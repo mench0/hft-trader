@@ -55,7 +55,7 @@ public final class OkxRestClient extends SignedCexClient {
      */
     public OkxRestClient(ExchangeConfig config, Credentials credentials, SymbolFilters filters) {
         super("okx", config, credentials, filters);
-        String p = System.getenv("OKX_PASSPHRASE");
+        String p = com.hft.config.Env.get("OKX_PASSPHRASE");
         if (credentials.isPresent() && (p == null || p.isBlank())) {
             throw new IllegalStateException("OKX требует OKX_PASSPHRASE (фраза, заданная при создании API-ключа)");
         }

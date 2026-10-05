@@ -110,6 +110,9 @@ public final class AdminServer {
         route("/order", this::handleOrder);
         route("/cancel-all", this::handleCancelAll);
 
+        // Переменные окружения (.env): ключи бирж, токен, порт
+        route("/env", this::handleEnv);
+
         // Метрики для Grafana (через Prometheus как data source)
         route("/metrics", this::handleMetrics);
 
@@ -560,6 +563,59 @@ public final class AdminServer {
         ex.getResponseHeaders().set("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
         ex.sendResponseHeaders(200, bytes.length);
         try (OutputStream os = ex.getResponseBody()) { os.write(bytes); }
+    }
+
+    /** Переменные, которые читает бот: ключи бирж, их фразы, админка, база. */
+    private List<String> knownEnvKeys() {
+        List<String> keys = new java.util.ArrayList<>(List.of("ADMIN_TOKEN", "ADMIN_PORT", "ADMIN_ENABLED", "STATE_DB"));
+        for (String id : controller.supportedExchanges()) {
+            String p = id.toUpperCase();
+            keys.add(p + "_API_KEY");
+            keys.add(p + "_API_SECRET");
+        }
+        keys.add("OKX_PASSPHRASE");
+        keys.add("KUCOIN_PASSPHRASE");
+        return keys;
+    }
+
+    /**
+     * GET /env — какие переменные заданы и откуда (значения секретов замаскированы).
+     * POST /env?BINANCE_API_KEY=…&BINANCE_API_SECRET=… — записать в .env; пустое значение удаляет.
+     * Ключи бирж применяются при следующем /control/start; ADMIN_* и STATE_DB — после перезапуска процесса.
+     */
+    private void handleEnv(HttpExchange ex) throws IOException {
+        Map<String, String> q = query(ex);
+        ObjectNode root = mapper.createObjectNode();
+        if ("POST".equalsIgnoreCase(ex.getRequestMethod())) {
+            if (q.isEmpty()) throw new IllegalArgumentException("Не указаны переменные: POST /env?ИМЯ=значение");
+            List<String> known = knownEnvKeys();
+            for (String k : q.keySet())
+                if (!known.contains(k)) throw new IllegalArgumentException("Неизвестная переменная: " + k + ". Доступны: " + known);
+            com.hft.config.Env.set(q);
+            boolean restart = q.keySet().stream().anyMatch(k -> k.startsWith("ADMIN_") || k.equals("STATE_DB"));
+            root.put("сообщение", "Записано в .env: " + q.keySet() + (restart
+                    ? ". ADMIN_*/STATE_DB применятся после перезапуска процесса"
+                    : ". Ключи применятся при следующем запуске соединений (Остановить → Поднять)"));
+        }
+        root.put("файл", com.hft.config.Env.file().toString());
+        root.put("файл_есть", com.hft.config.Env.fileExists());
+        var fileVars = com.hft.config.Env.fileVars();
+        ObjectNode vars = root.putObject("переменные");
+        for (String k : knownEnvKeys()) {
+            String v = com.hft.config.Env.get(k);
+            ObjectNode n = vars.putObject(k);
+            n.put("задана", v != null);
+            n.put("источник", v == null ? "" : fileVars.containsKey(k) ? ".env" : "окружение");
+            n.put("значение", v == null ? "" : mask(k, v));
+        }
+        send(ex, 200, root);
+    }
+
+    /** Секреты не показываются: только первые символы ключа; порт и флаги — как есть. */
+    private static String mask(String key, String v) {
+        if (key.equals("ADMIN_PORT") || key.equals("ADMIN_ENABLED") || key.equals("STATE_DB")) return v;
+        if (key.endsWith("_API_KEY")) return v.substring(0, Math.min(4, v.length())) + "…";
+        return "••••••";
     }
 
     // ======================= СЛУЖЕБНОЕ =======================

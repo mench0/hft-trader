@@ -90,7 +90,7 @@ public final class AppConfig {
 
     /** Переменная окружения или null, если не задана или пуста. */
     private static String env(String key) {
-        String v = System.getenv(key);
+        String v = Env.get(key);
         return v == null || v.isBlank() ? null : v;
     }
 

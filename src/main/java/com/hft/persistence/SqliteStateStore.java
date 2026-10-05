@@ -55,7 +55,7 @@ public final class SqliteStateStore {
 
     /** Путь к базе — переменная окружения STATE_DB (по умолчанию data/state.db). */
     public SqliteStateStore() {
-        String path = System.getenv().getOrDefault("STATE_DB", "data/state.db");
+        String path = java.util.Objects.requireNonNullElse(com.hft.config.Env.get("STATE_DB"), "data/state.db");
         this.dbPath = Path.of(path);
         this.jdbcUrl = "jdbc:sqlite:" + dbPath;
         init();
