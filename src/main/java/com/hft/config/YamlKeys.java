@@ -6,13 +6,17 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
+import java.io.InputStream;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 
 /**
- * API-ключи бирж из блока keys в application.yml (путь — -Dconfig.file, по умолчанию рядом с jar):
+ * API-ключи бирж из блока keys в application.yml. Где ищется: файл рядом с jar / в папке запуска
+ * (или -Dconfig.file), иначе src/main/resources/application.yml, собранный в jar. Внешний файл
+ * перечитывается при изменении; из ресурсов — читается один раз (поменять — пересобрать jar).
+ * Формат:
  *
  * <pre>
  * keys:
@@ -54,12 +58,19 @@ final class YamlKeys {
         long mtime = f.isFile() ? f.lastModified() : -1;
         if (mtime == loadedMtime) return;
         loadedMtime = mtime;
-        if (mtime < 0) { vars = Map.of(); return; }
         try {
-            vars = Collections.unmodifiableMap(flatten(YAML.readValue(f, Map.class)));
-            if (!vars.isEmpty()) log.info("Прочитаны API-ключи из {}: {}", f, vars.keySet());
+            if (mtime >= 0) {
+                vars = Collections.unmodifiableMap(flatten(YAML.readValue(f, Map.class)));
+                if (!vars.isEmpty()) log.info("Прочитаны API-ключи из {}: {}", f, vars.keySet());
+                return;
+            }
+            // внешнего файла нет — application.yml из ресурсов (src/main/resources, внутри jar)
+            try (InputStream in = YamlKeys.class.getResourceAsStream("/application.yml")) {
+                vars = in == null ? Map.of() : Collections.unmodifiableMap(flatten(YAML.readValue(in, Map.class)));
+            }
+            if (!vars.isEmpty()) log.info("Прочитаны API-ключи из application.yml в ресурсах: {}", vars.keySet());
         } catch (Exception e) {
-            log.error("Не удалось прочитать блок keys из {}: {}", f, e.getMessage());
+            log.error("Не удалось прочитать блок keys из application.yml: {}", e.getMessage());
         }
     }
 

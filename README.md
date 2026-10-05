@@ -228,12 +228,18 @@ cp .env.example .env && chmod 600 .env   # заполнить нужные кл�
 
 ### Ключи в application.yml
 
-Все ключи можно держать и в `application.yml` (рядом с jar или в папке запуска; другой путь —
-`-Dconfig.file=…`). Шаблон — `application.yml.example`; файл в `.gitignore`.
+Все ключи можно задать в `src/main/resources/application.yml` — он собирается внутрь jar.
+Шаблон лежит рядом: `src/main/resources/application.yml.example`. Сам `application.yml` в `.gitignore`.
 
 ```bash
-cp application.yml.example application.yml && chmod 600 application.yml
+cp src/main/resources/application.yml.example src/main/resources/application.yml
+# заполнить ключи
+mvn clean package
 ```
+
+Ключи окажутся внутри `target/hft-trader.jar` — такой jar никому не передавайте.
+Без пересборки: положите `application.yml` рядом с jar или в папку запуска (`-Dconfig.file=…` — свой путь).
+Внешний файл важнее файла из ресурсов и перечитывается на лету.
 
 ```yaml
 admin:
@@ -250,8 +256,8 @@ keys:
 
 `keys.<биржа>.api-key` → `<БИРЖА>_API_KEY`, `api-secret` → `_API_SECRET`, `passphrase` → `_PASSPHRASE`.
 Приоритет: `.env` > переменные окружения > `application.yml` (пустые значения пропускаются).
-Файл перечитывается при изменении: ключи бирж применяются при следующем «Поднять соединения», блок `admin` —
-после перезапуска. Во вкладке «Окружение» видно, из какого источника взято каждое значение.
+Внешний файл перечитывается при изменении (ключи бирж — при следующем «Поднять соединения», блок `admin` —
+после перезапуска); файл из ресурсов меняется только пересборкой. Во вкладке «Окружение» видно, из какого источника взято каждое значение.
 Запись из админки (`POST /env`) идёт в `.env`, а не в `application.yml`.
 
 ## Управление на сервере — полный список эндпоинтов

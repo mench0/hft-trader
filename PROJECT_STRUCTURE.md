@@ -39,11 +39,11 @@ hft-trader/
 │   ├── model/                        # Tick, OrderRequest, OrderResult, OrderEnums
 │   └── util/                         # Signer/Hmac, Numbers, BoundedMap, MsgPack
 ├── src/main/resources/
+│   ├── application.yml.example       # шаблон application.yml: админка и API-ключи бирж (блок keys)
 │   └── logback.xml
 ├── src/test/java/                    # проверки-раннеры с main(): *Check.java (без JUnit)
 ├── run.sh                            # запуск с JVM-флагами под низкую задержку
 ├── .env.example                      # пример переменных окружения
-├── application.yml.example           # пример application.yml: админка и API-ключи бирж (блок keys)
 ├── README.md                         # основная документация и все эндпоинты
 ├── REST_CLIENT_GUIDE.md              # REST-клиенты бирж и ручные ордера
 └── JVM_CONFIG_GUIDE.md               # JVM-флаги и конфигурация процесса
