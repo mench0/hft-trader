@@ -35,8 +35,8 @@ import java.util.Map;
  *   cancelAll — всегда 0 (в сети нечего снимать).
  * Исполнение атомарно: транзакция либо проходит целиком, либо откатывается (газ при откате теряется).
  *
- * Конфигурация (переменные окружения):
- *   UNISWAPV2_API_KEY / UNISWAPV2_API_SECRET — адрес кошелька (метка) и его приватный ключ (отдельный горячий
+ * Конфигурация (ключи — keys.uniswapv2 в application.yml, остальное — параметры биржи в админке):
+ *   keys.uniswapv2.api-key / api-secret — адрес кошелька (метка) и его приватный ключ (отдельный горячий
  *                                              кошелёк с небольшой суммой, не основной!)
  *   UNISWAPV2_ROUTER   — адрес Router02 в нужной сети
  *   UNISWAPV2_TOKENS   — "WETH=0xАДРЕС:18;USDC=0xАДРЕС:6"
@@ -69,7 +69,7 @@ public final class UniswapV2Client extends SignedCexClient {
 
     /**
      * @param config подключение и параметры биржи
-     * @param credentials ключи из окружения
+     * @param credentials ключи из application.yml
      * @param filters правила символов
      */
     public UniswapV2Client(ExchangeConfig config, Credentials credentials, SymbolFilters filters) {

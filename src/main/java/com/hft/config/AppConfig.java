@@ -15,9 +15,8 @@ import java.util.Map;
  * Всё остальное — выбор бирж, их подключение (testnet, адреса), риск, стратегии, фоновые задачи —
  * задаётся через админку и хранится в SQLite ({@link TradingParams}, {@link GlobalParams}).
  *
- * Источники, от высшего к низшему: переменные окружения ADMIN_ENABLED/ADMIN_PORT/ADMIN_TOKEN,
- * блок admin в application.yml рядом с jar (или -Dconfig.file=…), значения по умолчанию.
- * API-ключи бирж — только в окружении (ID_API_KEY/_SECRET), в файлы и базу не попадают.
+ * Источник — блок admin в application.yml (рядом с jar, -Dconfig.file=… или в ресурсах jar, см. {@link Env});
+ * переменные окружения ADMIN_* — только если в файле значения нет. API-ключи бирж — блок keys там же.
  */
 public final class AppConfig {
 
@@ -81,14 +80,14 @@ public final class AppConfig {
         adminToken = str(admin.get("token"), adminToken);
     }
 
-    /** Переменные окружения ADMIN_* важнее YAML. */
+    /** Значения ADMIN_* через Env: application.yml, иначе переменная окружения. */
     private void applyEnv() {
         adminEnabled = bool(env("ADMIN_ENABLED"), adminEnabled);
         adminPort = intOf(env("ADMIN_PORT"), adminPort);
         adminToken = str(env("ADMIN_TOKEN"), adminToken);
     }
 
-    /** Переменная окружения или null, если не задана или пуста. */
+    /** Значение из application.yml (или окружения) или null, если не задано. */
     private static String env(String key) {
         String v = Env.get(key);
         return v == null || v.isBlank() ? null : v;

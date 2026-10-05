@@ -1,8 +1,8 @@
 package com.hft.config;
 
 /**
- * API-ключи одной биржи. Читаются из переменных окружения с префиксом
- * по имени биржи:
+ * API-ключи одной биржи. Читаются из блока keys в application.yml (см. {@link Env}),
+ * внутри — под именами с префиксом биржи:
  *
  *   BINANCE_API_KEY / BINANCE_API_SECRET
  *   BYBIT_API_KEY / BYBIT_API_SECRET
@@ -11,7 +11,7 @@ package com.hft.config;
  */
 public record Credentials(String apiKey, String apiSecret) {
 
-    /** Ключи биржи из окружения: ID_API_KEY и ID_API_SECRET (например BINANCE_API_KEY). */
+    /** Ключи биржи: keys.&lt;id&gt;.api-key / api-secret в application.yml (внутри — ID_API_KEY / ID_API_SECRET). */
     public static Credentials fromEnv(String exchangeId) {
         String prefix = exchangeId.toUpperCase();
         String key = Env.get(prefix + "_API_KEY");
@@ -31,7 +31,7 @@ public record Credentials(String apiKey, String apiSecret) {
     public void require() {
         if (!isPresent()) {
             throw new IllegalStateException(
-                    "Нужны API-ключи в переменных окружения (например, BINANCE_API_KEY / BINANCE_API_SECRET)");
+                    "Нужны API-ключи биржи: keys.<биржа>.api-key и api-secret в application.yml");
         }
     }
 

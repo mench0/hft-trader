@@ -9,7 +9,7 @@ import org.web3j.utils.Numeric;
 
 import java.math.BigInteger;
 
-/** Реализация на web3j (зависимость org.web3j:crypto в pom.xml). Приватный ключ — только из переменной окружения. */
+/** Реализация на web3j (зависимость org.web3j:crypto в pom.xml). Приватный ключ — только из application.yml (keys). */
 public final class Web3jCrypto implements EvmCrypto {
 
     /** Ключевая пара web3j из приватного ключа. */

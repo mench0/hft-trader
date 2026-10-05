@@ -110,7 +110,7 @@ public final class AdminServer {
         route("/order", this::handleOrder);
         route("/cancel-all", this::handleCancelAll);
 
-        // Переменные окружения (.env): ключи бирж, токен, порт
+        // Настройки из application.yml: ключи бирж, токен, порт, путь к базе
         route("/env", this::handleEnv);
 
         // Метрики для Grafana (через Prometheus как data source)
@@ -579,8 +579,8 @@ public final class AdminServer {
     }
 
     /**
-     * GET /env — какие переменные заданы и откуда (значения секретов замаскированы).
-     * POST /env?BINANCE_API_KEY=…&BINANCE_API_SECRET=… — записать в .env; пустое значение удаляет.
+     * GET /env — какие значения заданы и откуда (секреты замаскированы).
+     * POST /env?BINANCE_API_KEY=…&BINANCE_API_SECRET=… — записать во внешний application.yml; пустое значение удаляет.
      * Ключи бирж применяются при следующем /control/start; ADMIN_* и STATE_DB — после перезапуска процесса.
      */
     private void handleEnv(HttpExchange ex) throws IOException {
@@ -593,12 +593,13 @@ public final class AdminServer {
                 if (!known.contains(k)) throw new IllegalArgumentException("Неизвестная переменная: " + k + ". Доступны: " + known);
             com.hft.config.Env.set(q);
             boolean restart = q.keySet().stream().anyMatch(k -> k.startsWith("ADMIN_") || k.equals("STATE_DB"));
-            root.put("сообщение", "Записано в .env: " + q.keySet() + (restart
+            root.put("сообщение", "Записано в application.yml: " + q.keySet() + (restart
                     ? ". ADMIN_*/STATE_DB применятся после перезапуска процесса"
                     : ". Ключи применятся при следующем запуске соединений (Остановить → Поднять)"));
         }
         root.put("файл", com.hft.config.Env.file().toString());
-        root.put("файл_есть", com.hft.config.Env.fileExists());
+        root.put("файл_есть", com.hft.config.Env.file().isFile());
+        root.put("прочитано_из", com.hft.config.Env.loadedFrom());
         ObjectNode vars = root.putObject("переменные");
         for (String k : knownEnvKeys()) {
             String v = com.hft.config.Env.get(k);

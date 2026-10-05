@@ -60,7 +60,7 @@ public final class BybitRestClient implements ExchangeOrderApi {
 
     /**
      * @param config подключение и параметры биржи
-     * @param credentials ключи из окружения
+     * @param credentials ключи из application.yml
      * @param filters правила символов
      */
     public BybitRestClient(ExchangeConfig config, Credentials credentials, SymbolFilters filters) {

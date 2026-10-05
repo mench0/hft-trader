@@ -39,7 +39,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * вместе с web3j (Maven был недоступен), поэтому подпись нужно сверить с официальным SDK
  * на тестовой сети, прежде чем пускать деньги.
  *
- * Учётные данные (переменные окружения):
+ * Учётные данные (keys.hyperliquid в application.yml):
  *   HYPERLIQUID_API_KEY    — адрес ОСНОВНОГО аккаунта (0x…), на котором лежат средства
  *   HYPERLIQUID_API_SECRET — приватный ключ API-кошелька (agent), созданного в интерфейсе Hyperliquid;
  *                            у agent нет права вывода средств — не используйте ключ основного кошелька.
@@ -75,7 +75,7 @@ public final class HyperliquidRestClient extends SignedCexClient {
 
     /**
      * @param config подключение и параметры биржи
-     * @param credentials ключи из окружения
+     * @param credentials ключи из application.yml
      * @param filters правила символов
      */
     public HyperliquidRestClient(ExchangeConfig config, Credentials credentials, SymbolFilters filters) {

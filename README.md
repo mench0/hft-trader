@@ -179,8 +179,7 @@ curl localhost:8080/market?exchange=binance
 curl -X POST "localhost:8080/trading/start?exchange=binance"
 ```
 
-Без API-ключей биржи (`BINANCE_API_KEY`/`BINANCE_API_SECRET`,
-`BYBIT_API_KEY`/`BYBIT_API_SECRET`) бот всё равно поднимет соединения и
+Без API-ключей биржи (`keys.binance`, `keys.bybit` в `application.yml`) бот всё равно поднимет соединения и
 будет собирать рыночные данные — они публичные. Не будет работать только
 отправка ордеров.
 
@@ -206,44 +205,17 @@ curl -X POST "localhost:8080/trading/start?exchange=binance"
 Данные обновляются каждые 3 с (флажок «автообновление»); вкладки с формами сами не перерисовываются.
 Не открывайте порт админки в интернет: доступ — через SSH-туннель или VPN, и обязательно с `ADMIN_TOKEN`.
 
-## Переменные окружения и файл .env
+## Настройки процесса и API-ключи: application.yml
 
-Ключи бирж, токен и порт админки задаются переменными окружения. Удобнее всего — файлом `.env`:
-
-```bash
-cp .env.example .env && chmod 600 .env   # заполнить нужные ключи
-./run.sh
-```
-
-- Бот сам читает `.env` из рабочей папки (другой путь — `ENV_FILE=/путь/.env`), `source` не нужен.
-- Файл перечитывается при изменении: новые ключи бирж применяются при следующем
-  `/control/start` («Остановить» → «Поднять соединения»), перезапуск процесса не нужен.
-  `ADMIN_*` и `STATE_DB` — только после перезапуска.
-- Значение из `.env` важнее переменной, заданной через `export` или systemd `Environment=`.
-- Из админки: вкладка «Окружение», или API:
-  - `GET /env` — какие переменные заданы и откуда (секреты замаскированы, наружу не отдаются);
-  - `POST /env?BINANCE_API_KEY=…&BINANCE_API_SECRET=…` — записать в `.env` (пустое значение удаляет строку).
-    Принимаются только известные боту имена; файл пишется атомарно с правами 600.
-  Секреты при этом идут по сети — используйте только с `ADMIN_TOKEN` и через SSH-туннель.
-
-### Ключи в application.yml
-
-Все ключи можно задать в `src/main/resources/application.yml` — он собирается внутрь jar.
-Шаблон лежит рядом: `src/main/resources/application.yml.example`. Сам `application.yml` в `.gitignore`.
-
-```bash
-cp src/main/resources/application.yml.example src/main/resources/application.yml
-# заполнить ключи
-mvn clean package
-```
-
-Ключи окажутся внутри `target/hft-trader.jar` — такой jar никому не передавайте.
-Без пересборки: положите `application.yml` рядом с jar или в папку запуска (`-Dconfig.file=…` — свой путь).
-Внешний файл важнее файла из ресурсов и перечитывается на лету.
+Всё, что не задаётся через админку, — в одном файле `application.yml`: токен и порт админки, путь к базе,
+API-ключи бирж. Файла `.env` нет. Шаблон — `src/main/resources/application.yml.example`.
 
 ```yaml
 admin:
-  token: "длинный-токен"
+  token: "длинный-случайный-токен"
+  port: 8080
+storage:
+  state-db: data/state.db
 keys:
   binance:
     api-key: "…"
@@ -254,11 +226,26 @@ keys:
     passphrase: "…"
 ```
 
-`keys.<биржа>.api-key` → `<БИРЖА>_API_KEY`, `api-secret` → `_API_SECRET`, `passphrase` → `_PASSPHRASE`.
-Приоритет: `.env` > переменные окружения > `application.yml` (пустые значения пропускаются).
-Внешний файл перечитывается при изменении (ключи бирж — при следующем «Поднять соединения», блок `admin` —
-после перезапуска); файл из ресурсов меняется только пересборкой. Во вкладке «Окружение» видно, из какого источника взято каждое значение.
-Запись из админки (`POST /env`) идёт в `.env`, а не в `application.yml`.
+Где бот ищет файл (первый найденный):
+
+1. **Рядом с jar / в папке запуска** (свой путь — `java -Dconfig.file=/путь/application.yml -jar …`).
+   Перечитывается на лету: новые ключи бирж применяются при «Остановить» → «Поднять соединения».
+   ```bash
+   cp src/main/resources/application.yml.example application.yml && chmod 600 application.yml
+   ```
+2. **`src/main/resources/application.yml`** — собирается внутрь jar (`mvn clean package`), меняется только пересборкой.
+   Ключи окажутся внутри `target/hft-trader.jar` — такой jar никому не передавайте.
+
+`application.yml` в `.gitignore` (в любой папке). Пустые значения пропускаются. Блоки `admin` и `storage`
+применяются при старте процесса. Переменная окружения с тем же именем (`ADMIN_TOKEN`, `BINANCE_API_KEY`…)
+используется, только если в файле значения нет.
+
+Из админки — вкладка «Окружение» или API:
+- `GET /env` — что задано и откуда (`application.yml` или окружение); секреты замаскированы;
+- `POST /env?BINANCE_API_KEY=…&BINANCE_API_SECRET=…` — записать во внешний `application.yml`
+  (пустое значение удаляет поле). Принимаются `ADMIN_*`, `STATE_DB`, `<БИРЖА>_API_KEY/_API_SECRET/_PASSPHRASE`.
+  Файл пишется атомарно с правами 600; комментарии при записи теряются, прежняя версия сохраняется как
+  `application.yml.bak`. Секреты идут по сети — только с `ADMIN_TOKEN` и через SSH-туннель.
 
 ## Управление на сервере — полный список эндпоинтов
 
@@ -307,8 +294,7 @@ curl -X POST "localhost:8080/trading/panic?exchange=all"        # отменит
 
 Все настройки биржи — подключение (testnet, live, адреса), риск, стратегии, работа фидов,
 Uniswap — задаются только через админку и хранятся в SQLite. В `application.yml` остаются
-только порт и токен админки; блоки `risk` и `exchanges` больше не читаются (в лог — предупреждение).
-API-ключи — только в переменных окружения (`<ID>_API_KEY`, `<ID>_API_SECRET`, `<ID>_PASSPHRASE`).
+админка, путь к базе и API-ключи (блок `keys`); блоки `risk` и `exchanges` больше не читаются (в лог — предупреждение).
 
 Параметры есть только у выбранных бирж: их можно передать прямо при выборе, при снятии биржи
 с выбора они удаляются. Полный список с границами и справкой — `GET /exchange/params/schema`.
@@ -442,7 +428,7 @@ curl -X POST "localhost:8080/cancel-all?exchange=binance&symbol=BTCUSDT"
 существовании `SqliteStateStore` — обращение к БД происходит исключительно
 в потоке HTTP-сервера админки, полностью отдельно от горячего пути.
 
-Путь к файлу БД можно поменять переменной окружения `STATE_DB`
+Путь к файлу БД — `storage.state-db` в `application.yml`
 (по умолчанию `data/state.db`).
 
 **Автозапуск после рестарта.** По умолчанию после перезапуска процесса бот
@@ -578,11 +564,11 @@ public final class MyStrategy extends Strategy {
 ## KuCoin и Aster
 
 - **KuCoin** — спот: стакан по WebSocket (`level2Depth50`; адрес и токен выдаёт `POST /api/v1/bullet-public`
-  перед каждым подключением) + REST-запас, ордера через REST. Нужны `KUCOIN_API_KEY`, `KUCOIN_API_SECRET`,
-  `KUCOIN_PASSPHRASE`, для реальных ордеров — параметр биржи `live=true`. Тестовой сети у KuCoin нет (песочница выключена с 2023 г.).
+  перед каждым подключением) + REST-запас, ордера через REST. Нужны `keys.kucoin.api-key`, `api-secret`,
+  `passphrase` в `application.yml`, для реальных ордеров — параметр биржи `live=true`. Тестовой сети у KuCoin нет (песочница выключена с 2023 г.).
 - **Aster** — спот, API v3 (`sapi.asterdex.com/api/v3`, формат Binance): стакан по WebSocket
   (`depth20@100ms`) + REST-запас, ордера через REST с подписью EIP-712 кошельком-агентом.
-  `ASTER_API_KEY` — адрес основного кошелька (user), `ASTER_API_SECRET` — приватный ключ API-кошелька
+  `keys.aster.api-key` — адрес основного кошелька (user), `api-secret` — приватный ключ API-кошелька
   (signer, без права вывода), для реальных ордеров — параметр `live=true`.
 
 Обе не проверялись на живой бирже (из среды разработки биржи недоступны): начинайте с PAPER и малых сумм.
@@ -606,13 +592,13 @@ PAPER_BLIND = живой стакан через REST-опрос + бумажн�
 | Hyperliquid, Uniswap V2 | HyperliquidExchange, UniswapV2Exchange | HyperliquidRestClient (EIP-712 через web3j), UniswapV2Client (свопы через Router02) | PAPER по умолчанию, LIVE не проверен и не собирался с настоящим web3j |
 | dYdX v4 | PaperExchange | нет (нужны Cosmos-транзакции и сгенерированные protobuf-классы) | только PAPER |
 
-LIVE для OKX/MEXC/Gate/BingX включается двумя условиями сразу: `<ID>_API_KEY` + `<ID>_API_SECRET`
-(у OKX и KuCoin ещё `<ID>_PASSPHRASE`) и параметр биржи `live=true` в админке. Иначе биржа работает в PAPER и реальных ордеров не шлёт.
+LIVE для OKX/MEXC/Gate/BingX включается двумя условиями сразу: `keys.<id>.api-key` + `api-secret` в `application.yml`
+(у OKX и KuCoin ещё `passphrase`) и параметр биржи `live=true` в админке. Иначе биржа работает в PAPER и реальных ордеров не шлёт.
 Если правила торговли не загрузились, LIVE-старт отменяется. Тесты: src/test/java (простые runner-классы).
 
-### Hyperliquid и Uniswap V2: переменные окружения
-- Hyperliquid: `HYPERLIQUID_API_KEY` = адрес основного аккаунта, `HYPERLIQUID_API_SECRET` = ключ agent-кошелька (без права вывода), параметр биржи `live=true`.
-- Uniswap V2: `UNISWAPV2_API_KEY` (метка/адрес), `UNISWAPV2_API_SECRET` (ключ горячего кошелька), параметр `live=true`,
+### Hyperliquid и Uniswap V2: ключи
+- Hyperliquid: `keys.hyperliquid.api-key` = адрес основного аккаунта, `api-secret` = ключ agent-кошелька (без права вывода), параметр биржи `live=true`.
+- Uniswap V2: `keys.uniswapv2.api-key` (метка/адрес), `api-secret` (ключ горячего кошелька), параметр `live=true`,
   параметры биржи `uniRouter`, `uniTokens="WETH=0x..:18;USDC=0x..:6"`, `uniSlippagePercent`, RPC ноды — `restUrl`; GTC-лимиток и отмены на AMM нет.
 - Криптография (secp256k1, keccak, подпись транзакций) — библиотека web3j из pom.xml (класс `Web3jCrypto`); ни её, ни Maven в песочнице не было,
   поэтому `Web3jCrypto` — единственный непроверенный компилятором файл. Остальной код проверен тестами с подменой крипто-слоя.
@@ -710,3 +696,4 @@ REST-клиент, `RiskManager`, `OrderService`, конвейер `TickPipeline
 - **2026-10:** биржа LBank удалена целиком (клиент, диалекты REST/WS, источник подбора тикеров, лимиты, каталог, тесты):
   низкая ликвидность и непроверенная схема подписи. Выбор `exchange=lbank` теперь отклоняется.
 - **2026-10:** веб-админка — отдельный проект `hft-admin-panel`, бот только отдаёт API.
+- **2026-10:** файл `.env` убран: все ключи и настройки процесса — в `application.yml` (рядом с jar или в ресурсах).

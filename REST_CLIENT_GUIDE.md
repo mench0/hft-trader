@@ -5,18 +5,18 @@
 
 ## Клиенты
 
-| Биржа | Клиент | Ключи в окружении |
+| Биржа | Клиент | Ключи в `application.yml` |
 |---|---|---|
-| Binance | `rest/BinanceRestClient` | `BINANCE_API_KEY`, `BINANCE_API_SECRET` |
-| Bybit | `exchange/bybit/BybitRestClient` | `BYBIT_API_KEY`, `BYBIT_API_SECRET` |
-| OKX | `exchange/okx/OkxRestClient` | `OKX_API_KEY`, `OKX_API_SECRET`, `OKX_PASSPHRASE` |
-| Gate | `exchange/gate/GateRestClient` | `GATE_API_KEY`, `GATE_API_SECRET` |
-| MEXC | `exchange/mexc/MexcRestClient` | `MEXC_API_KEY`, `MEXC_API_SECRET` |
-| BingX | `exchange/bingx/BingxRestClient` | `BINGX_API_KEY`, `BINGX_API_SECRET` |
-| KuCoin | `exchange/kucoin/KucoinRestClient` | `KUCOIN_API_KEY`, `KUCOIN_API_SECRET`, `KUCOIN_PASSPHRASE` |
-| Aster | `exchange/aster/AsterRestClient` | `ASTER_API_KEY` (user), `ASTER_API_SECRET` (signer) |
-| Hyperliquid | `exchange/hyperliquid/HyperliquidRestClient` | `HYPERLIQUID_API_KEY` (адрес), `HYPERLIQUID_API_SECRET` (agent-ключ) |
-| Uniswap V2 | `exchange/uniswap/UniswapV2Client` | `UNISWAPV2_API_KEY`, `UNISWAPV2_API_SECRET` |
+| Binance | `rest/BinanceRestClient` | `keys.binance`: api-key, api-secret |
+| Bybit | `exchange/bybit/BybitRestClient` | `keys.bybit`: api-key, api-secret |
+| OKX | `exchange/okx/OkxRestClient` | `keys.okx`: api-key, api-secret, passphrase |
+| Gate | `exchange/gate/GateRestClient` | `keys.gate`: api-key, api-secret |
+| MEXC | `exchange/mexc/MexcRestClient` | `keys.mexc`: api-key, api-secret |
+| BingX | `exchange/bingx/BingxRestClient` | `keys.bingx`: api-key, api-secret |
+| KuCoin | `exchange/kucoin/KucoinRestClient` | `keys.kucoin`: api-key, api-secret, passphrase |
+| Aster | `exchange/aster/AsterRestClient` | `keys.aster`: api-key (user), api-secret (signer) |
+| Hyperliquid | `exchange/hyperliquid/HyperliquidRestClient` | `keys.hyperliquid`: api-key (адрес), api-secret (agent-ключ) |
+| Uniswap V2 | `exchange/uniswap/UniswapV2Client` | `keys.uniswapv2`: api-key, api-secret |
 
 Все клиенты, кроме Binance и Bybit, наследуют `SignedCexClient`: общие HTTP-клиент, подпись,
 бюджет запросов (`RateBudget`, 80% официальных лимитов из `RateLimits`), разделение лимитеров ордеров

@@ -53,7 +53,7 @@ public final class SqliteStateStore {
     private final ObjectMapper mapper = new ObjectMapper()
             .configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
-    /** Путь к базе — переменная окружения STATE_DB (по умолчанию data/state.db). */
+    /** Путь к базе — storage.state-db в application.yml (по умолчанию data/state.db). */
     public SqliteStateStore() {
         String path = java.util.Objects.requireNonNullElse(com.hft.config.Env.get("STATE_DB"), "data/state.db");
         this.dbPath = Path.of(path);

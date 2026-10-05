@@ -34,7 +34,7 @@ public final class BybitExchange implements ExchangeGateway {
 
     /** Подключение и параметры биржи. */
     private final ExchangeConfig config;
-    /** API-ключи из окружения. */
+    /** API-ключи из application.yml. */
     private final Credentials credentials;
 
     /** Стаканы, окна цен и статистика символов. */

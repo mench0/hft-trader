@@ -39,7 +39,7 @@ public final class SignedCexExchange implements ExchangeGateway, RequestStatsSou
     private final ExchangeInfo info;
     /** Подключение и параметры биржи. */
     private final ExchangeConfig config;
-    /** API-ключи из окружения. */
+    /** API-ключи из application.yml. */
     private final Credentials credentials;
 
     /** Стаканы, окна цен и статистика символов. */

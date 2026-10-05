@@ -41,7 +41,7 @@ public final class GateRestClient extends SignedCexClient {
 
     /**
      * @param config подключение и параметры биржи
-     * @param credentials ключи из окружения
+     * @param credentials ключи из application.yml
      * @param filters правила символов
      */
     public GateRestClient(ExchangeConfig config, Credentials credentials, SymbolFilters filters) {

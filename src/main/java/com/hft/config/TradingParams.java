@@ -97,7 +97,7 @@ public record TradingParams(
     public static final Map<String, ParamSpec> SPECS = ParamSpec.index(List.of(
             // подключение
             flag("testnet", true, "Тестовая сеть биржи (если есть). Безопасное значение по умолчанию; для реальной торговли — false").needsRestart(),
-            flag("live", false, "Реальные ордера: нужны ещё API-ключи в окружении (ID_API_KEY/_SECRET). false — бумажная торговля на живых данных").needsRestart(),
+            flag("live", false, "Реальные ордера: нужны ещё API-ключи биржи в application.yml (keys.<id>.api-key/api-secret). false — бумажная торговля на живых данных").needsRestart(),
             text("restUrl", "", URL, "REST-адрес вместо стандартного (пусто — по каталогу с учётом testnet; для Uniswap — RPC ноды)").needsRestart(),
             text("wsUrl", "", URL, "WebSocket-адрес вместо стандартного (пусто — по каталогу с учётом testnet)").needsRestart(),
             num("recvWindowMs", 5000, 100, 60_000, "Окно годности подписанного запроса, мс").needsRestart(),

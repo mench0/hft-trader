@@ -50,7 +50,7 @@ public final class AsterRestClient extends SignedCexClient {
 
     /**
      * @param config подключение и параметры биржи
-     * @param credentials ключи из окружения
+     * @param credentials ключи из application.yml
      * @param filters правила символов
      */
     public AsterRestClient(ExchangeConfig config, Credentials credentials, SymbolFilters filters) {

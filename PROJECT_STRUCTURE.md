@@ -2,7 +2,7 @@
 
 Java 21, Maven, один fat-jar (`target/hft-trader.jar`). Бот стартует без бирж; выбор бирж, тикеров,
 параметров и запуск торговли — через веб-админку (отдельный проект hft-admin-panel) или HTTP API.
-Состояние хранится в SQLite (`data/state.db`), API-ключи — только в переменных окружения.
+Состояние хранится в SQLite (`data/state.db`), API-ключи и токен админки — в `application.yml`.
 
 ```
 hft-trader/
@@ -12,7 +12,7 @@ hft-trader/
 │   ├── control/BotController.java    # выбор бирж/символов, параметры, старт/стоп, торговля, автостарт
 │   ├── config/                       # AppConfig (порт/токен админки), TradingParams (параметры биржи),
 │   │                                 # GlobalParams (настройки процесса), ParamSpec (схема и проверка),
-│   │                                 # Credentials (<ID>_API_KEY/_SECRET/_PASSPHRASE), ExchangeConfig
+│   │                                 # Env (application.yml: admin, storage, keys), Credentials, ExchangeConfig
 │   ├── persistence/                  # SqliteStateStore, PersistedState
 │   ├── exchange/
 │   │   ├── ExchangeGateway.java      # общий контракт биржи
@@ -43,7 +43,6 @@ hft-trader/
 │   └── logback.xml
 ├── src/test/java/                    # проверки-раннеры с main(): *Check.java (без JUnit)
 ├── run.sh                            # запуск с JVM-флагами под низкую задержку
-├── .env.example                      # пример переменных окружения
 ├── README.md                         # основная документация и все эндпоинты
 ├── REST_CLIENT_GUIDE.md              # REST-клиенты бирж и ручные ордера
 └── JVM_CONFIG_GUIDE.md               # JVM-флаги и конфигурация процесса

@@ -33,7 +33,7 @@ public final class BingxRestClient extends SignedCexClient {
 
     /**
      * @param config подключение и параметры биржи
-     * @param credentials ключи из окружения
+     * @param credentials ключи из application.yml
      * @param filters правила символов
      */
     public BingxRestClient(ExchangeConfig config, Credentials credentials, SymbolFilters filters) {

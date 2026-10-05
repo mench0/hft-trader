@@ -27,14 +27,13 @@ public final class ExchangeSupport {
     /** Утилитный класс — экземпляры не создаются. */
     private ExchangeSupport() {}
 
-    /** LIVE только при ключах в окружении и параметре биржи live=true, иначе бумажный движок. */
+    /** LIVE только при ключах в application.yml и параметре биржи live=true, иначе бумажный движок. */
     public static boolean isLive(ExchangeInfo info, ExchangeConfig config, Credentials credentials) {
-        String id = info.id().toUpperCase();
         if (credentials.isPresent() && config.params().live()) {
             log.warn("[{}] режим LIVE{} — ордера пойдут на биржу", info.id(), config.testnet() ? " (testnet)" : "");
             return true;
         }
-        log.info("[{}] режим PAPER (для LIVE нужны {}_API_KEY/_SECRET в окружении и параметр live=true)", info.id(), id);
+        log.info("[{}] режим PAPER (для LIVE нужны keys.{}.api-key/api-secret в application.yml и параметр live=true)", info.id(), info.id());
         return false;
     }
 
