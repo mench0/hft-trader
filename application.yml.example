@@ -1,0 +1,48 @@
+# Скопируйте в application.yml (рядом с jar или в папку запуска) и заполните.
+# application.yml в .gitignore и в git не попадает. Права: chmod 600 application.yml
+# Другой путь к файлу: java -Dconfig.file=/путь/application.yml -jar hft-trader.jar
+#
+# Приоритет: .env > переменные окружения > этот файл. Пустые значения игнорируются.
+# Файл перечитывается при изменении: новые ключи применяются при следующем
+# «Поднять соединения» (Остановить → Поднять) без перезапуска бота.
+# Блок admin — только при старте бота.
+# Ключи — только с правом торговли, без вывода, с привязкой к IP сервера.
+
+admin:
+  enabled: true
+  port: 8080
+  token: ""          # обязательно задайте длинный случайный токен
+
+keys:
+  binance:           # тестовые ключи: https://testnet.binance.vision
+    api-key: ""
+    api-secret: ""
+  bybit:             # тестовые ключи: https://testnet.bybit.com
+    api-key: ""
+    api-secret: ""
+  okx:
+    api-key: ""
+    api-secret: ""
+    passphrase: ""   # фраза, заданная при создании ключа
+  gate:
+    api-key: ""
+    api-secret: ""
+  mexc:
+    api-key: ""
+    api-secret: ""
+  bingx:
+    api-key: ""
+    api-secret: ""
+  kucoin:
+    api-key: ""
+    api-secret: ""
+    passphrase: ""   # фраза, заданная при создании ключа
+  aster:
+    api-key: ""      # адрес основного кошелька (user)
+    api-secret: ""   # приватный ключ API-кошелька (signer, без права вывода)
+  hyperliquid:
+    api-key: ""      # адрес основного аккаунта
+    api-secret: ""   # ключ agent-кошелька (без права вывода)
+  uniswapv2:
+    api-key: ""      # метка/адрес
+    api-secret: ""   # ключ горячего кошелька

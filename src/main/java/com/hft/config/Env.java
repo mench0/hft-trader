@@ -31,13 +31,26 @@ public final class Env {
 
     private Env() {}
 
-    /** Значение переменной (файл .env, затем окружение процесса); пустое — null. */
+    /** Значение переменной: файл .env, затем окружение процесса, затем блок keys в application.yml; пустое — null. */
     public static String get(String key) {
         refresh();
         String v = fileVars.get(key);
-        if (v == null) v = System.getenv(key);
+        if (v == null || v.isBlank()) v = System.getenv(key);
+        if (v == null || v.isBlank()) v = YamlKeys.vars().get(key);
         return v == null || v.isBlank() ? null : v.trim();
     }
+
+    /** Откуда берётся значение: ".env", "окружение", "application.yml" или "" — не задано. */
+    public static String source(String key) {
+        refresh();
+        if (notBlank(fileVars.get(key))) return ".env";
+        if (notBlank(System.getenv(key))) return "окружение";
+        if (notBlank(YamlKeys.vars().get(key))) return "application.yml";
+        return "";
+    }
+
+    /** Непустая строка. */
+    private static boolean notBlank(String v) { return v != null && !v.isBlank(); }
 
     /** Путь к файлу .env. */
     public static Path file() { return FILE.toAbsolutePath(); }

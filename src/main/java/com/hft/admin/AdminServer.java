@@ -599,13 +599,12 @@ public final class AdminServer {
         }
         root.put("файл", com.hft.config.Env.file().toString());
         root.put("файл_есть", com.hft.config.Env.fileExists());
-        var fileVars = com.hft.config.Env.fileVars();
         ObjectNode vars = root.putObject("переменные");
         for (String k : knownEnvKeys()) {
             String v = com.hft.config.Env.get(k);
             ObjectNode n = vars.putObject(k);
             n.put("задана", v != null);
-            n.put("источник", v == null ? "" : fileVars.containsKey(k) ? ".env" : "окружение");
+            n.put("источник", com.hft.config.Env.source(k));
             n.put("значение", v == null ? "" : mask(k, v));
         }
         send(ex, 200, root);
