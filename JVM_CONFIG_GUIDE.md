@@ -60,7 +60,7 @@ java -XX:+UseG1GC -XX:MaxGCPauseMillis=5 \
 ## Конфигурация процесса
 
 Файл и окружение задают только админку; всё остальное настраивается на лету через веб-админку
-(`http://localhost:8080/`) или API и сохраняется в SQLite (`data/state.db`, путь — `STATE_DB`).
+(`admin-panel/index.html`) или API и сохраняется в SQLite (`data/state.db`, путь — `STATE_DB`).
 
 | Что | Где | Перезапуск |
 |---|---|---|
@@ -85,4 +85,4 @@ ExecStart=/opt/hft-trader/run.sh
 Restart=on-failure
 ```
 
-Порт админки наружу не открывайте: `ssh -L 8080:localhost:8080 server` и открыть `http://localhost:8080/`.
+Порт админки наружу не открывайте: `ssh -L 8080:localhost:8080 server` и в админке указать адрес API `http://localhost:8080`.

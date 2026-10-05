@@ -1,14 +1,14 @@
 # hft-trader: структура проекта
 
 Java 21, Maven, один fat-jar (`target/hft-trader.jar`). Бот стартует без бирж; выбор бирж, тикеров,
-параметров и запуск торговли — через встроенную веб-админку (`http://localhost:8080/`) или HTTP API.
+параметров и запуск торговли — через веб-админку (`admin-panel/index.html`, отдельная страница) или HTTP API.
 Состояние хранится в SQLite (`data/state.db`), API-ключи — только в переменных окружения.
 
 ```
 hft-trader/
 ├── src/main/java/com/hft/
 │   ├── Main.java                     # точка входа: конфиг, SQLite, BotController, AdminServer
-│   ├── admin/AdminServer.java        # HTTP API (JDK HttpServer) + отдача веб-админки на / и /admin
+│   ├── admin/AdminServer.java        # HTTP API (JDK HttpServer), CORS для внешней админки
 │   ├── control/BotController.java    # выбор бирж/символов, параметры, старт/стоп, торговля, автостарт
 │   ├── config/                       # AppConfig (порт/токен админки), TradingParams (параметры биржи),
 │   │                                 # GlobalParams (настройки процесса), ParamSpec (схема и проверка),
@@ -39,8 +39,8 @@ hft-trader/
 │   ├── model/                        # Tick, OrderRequest, OrderResult, OrderEnums
 │   └── util/                         # Signer/Hmac, Numbers, BoundedMap, MsgPack
 ├── src/main/resources/
-│   ├── admin/index.html              # веб-админка (одна страница, без сборки фронтенда)
 │   └── logback.xml
+├── admin-panel/index.html            # веб-админка: отдельная страница, в jar не входит
 ├── src/test/java/                    # проверки-раннеры с main(): *Check.java (без JUnit)
 ├── run.sh                            # запуск с JVM-флагами под низкую задержку
 ├── .env.example                      # пример переменных окружения

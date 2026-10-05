@@ -46,6 +46,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:var(--bg);padding:8px;
   <span id="botState" class="pill">…</span>
   <nav id="tabs"></nav>
   <span class="grow"></span>
+  <input id="base" placeholder="http://localhost:8080" style="width:200px">
   <input id="token" type="password" placeholder="ADMIN_TOKEN" style="width:160px">
   <label class="mut"><input id="auto" type="checkbox" checked> автообновление</label>
 </header>
@@ -56,13 +57,15 @@ const TABS = {overview:'Обзор', exchanges:'Биржи', params:'Парам�
 let tab = 'overview', timer = null;
 const $ = s => document.querySelector(s);
 const esc = v => String(v ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-try { $('#token').value = localStorage.getItem('hftToken') || ''; tab = localStorage.getItem('hftTab') || tab; } catch {}
+try { $('#base').value = localStorage.getItem('hftBase') || 'http://localhost:8080'; $('#token').value = localStorage.getItem('hftToken') || ''; tab = localStorage.getItem('hftTab') || tab; } catch {}
+$('#base').onchange = e => { try { localStorage.setItem('hftBase', e.target.value); } catch {} render(); };
 $('#token').onchange = e => { try { localStorage.setItem('hftToken', e.target.value); } catch {} render(); };
 
 async function api(path, params, method = 'GET') {
   const qs = params ? '?' + new URLSearchParams(Object.entries(params).filter(([, v]) => v !== '' && v != null)) : '';
   const h = {}; const t = $('#token').value; if (t) h['X-Admin-Token'] = t;
-  const r = await fetch(path + qs, {method, headers: h});
+  const base = $('#base').value.trim().replace(/\/+$/, '') || 'http://localhost:8080';
+  const r = await fetch(base + path + qs, {method, headers: h});
   const ct = r.headers.get('content-type') || '';
   const body = ct.includes('json') ? await r.json() : await r.text();
   if (!r.ok) throw new Error((body && body['сообщение']) || ('HTTP ' + r.status));
