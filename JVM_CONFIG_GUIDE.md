@@ -65,7 +65,7 @@ java -XX:+UseG1GC -XX:MaxGCPauseMillis=5 \
 | Что | Где | Перезапуск |
 |---|---|---|
 | Включена ли админка, порт, токен | `ADMIN_ENABLED`, `ADMIN_PORT`, `ADMIN_TOKEN` или блок `admin` в `application.yml` рядом с jar (`-Dconfig.file=…`) | да |
-| API-ключи бирж | только окружение: `<ID>_API_KEY`, `<ID>_API_SECRET`, `<ID>_PASSPHRASE` | да |
+| API-ключи бирж | `.env` (бот читает сам и перечитывает при изменении), админка «Окружение» или окружение процесса: `<ID>_API_KEY`, `<ID>_API_SECRET`, `<ID>_PASSPHRASE` | нет — при следующем «Поднять соединения» |
 | Выбор бирж и тикеров | админка, вкладка «Биржи» (`/control/select`, `/control/symbols`) | нет |
 | Параметры биржи (testnet, live, адреса, риск, стратегии, фиды) | вкладка «Параметры» (`/exchange/params`) | помеченные ⟳ — после «Остановить» → «Поднять соединения» |
 | Настройки процесса (подбор тикеров, фоновые задачи, доля лимитов) | вкладка «Настройки» (`/settings`) | `rateLimitSafety` — перезапуск процесса |
@@ -78,9 +78,7 @@ java -XX:+UseG1GC -XX:MaxGCPauseMillis=5 \
 ```ini
 [Service]
 WorkingDirectory=/opt/hft-trader
-Environment="ADMIN_TOKEN=длинный-случайный-токен"
-Environment="BINANCE_API_KEY=…"
-Environment="BINANCE_API_SECRET=…"
+# ключи и токен — в /opt/hft-trader/.env (chmod 600), бот читает его сам
 ExecStart=/opt/hft-trader/run.sh
 Restart=on-failure
 ```

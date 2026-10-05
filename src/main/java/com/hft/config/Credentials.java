@@ -14,8 +14,8 @@ public record Credentials(String apiKey, String apiSecret) {
     /** Ключи биржи из окружения: ID_API_KEY и ID_API_SECRET (например BINANCE_API_KEY). */
     public static Credentials fromEnv(String exchangeId) {
         String prefix = exchangeId.toUpperCase();
-        String key = System.getenv(prefix + "_API_KEY");
-        String secret = System.getenv(prefix + "_API_SECRET");
+        String key = Env.get(prefix + "_API_KEY");
+        String secret = Env.get(prefix + "_API_SECRET");
         if (key == null || key.isBlank() || secret == null || secret.isBlank()) {
             return new Credentials(null, null);
         }
