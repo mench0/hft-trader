@@ -134,7 +134,6 @@ public final class Main {
             log.info("  4) POST /control/autostart?enabled=true&trade=true");
         }
         log.info("===============================================");
-        log.info("Ctrl+C для остановки");
 
         Thread.currentThread().join();
     }
