@@ -104,7 +104,7 @@ public final class BotController {
                 try { p = p.with(values); }
                 catch (IllegalArgumentException e) { log.error("[{}] сохранённые параметры некорректны ({}) — беру значения по умолчанию", ex, e.getMessage()); }
             }
-            settings.put(ex, new TradingSettings(p));
+            settings.put(ex, new TradingSettings(applyEnvMode(ex, p)));
         }
         if (s.global() != null) {
             try { global = GlobalParams.DEFAULTS.with(s.global()); }
@@ -203,13 +203,52 @@ public final class BotController {
 
     // ======================= ПАРАМЕТРЫ БИРЖ =======================
 
-    /** Значения по умолчанию для биржи: комиссия тейкера — из каталога; testnet — если он у биржи есть. */
+    /**
+     * Значения по умолчанию для биржи: комиссия тейкера — из каталога; testnet — если он у биржи есть;
+     * testnet/live из окружения (&lt;ID&gt;_TESTNET, &lt;ID&gt;_LIVE), если заданы.
+     */
     public static TradingParams defaultsFor(String exchangeId) {
         TradingParams d = TradingParams.DEFAULTS;
-        return ExchangeCatalog.find(exchangeId)
+        TradingParams p = ExchangeCatalog.find(exchangeId)
                 .map(i -> d.with(Map.of("takerFeePercent", String.valueOf(i.takerFeePct()),
                         "testnet", String.valueOf(i.hasTestnet()))))
                 .orElse(d);
+        Map<String, String> mode = envMode(exchangeId);
+        if (mode.isEmpty()) return p;
+        try { TradingParams withMode = p.with(mode); validate(exchangeId, withMode); return withMode; }
+        catch (IllegalArgumentException e) { return p; }      // причину пишет applyEnvMode при старте
+    }
+
+    /**
+     * Режим биржи из окружения (.env или export): &lt;ID&gt;_TESTNET и &lt;ID&gt;_LIVE = true/false.
+     * Незаданные или некорректные значения пропускаются.
+     */
+    static Map<String, String> envMode(String exchangeId) {
+        Map<String, String> out = new java.util.LinkedHashMap<>();
+        String prefix = exchangeId.toUpperCase(java.util.Locale.ROOT);
+        for (String k : new String[]{"testnet", "live"}) {
+            String v = com.hft.config.Env.get(prefix + "_" + k.toUpperCase(java.util.Locale.ROOT));
+            if (v == null) continue;
+            if (v.equalsIgnoreCase("true") || v.equalsIgnoreCase("false")) out.put(k, v.toLowerCase(java.util.Locale.ROOT));
+            else log.warn("[{}] {}_{}={} — ожидается true или false, пропускаю", exchangeId, prefix, k.toUpperCase(java.util.Locale.ROOT), v);
+        }
+        return out;
+    }
+
+    /** При старте процесса режим из окружения важнее сохранённого в базе; невозможный (testnet без тестовой сети) — пропускается. */
+    private static TradingParams applyEnvMode(String exchangeId, TradingParams p) {
+        Map<String, String> mode = envMode(exchangeId);
+        if (mode.isEmpty()) return p;
+        try {
+            TradingParams q = p.with(mode);
+            validate(exchangeId, q);
+            if (q.testnet() != p.testnet() || q.live() != p.live())
+                log.info("[{}] режим из окружения: testnet={} live={} (было testnet={} live={})", exchangeId, q.testnet(), q.live(), p.testnet(), p.live());
+            return q;
+        } catch (IllegalArgumentException e) {
+            log.warn("[{}] режим из окружения {} не применён: {}", exchangeId, mode, e.getMessage());
+            return p;
+        }
     }
 
     /** testnet=true возможен, только если у биржи есть тестовая сеть или задан свой restUrl. */
