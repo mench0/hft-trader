@@ -13,7 +13,6 @@ import com.hft.exchange.generic.PaperExchange;
 import com.hft.exchange.generic.SignedCexExchange;
 import com.hft.exchange.hyperliquid.HyperliquidRestClient;
 import com.hft.exchange.kucoin.KucoinRestClient;
-import com.hft.exchange.lbank.LbankRestClient;
 import com.hft.exchange.mexc.MexcRestClient;
 import com.hft.exchange.okx.OkxRestClient;
 import com.hft.exchange.uniswap.UniswapV2Client;
@@ -32,7 +31,6 @@ public final class ExchangeFactory {
             case "okx" -> new SignedCexExchange(id, ec, settings, OkxRestClient::new);
             case "mexc" -> new SignedCexExchange(id, ec, settings, MexcRestClient::new);
             case "gate" -> new SignedCexExchange(id, ec, settings, GateRestClient::new);
-            case "lbank" -> new SignedCexExchange(id, ec, settings, LbankRestClient::new);
             case "hyperliquid" -> new SignedCexExchange(id, ec, settings, HyperliquidRestClient::new);
             case "uniswapv2" -> new SignedCexExchange(id, ec, settings, UniswapV2Client::new);
             case "bingx" -> new SignedCexExchange(id, ec, settings, BingxRestClient::new);

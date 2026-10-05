@@ -46,7 +46,6 @@ public final class WsDialects {
             case "okx" -> Optional.of(new Okx());
             case "gate" -> Optional.of(new Gate());
             case "bingx" -> Optional.of(new Bingx());
-            case "lbank" -> Optional.of(new Lbank());
             case "hyperliquid" -> Optional.of(new Hyperliquid());
             case "dydx" -> Optional.of(new Dydx());
             case "uniswapv2" -> Optional.of(new Uniswap(""));
@@ -315,67 +314,6 @@ public final class WsDialects {
             if (!depth) { out.reset(); throw new IllegalStateException("BingX: не стакан"); }
             out.snapshot = true;
             if (out.tsMs == 0) out.tsMs = System.currentTimeMillis();
-            return null;
-        }
-    }
-
-    // ───────────────────────── LBank ─────────────────────────
-
-    /** LBank: depth (снимки), пинг ping/pong. */
-    static final class Lbank implements WsDialect {
-        public String defaultUrl(boolean testnet) { return "wss://www.lbkex.net/ws/V2/"; }
-        /** Имя символа на бирже. */
-        public String venueSymbol(String s) { return (base(s) + "_" + quote(s)).toLowerCase(Locale.ROOT); }
-        /** Сообщения подписки на стаканы символов. */
-        public List<String> subscribe(List<String> v, int d) { return op("subscribe", v); }
-        /** Сообщения подписки на стаканы символов. */
-        public List<String> unsubscribe(List<String> v, int d) { return op("unsubscribe", v); }
-        /** Сообщения подписки/отписки пачками. */
-        private List<String> op(String action, List<String> v) {
-            List<String> out = new ArrayList<>();
-            for (String s : v)
-                out.add(msg(JSON.createObjectNode().put("action", action).put("subscribe", "depth")
-                        .put("depth", "100").put("pair", s)));
-            return out;
-        }
-
-        /** Разобрать сообщение биржи в out; служебные — пропустить, ошибки — исключение. */
-        public String parse(char[] c, int len, BookBatch out) throws Exception {
-            out.reset();
-            boolean ping = false, isDepth = false, hasDepth = false;
-            String pingId = null, status = null;
-            try (JsonParser p = open(c, len)) {
-                while (p.nextToken() == JsonToken.FIELD_NAME) {
-                    String f = p.currentName();
-                    p.nextToken();
-                    switch (f) {
-                        case "action" -> ping = textIs(p, "ping");
-                        case "ping" -> pingId = p.getText();
-                        case "type" -> isDepth = textIs(p, "depth");
-                        case "status" -> status = p.getText();
-                        case "pair" -> out.venue = out.resolve(p.getTextCharacters(), p.getTextOffset(), p.getTextLength());
-                        case "depth" -> {
-                            if (p.currentToken() != JsonToken.START_OBJECT) { p.skipChildren(); break; }
-                            hasDepth = true;
-                            while (p.nextToken() == JsonToken.FIELD_NAME) {
-                                String g = p.currentName(); p.nextToken();
-                                switch (g) {
-                                    case "bids" -> levels(p, out, true);
-                                    case "asks" -> levels(p, out, false);
-                                    default -> p.skipChildren();
-                                }
-                            }
-                        }
-                        default -> p.skipChildren();
-                    }
-                }
-            }
-            if (ping) { out.reset(); return msg(JSON.createObjectNode().put("action", "pong").put("pong", pingId)); }
-            if (status != null && !status.equalsIgnoreCase("success") && !hasDepth) { out.reset(); throw new IllegalStateException("LBank: " + abbreviate(c, len)); }
-            if (!isDepth || !hasDepth) { out.reset(); return null; }
-            if (out.venue == null) throw new IllegalStateException("LBank: нет pair в depth");
-            out.snapshot = true;
-            out.tsMs = System.currentTimeMillis();
             return null;
         }
     }

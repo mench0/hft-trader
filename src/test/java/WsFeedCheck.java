@@ -135,21 +135,6 @@ public class WsFeedCheck {
       r.feed().stop();
     }
 
-    // ───── LBank: ping -> pong, depth
-    try (var srv = new MiniWsServer()) {
-      var r = rig("lbank", srv.url(), List.of("BTCUSDT"), 30000, 50);
-      srv.onText = (c, t) -> { if (t.contains("\"subscribe\"") && t.contains("btc_usdt")) {
-        c.text("{\"depth\":{\"asks\":[[101,2],[102,1]],\"bids\":[[99,1],[98.5,4]]},\"count\":100,\"type\":\"depth\",\"pair\":\"btc_usdt\",\"SERVER\":\"V2\",\"TS\":\"2024-01-01T00:00:00.000\"}");
-        c.text("{\"action\":\"ping\",\"ping\":\"abc-123\"}");
-      }};
-      r.feed().start();
-      var b = r.market().book("BTCUSDT");
-      ck("lbank book", await(() -> near(b.bestBid(), 99) && near(b.bestAsk(), 101), 5000));
-      ck("lbank pong", await(() -> srv.received.contains("{\"action\":\"pong\",\"pong\":\"abc-123\"}"), 3000));
-      ck("lbank subscribe", srv.received.stream().anyMatch(t -> t.contains("\"depth\":\"100\"") && t.contains("\"pair\":\"btc_usdt\"")));
-      r.feed().stop();
-    }
-
     // ───── Hyperliquid
     try (var srv = new MiniWsServer()) {
       var r = rig("hyperliquid", srv.url(), List.of("BTCUSDC"), 30000, 50);
@@ -252,9 +237,8 @@ public class WsFeedCheck {
     // ───── каталог/диалекты
     ck("mexc has no ws dialect", WsDialects.forExchange("mexc").isEmpty());
     ck("binance no generic ws dialect", WsDialects.forExchange("binance").isEmpty());
-    for (String id : List.of("okx","gate","bingx","lbank","hyperliquid","dydx")) ck("dialect "+id, WsDialects.forExchange(id).isPresent());
+    for (String id : List.of("okx","gate","bingx","hyperliquid","dydx")) ck("dialect "+id, WsDialects.forExchange(id).isPresent());
     ck("okx venue", WsDialects.forExchange("okx").get().venueSymbol("BTCUSDT").equals("BTC-USDT"));
-    ck("lbank venue lower", WsDialects.forExchange("lbank").get().venueSymbol("BTCUSDT").equals("btc_usdt"));
     ck("hl venue", WsDialects.forExchange("hyperliquid").get().venueSymbol("BTCUSDC").equals("BTC"));
     ck("dydx venue", WsDialects.forExchange("dydx").get().venueSymbol("BTCUSD").equals("BTC-USD"));
     var okxSub = WsDialects.forExchange("okx").get().subscribe(java.util.stream.IntStream.range(0, 45).mapToObj(i -> "A" + i + "-USDT").toList(), 20);

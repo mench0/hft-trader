@@ -1,5 +1,5 @@
 import com.hft.config.*;
-import com.hft.exchange.lbank.LbankRestClient;
+import com.hft.exchange.gate.GateRestClient;
 import com.hft.rest.SignedCexClient;
 import com.hft.store.SymbolFilters;
 import com.hft.util.BoundedMap;
@@ -16,7 +16,7 @@ public class MemoryBoundsCheck {
     for (int i = 0; i < 10_000; i++) m.put(i, i);
     ck("BoundedMap keeps last N", m.size() == 100 && m.containsKey(9_999) && !m.containsKey(9_899));
 
-    var c = new LbankRestClient(new ExchangeConfig("lbank", false, "http://127.0.0.1:9", "", 5000, List.of("BTCUSDT"), 20, 100),
+    var c = new GateRestClient(new ExchangeConfig("gate", false, "http://127.0.0.1:9", "", 5000, List.of("BTCUSDT"), 20, 100),
         new Credentials("KEY", "SECRET"), new SymbolFilters());
     Method reg = SignedCexClient.class.getDeclaredMethod("registerId", String.class); reg.setAccessible(true);
     Method ven = SignedCexClient.class.getDeclaredMethod("venueId", long.class); ven.setAccessible(true);

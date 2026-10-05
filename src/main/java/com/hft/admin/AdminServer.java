@@ -113,6 +113,9 @@ public final class AdminServer {
         // Метрики для Grafana (через Prometheus как data source)
         route("/metrics", this::handleMetrics);
 
+        // Встроенная веб-панель (без токена: страница статична, токен вводится в ней)
+        server.createContext("/", this::handleUi);
+
         server.start();
         log.info("Админка запущена на порту {}{}", config.adminPort(),
                 config.adminToken().isBlank() ? " (без токена)" : " (с токеном)");
@@ -152,7 +155,27 @@ public final class AdminServer {
     private void setCors(HttpExchange ex) {
         ex.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
         ex.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-        ex.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type, X-Admin-Token");
+        ex.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type, X-Admin-Token, Authorization");
+    }
+
+    /** GET / и /admin — встроенная веб-панель из ресурсов admin/index.html; прочие пути — 404. */
+    private void handleUi(HttpExchange ex) throws IOException {
+        try (ex) {
+            String path = ex.getRequestURI().getPath();
+            byte[] page = path.equals("/") || path.equals("/admin") || path.equals("/admin/") ? uiPage() : null;
+            if (page == null) { send(ex, 404, error("Нет такого пути: " + path)); return; }
+            ex.getResponseHeaders().set("Content-Type", "text/html; charset=utf-8");
+            ex.getResponseHeaders().set("Cache-Control", "no-cache");
+            ex.sendResponseHeaders(200, page.length);
+            try (OutputStream os = ex.getResponseBody()) { os.write(page); }
+        }
+    }
+
+    /** Страница панели из classpath; нет ресурса — null. */
+    private static byte[] uiPage() throws IOException {
+        try (var in = AdminServer.class.getResourceAsStream("/admin/index.html")) {
+            return in == null ? null : in.readAllBytes();
+        }
     }
 
     /** Обработчик одного эндпоинта. */

@@ -160,9 +160,8 @@ mvn clean package
 ```
 
 Бот стартует в **режиме настройки** — никакая биржа ещё не подключена.
-Дальше всё управление идёт через HTTP API (см. ниже) или через отдельный
-проект [hft-admin-panel](../hft-admin-panel) — готовую веб-панель поверх
-этого же API.
+Дальше всё управление идёт через встроенную веб-админку
+(**http://localhost:8080/**, см. раздел «Веб-админка») или напрямую через HTTP API (см. ниже).
 
 Минимальный путь через curl:
 
@@ -185,11 +184,32 @@ curl -X POST "localhost:8080/trading/start?exchange=binance"
 будет собирать рыночные данные — они публичные. Не будет работать только
 отправка ордеров.
 
+## Веб-админка
+
+Встроена в бота и открывается на том же порту, что и API: `http://<сервер>:8080/` (или `/admin`).
+Это одна статическая страница (`src/main/resources/admin/index.html`), собирается в jar, отдельный
+проект и сборка фронтенда не нужны. Страница отдаётся без токена — в ней нет данных; все запросы к API
+она делает с токеном, который вводится в поле `ADMIN_TOKEN` в шапке (хранится в localStorage браузера).
+
+| Вкладка | Что делает | Эндпоинты |
+|---|---|---|
+| Обзор | поднять/остановить соединения, торговля вкл/выкл (везде или по бирже), PANIC, автостарт; состояние выбранных бирж (связь, PnL, отказы риска, kill switch) и статистика запросов | `/control/*`, `/trading/*`, `/status`, `/exchanges/request-stats` |
+| Биржи | каталог бирж с типом, адаптером, комиссиями и лимитами; выбрать биржу с символами, добавить/убрать символ, убрать биржу | `/exchanges/catalog`, `/control/select`, `/control/symbols`, `/control/deselect` |
+| Параметры | форма по схеме параметров выбранной биржи (границы, значение по умолчанию, ⟳ — нужен перезапуск); сохраняются только изменённые поля | `/exchange/params/schema`, `/exchange/params` |
+| Рынок | верх стакана, спред, дисбаланс, z-score по символам; балансы; состояние стратегий | `/market`, `/balances`, `/strategies` |
+| Ордера | ручной ордер (MARKET/LIMIT, количество, доля или весь баланс), отмена всех ордеров символа | `/order`, `/cancel-all` |
+| Подбор | результат подбора тикеров по стратегиям, статус источников бирж, пересчёт, «в выбор» одной кнопкой | `/discovery`, `/discovery/refresh` |
+| Настройки | настройки процесса по схеме | `/settings` |
+
+Опасные действия (включение торговли, PANIC, ручной ордер, остановка) спрашивают подтверждение.
+Данные обновляются каждые 3 с (флажок «автообновление»); вкладки с формами сами не перерисовываются.
+Не открывайте порт админки в интернет: доступ — через SSH-туннель или VPN, и обязательно с `ADMIN_TOKEN`.
+
 ## Управление на сервере — полный список эндпоинтов
 
 Админка на порту 8080. Если задан `ADMIN_TOKEN`, добавляйте заголовок
-`X-Admin-Token`. CORS открыт для всех источников — так отдельная веб-панель
-может обращаться к боту с любого домена.
+`X-Admin-Token` (или `Authorization: Bearer <токен>`). CORS открыт для всех источников —
+к API можно обращаться и из внешней панели на другом домене.
 
 ### Выбор бирж и тикеров (до старта)
 
@@ -246,7 +266,7 @@ curl localhost:8080/exchange/params/schema                 # описание в
 
 **Testnet.** Параметр `testnet` (по умолчанию `true`, если у биржи есть тестовая сеть) переключает
 REST и WebSocket на тестовые адреса: Binance, Bybit, OKX (демо-торговля), Gate, Hyperliquid, dYdX, Aster.
-У KuCoin, MEXC, BingX и LBank тестовой сети нет — для них `testnet=true` отклоняется. Для Uniswap
+У KuCoin, MEXC и BingX тестовой сети нет — для них `testnet=true` отклоняется. Для Uniswap
 тестовая сеть задаётся адресом RPC (`restUrl`). Свои адреса — параметры `restUrl` и `wsUrl`.
 
 **Настройки процесса** (не биржи): `GET/POST /settings` — интервалы фоновых задач, доля лимита
@@ -348,8 +368,8 @@ curl -X POST "localhost:8080/cancel-all?exchange=binance&symbol=BTCUSDT"
 Всё, что настраивается через API — выбор бирж и тикеров, торговые параметры
 каждой биржи — сохраняется в **SQLite** (`data/state.db`) после каждого
 изменения и читается автоматически при следующем запуске. В `application.yml`
-остаются только порт и токен админки и адреса бирж (`testnet`, `rest-url`,
-`ws-url`, `recv-window-ms`).
+остаются только включение, порт и токен админки; адреса бирж (`testnet`, `restUrl`,
+`wsUrl`, `recvWindowMs`) — параметры биржи в админке.
 
 Почему SQLite, а не самодельный JSON-файл:
 - атомарность транзакций обеспечивает сама СУБД (UPSERT в одной транзакции),
@@ -514,7 +534,7 @@ public final class MyStrategy extends Strategy {
 
 ## Биржи из каталога (paper-режим, формат API не проверен)
 
-`GET /exchanges/catalog` — список: Binance, Bybit (полные адаптеры), OKX, MEXC, Gate, BingX, LBank,
+`GET /exchanges/catalog` — список: Binance, Bybit (полные адаптеры), OKX, MEXC, Gate, BingX, KuCoin, Aster,
 Hyperliquid, dYdX, Uniswap V2-пулы (PAPER_BLIND), PancakeSwap/Raydium/Orca (пока не реализованы).
 PAPER_BLIND = живой стакан через REST-опрос + бумажные ордера; реальных ордеров отправить нельзя.
 Форматы ответов взяты из документации по памяти и не сверялись с живыми API — сначала прогоните
@@ -527,7 +547,7 @@ PAPER_BLIND = живой стакан через REST-опрос + бумажн�
 | Биржа | Класс биржи | REST-клиент | Режим |
 |---|---|---|---|
 | Binance, Bybit | BinanceExchange, BybitExchange | свои клиенты + WS | LIVE (проверено раньше только чтением) |
-| OKX, MEXC, Gate, BingX, LBank | OkxExchange, MexcExchange, GateExchange, BingxExchange, LbankExchange | OkxRestClient, MexcRestClient, GateRestClient, BingxRestClient, LbankRestClient (общий скелет SignedCexClient) | PAPER по умолчанию, LIVE не проверен |
+| OKX, MEXC, Gate, BingX, KuCoin, Aster | SignedCexExchange (общий класс, биржа задаётся клиентом в ExchangeFactory) | OkxRestClient, MexcRestClient, GateRestClient, BingxRestClient, KucoinRestClient, AsterRestClient (общий скелет SignedCexClient) | PAPER по умолчанию, LIVE не проверен |
 | Hyperliquid, Uniswap V2 | HyperliquidExchange, UniswapV2Exchange | HyperliquidRestClient (EIP-712 через web3j), UniswapV2Client (свопы через Router02) | PAPER по умолчанию, LIVE не проверен и не собирался с настоящим web3j |
 | dYdX v4 | PaperExchange | нет (нужны Cosmos-транзакции и сгенерированные protobuf-классы) | только PAPER |
 
@@ -544,7 +564,7 @@ LIVE для OKX/MEXC/Gate/BingX включается двумя условиям
 
 ## WebSocket-стаканы для остальных бирж
 
-OKX, Gate, BingX, LBank, Hyperliquid и dYdX получают стакан по WebSocket (`WsBookFeed`, WebSocket из JDK,
+OKX, Gate, BingX, Hyperliquid и dYdX получают стакан по WebSocket (`WsBookFeed`, WebSocket из JDK,
 без Netty). Форматы подписок и сообщений описаны в `WsDialects` и записаны **по памяти** — против живых
 серверов они не проверялись (сеть сборки закрыта). Перед реальными деньгами запустите бота в paper-режиме
 и убедитесь по `/exchanges/request-stats`, что `ws.messages` и `ws.bookUpdates` растут, а `parseErrors` = 0.
@@ -570,7 +590,7 @@ OKX, Gate, BingX, LBank, Hyperliquid и dYdX получают стакан по 
 | Gate | WS | WS API (`spot.order_place` и др.) | WS `spot.orders` | WS `spot.balances` | правила |
 | Hyperliquid | WS | WS `post` | WS `orderUpdates`, `userFills` | info по WS `post` | — (REST только запасной) |
 | Uniswap V2 | WS-RPC: `eth_subscribe` на `Sync` + первый `eth_call` | JSON-RPC по сокету ноды | чтение по сокету | `eth_call` по сокету | HTTP — запасной |
-| BingX, LBank | WS | REST (торгового WS нет) | REST | REST | всё приватное |
+| BingX | WS | REST (торгового WS нет) | REST | REST | всё приватное |
 | MEXC | REST (WS отдаёт protobuf) | REST | REST | REST | всё |
 | dYdX | WS | только paper (нужен Cosmos RPC) | — | — | — |
 
@@ -589,14 +609,14 @@ OKX, Gate, BingX, LBank, Hyperliquid и dYdX получают стакан по 
 
 ## Устройство классов бирж
 
-`OkxExchange`, `GateExchange`, `HyperliquidExchange`, `MexcExchange`, `BingxExchange`, `LbankExchange`, `UniswapV2Exchange`
+`SignedCexExchange` (OKX, Gate, MEXC, BingX, KuCoin, Aster, Hyperliquid, Uniswap V2 — отличаются только REST-клиентом из `ExchangeFactory`)
 и `PaperExchange` (dYdX) собраны так же, как `BybitExchange`: свои `MarketDataStore`, `BalanceStore`, `SymbolFilters`,
 REST-клиент, `RiskManager`, `OrderService`, конвейер `TickPipeline` (Disruptor) и фид, явные `start()`/`stop()`.
 Общие мелочи (режим LIVE/PAPER, стартовый бумажный баланс, сборка WS+REST-фида, остановка при потере данных) — в `ExchangeSupport`.
 `start()` в LIVE: поднять WS-каналы → загрузить правила (без них старт падает) → баланс → конвейер → фид.
 
 По документации WS-торговли нет у MEXC (ордера только `POST/DELETE /api/v3/order`) и в документации BingX; у обеих есть
-только приватные потоки через `listenKey` (получается по REST). Если у вас есть ссылки на WS-эндпоинты ордеров этих бирж или LBank —
+только приватные потоки через `listenKey` (получается по REST). Если у вас есть ссылки на WS-эндпоинты ордеров этих бирж —
 пришлите, добавлю по ним.
 
 ## Производительность: что исправлено
@@ -610,7 +630,7 @@ REST-клиент, `RiskManager`, `OrderService`, конвейер `TickPipeline
 | REST-запас включался через 5 с по таймеру; стратегия торговала по опросу | Переключение по событию от WS, ожидание 2 с; пока данные с опроса — новых входов нет (`isRealtime=false`), выходы разрешены |
 | Один лимитер на ордера и фоновые запросы; отказ лимитера «съедал» слот | Ордера и фон (балансы, статусы, правила) — разные лимитеры; при отказе слот не занимается |
 
-Что осталось по природе: Uniswap — цена раз в блок (~12 с) и газ; у MEXC, BingX, LBank ордера только по REST.
+Что осталось по природе: Uniswap — цена раз в блок (~12 с) и газ; у MEXC и BingX ордера только по REST.
 
 ## Подбор тикеров под стратегии
 
@@ -629,3 +649,9 @@ REST-клиент, `RiskManager`, `OrderService`, конвейер `TickPipeline
 пауза 2 мин после 429/418/403. Сводки и свечи берутся по REST: это редкий снимок, а не поток.
 Биржи — `discoveryExchanges` (по умолчанию все), котировки — `discoveryQuotes` (USDT,USDC,USD); все пороги — в `GET /settings`.
 Форматы публичных API записаны по памяти и проверены только на фейковом сервере; ошибка одной биржи видна в статусе и не мешает остальным.
+
+## История изменений
+
+- **2026-10:** биржа LBank удалена целиком (клиент, диалекты REST/WS, источник подбора тикеров, лимиты, каталог, тесты):
+  низкая ликвидность и непроверенная схема подписи. Выбор `exchange=lbank` теперь отклоняется.
+- **2026-10:** встроенная веб-админка на `/` вместо отдельного проекта hft-admin-panel.

@@ -26,8 +26,6 @@ public class PaperExchangeCheck {
     ck("gate", gate.tsMs()==123 && gate.ap()[0]==5);
     var bx = Dialects.forExchange("bingx").parse("{\"code\":0,\"data\":{\"bids\":[[\"4\",\"1\"],[\"4.1\",\"1\"]],\"asks\":[[\"6\",\"1\"],[\"5\",\"1\"]],\"ts\":9}}","ETHUSDT");
     ck("bingx sort", bx.bp()[0]==4.1 && bx.ap()[0]==5);
-    var lb = Dialects.forExchange("lbank").parse("{\"result\":\"true\",\"data\":{\"asks\":[[\"5\",\"1\"]],\"bids\":[[\"4\",\"1\"]],\"timestamp\":7}}","ETHUSDT");
-    ck("lbank", lb.tsMs()==7);
     var hl = Dialects.forExchange("hyperliquid").parse("{\"coin\":\"BTC\",\"time\":5,\"levels\":[[{\"px\":\"99\",\"sz\":\"1\",\"n\":1}],[{\"px\":\"100\",\"sz\":\"2\",\"n\":1}]]}","BTCUSDC");
     ck("hl", hl.bp()[0]==99 && hl.aq()[0]==2);
     var dy = Dialects.forExchange("dydx").parse("{\"bids\":[{\"price\":\"99\",\"size\":\"1\"}],\"asks\":[{\"price\":\"100\",\"size\":\"1\"}]}","BTCUSD");

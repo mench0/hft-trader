@@ -60,9 +60,6 @@ public class PerfInternalsCheck {
     WsDialects.forExchange("okx").get().parse(okx.toCharArray(), okx.length(), b);
     ck("okx stream parse", "BTC-USDT".equals(b.venue) && !b.snapshot && b.an == 1 && b.ap[0] == 101.5 && b.bn == 1 && b.bq[0] == 0 && b.tsMs == 1700000000123L);
     ck("venue string reused (no alloc)", b.venue == "BTC-USDT");
-    String lbank = "{\"depth\":{\"asks\":[[101,2]],\"bids\":[[99.5,1.25]]},\"count\":100,\"type\":\"depth\",\"pair\":\"btc_usdt\",\"SERVER\":\"V2\"}";
-    WsDialects.forExchange("lbank").get().parse(lbank.toCharArray(), lbank.length(), b);
-    ck("lbank numeric levels", b.snapshot && b.bp[0] == 99.5 && b.bq[0] == 1.25 && b.ap[0] == 101);
     String hl = "{\"channel\":\"l2Book\",\"data\":{\"coin\":\"BTC\",\"time\":5,\"levels\":[[{\"px\":\"99\",\"sz\":\"1.5\",\"n\":2}],[{\"px\":\"100\",\"sz\":\"2\",\"n\":1}]]}}";
     WsDialects.forExchange("hyperliquid").get().parse(hl.toCharArray(), hl.length(), b);
     ck("hyperliquid objects px/sz", b.venue == "BTC" && b.bq[0] == 1.5 && b.aq[0] == 2 && b.tsMs == 5);
