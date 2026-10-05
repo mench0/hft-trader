@@ -40,6 +40,17 @@ public interface WsDialect {
     /** Бинарные сообщения (например, gzip у BingX) -> текст. */
     default String decodeBinary(byte[] data) throws Exception { return new String(data, StandardCharsets.UTF_8); }
 
+    /** Бинарные кадры разбираются самим диалектом ({@link #parseBinary}), а не через decodeBinary + parse (protobuf у MEXC). */
+    default boolean parsesBinary() { return false; }
+
+    /**
+     * Разбор бинарного кадра прямо в out (как {@link #parse}); вызывается, только если {@link #parsesBinary()}.
+     * Возвращает ответ, который нужно отправить немедленно, или null.
+     */
+    default String parseBinary(byte[] data, int len, BookBatch out) throws Exception {
+        throw new UnsupportedOperationException("диалект не разбирает бинарные кадры");
+    }
+
     /**
      * Потоковый разбор сообщения из буфера символов (без промежуточного дерева JSON).
      * Если это стакан — заполняет out (venue, snapshot, уровни; объём 0 = убрать уровень).

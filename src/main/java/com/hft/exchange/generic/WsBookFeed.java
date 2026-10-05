@@ -325,10 +325,13 @@ public final class WsBookFeed implements BookFeed {
     // ───────────────────────── обработка сообщений (поток чтения WS) ─────────────────────────
 
     /** Разобрать сообщение; ответ (pong) отправить сразу; стакан — применить. */
-    private void handle(WebSocket w, char[] buf, int len, BookBatch batch) {
+    private void handle(WebSocket w, char[] buf, int len, BookBatch batch) { handle(w, buf, len, null, batch); }
+
+    /** Разобрать текст (buf) или бинарный кадр (bin, если диалект разбирает их сам). */
+    private void handle(WebSocket w, char[] buf, int len, byte[] bin, BookBatch batch) {
         messages.incrementAndGet();
         try {
-            String reply = dialect.parse(buf, len, batch);
+            String reply = bin != null ? dialect.parseBinary(bin, bin.length, batch) : dialect.parse(buf, len, batch);
             if (reply != null) { WsSender snd = sender; if (snd != null) snd.send(reply); }
             if (batch.venue != null) apply(w, batch);
             parseErrorsInRow = 0;
@@ -422,6 +425,7 @@ public final class WsBookFeed implements BookFeed {
                 byte[] bytes = new byte[bin.remaining()];
                 bin.get(bytes);
                 bin = ByteBuffer.allocate(0);
+                if (dialect.parsesBinary()) { handle(w, null, 0, bytes, batch); w.request(1); return null; }
                 try {
                     len = 0;
                     append(dialect.decodeBinary(bytes));

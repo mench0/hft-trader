@@ -590,7 +590,7 @@ LIVE для OKX/MEXC/Gate/BingX включается двумя условиям
 
 ## WebSocket-стаканы для остальных бирж
 
-OKX, Gate, BingX, Hyperliquid и dYdX получают стакан по WebSocket (`WsBookFeed`, WebSocket из JDK,
+OKX, Gate, BingX, KuCoin, Aster, MEXC, Hyperliquid и dYdX получают стакан по WebSocket (`WsBookFeed`, WebSocket из JDK,
 без Netty). Форматы подписок и сообщений описаны в `WsDialects` и записаны **по памяти** — против живых
 серверов они не проверялись (сеть сборки закрыта). Перед реальными деньгами запустите бота в paper-режиме
 и убедитесь по `/exchanges/request-stats`, что `ws.messages` и `ws.bookUpdates` растут, а `parseErrors` = 0.
@@ -601,8 +601,9 @@ OKX, Gate, BingX, Hyperliquid и dYdX получают стакан по WebSock
 - Переподключение: пауза 0.5 с × 2ⁿ (до 30 с), повторная подписка, свежий снимок; тишина дольше порога или
   5 ошибок разбора подряд — тоже переподключение.
 - Перекрещённый стакан (bid ≥ ask) не публикуется.
-- MEXC остаётся на REST-опросе: его спотовый WS — protobuf.
-- Ордера по WS не отправляются (как и у Binance): только REST. Приватные каналы (исполнения, балансы) не реализованы.
+- MEXC: канал `spot@public.limit.depth.v3.api.pb@<символ>@<5|10|20>`, кадры в protobuf разбирает свой декодер
+  (`MexcWsDialect`, без библиотеки); не больше 30 символов на соединение, остальные — без WS-стакана.
+- Ордера и приватные потоки — см. следующий раздел.
 - Свой адрес WS: `<ID>_WS_URL`.
 
 ## Что идёт по WebSocket, а что по REST/RPC
@@ -611,26 +612,30 @@ OKX, Gate, BingX, Hyperliquid и dYdX получают стакан по WebSock
 
 | Биржа | Стакан | Ордера/отмены | Исполнения | Баланс | Остаётся на REST |
 |---|---|---|---|---|---|
-| Binance, Bybit | WS | REST | — | REST | ордера, баланс |
+| Binance | WS | WS API (`order.place`, `order.cancel`, `openOrders.cancelAll`, `order.status`) | WS `executionReport` (`userDataStream.subscribe.signature`) | WS `outboundAccountPosition` | правила, время, баланс на старте |
+| Bybit | WS | WS `/v5/trade` (`order.create`, `order.cancel`); отмена всех — REST | WS `/v5/private` `order` | WS `wallet` | правила, отмена всех, баланс на старте |
+| KuCoin | WS | WS API `wsapi.kucoin.com` (`spot.order`, `spot.cancel`); отмена всех — REST | WS `/spotMarket/tradeOrdersV2` (bullet-private) | WS `/account/balance` | правила, отмена всех, баланс на старте |
 | OKX | WS | WS (`order`, `cancel-order`, `batch-cancel-orders`) | WS `orders` | WS `account` | правила (`instruments`), список открытых ордеров на старте |
 | Gate | WS | WS API (`spot.order_place` и др.) | WS `spot.orders` | WS `spot.balances` | правила |
 | Hyperliquid | WS | WS `post` | WS `orderUpdates`, `userFills` | info по WS `post` | — (REST только запасной) |
 | Uniswap V2 | WS-RPC: `eth_subscribe` на `Sync` + первый `eth_call` | JSON-RPC по сокету ноды | чтение по сокету | `eth_call` по сокету | HTTP — запасной |
-| BingX | WS | REST (торгового WS нет) | REST | REST | всё приватное |
-| MEXC | REST (WS отдаёт protobuf) | REST | REST | REST | всё |
+| Aster | WS | REST (WS-ордеров нет) | WS `executionReport` (listenKey) | WS `outboundAccountPosition` | ордера |
+| BingX | WS | REST (WS-ордеров нет) | WS `spot.executionReport` (listenKey, gzip) | REST | ордера, баланс |
+| MEXC | WS (protobuf) | REST (WS-ордеров нет) | REST | REST | ордера, исполнения, баланс (приватный поток MEXC — тоже protobuf, не реализован) |
 | dYdX | WS | только paper (нужен Cosmos RPC) | — | — | — |
 
 Безопасность ордеров по WS (`WsRpcChannel`):
 - сокет не готов (нет соединения/логина) — запрос не отправлялся, идём в REST;
 - запрос ушёл, ответа нет — исход неизвестен, вслепую не повторяем:
-  OKX и Gate выясняют судьбу ордера по `clOrdId`/`text` через REST; Hyperliquid повторяет **тот же подписанный запрос с тем же nonce**
+  OKX, Gate, Binance (`origClientOrderId`), Bybit (`orderLinkId`) и KuCoin (`clientOid`) выясняют судьбу ордера через REST; Hyperliquid повторяет **тот же подписанный запрос с тем же nonce**
   (биржа дубликат не исполнит); JSON-RPC повторяется по HTTP (чтения идемпотентны, `eth_sendRawTransaction` с тем же raw даёт тот же хеш);
 - бизнес-ошибка биржи по WS — это ответ, а не сбой: на REST не уходим;
 - пять неверных логинов подряд отключают WS-канал (остаётся REST);
 - отключить WS-торговлю: параметр биржи `wsTrade=false`.
 
 Лимиты: ордера по WS идут через тот же `PacedLimiter`, что и REST; баланс, пришедший по сокету, сверяется с REST раз в 5 минут.
-Форматы приватных WS-сообщений (особенно Gate и Hyperliquid `post`) записаны по памяти и не проверялись на живых биржах:
+Форматы приватных WS-сообщений взяты из документации бирж и не проверялись на живых биржах (сеть сборки закрыта), только
+тестами на поддельном сервере (`BinanceWsCheck`, `BybitWsCheck`, `KucoinWsCheck`, `MexcWsCheck`, `UserStreamCheck`, `WsTradeCheck`):
 на первом запуске смотрите `/exchanges/request-stats` — поля `ws.ready`, `ws.parseErrors`, `ws.lastError`, `wsFallbacks`.
 
 ## Устройство классов бирж
@@ -641,9 +646,10 @@ REST-клиент, `RiskManager`, `OrderService`, конвейер `TickPipeline
 Общие мелочи (режим LIVE/PAPER, стартовый бумажный баланс, сборка WS+REST-фида, остановка при потере данных) — в `ExchangeSupport`.
 `start()` в LIVE: поднять WS-каналы → загрузить правила (без них старт падает) → баланс → конвейер → фид.
 
-По документации WS-торговли нет у MEXC (ордера только `POST/DELETE /api/v3/order`) и в документации BingX; у обеих есть
-только приватные потоки через `listenKey` (получается по REST). Если у вас есть ссылки на WS-эндпоинты ордеров этих бирж —
-пришлите, добавлю по ним.
+WS-ордеров нет в документации MEXC, BingX и Aster — у них ордера по REST, а события аккаунта у BingX и Aster
+идут по приватному потоку через `listenKey` (`UserStream`: ключ по REST перед подключением, продление раз в 25 минут).
+У dYdX ордера — транзакции Cosmos, не WebSocket. KuCoin в режиме UTA торгует через `uta.order` — не поддерживается:
+для UTA-счёта задайте `wsTrade=false`.
 
 ## Производительность: что исправлено
 
@@ -656,7 +662,7 @@ REST-клиент, `RiskManager`, `OrderService`, конвейер `TickPipeline
 | REST-запас включался через 5 с по таймеру; стратегия торговала по опросу | Переключение по событию от WS, ожидание 2 с; пока данные с опроса — новых входов нет (`isRealtime=false`), выходы разрешены |
 | Один лимитер на ордера и фоновые запросы; отказ лимитера «съедал» слот | Ордера и фон (балансы, статусы, правила) — разные лимитеры; при отказе слот не занимается |
 
-Что осталось по природе: Uniswap — цена раз в блок (~12 с) и газ; у MEXC и BingX ордера только по REST.
+Что осталось по природе: Uniswap — цена раз в блок (~12 с) и газ; у MEXC, BingX и Aster ордера только по REST (WS-ордеров у этих бирж нет).
 
 ## Подбор тикеров под стратегии
 
@@ -681,3 +687,5 @@ REST-клиент, `RiskManager`, `OrderService`, конвейер `TickPipeline
 - **2026-10:** биржа LBank удалена целиком (клиент, диалекты REST/WS, источник подбора тикеров, лимиты, каталог, тесты):
   низкая ликвидность и непроверенная схема подписи. Выбор `exchange=lbank` теперь отклоняется.
 - **2026-10:** веб-админка — отдельный проект `hft-admin-panel`, бот только отдаёт API.
+- **2026-10:** торговля по WebSocket у Binance, Bybit и KuCoin; приватные потоки у Binance, Bybit, KuCoin, BingX и Aster;
+  стакан MEXC по WebSocket (protobuf). REST везде остаётся запасным каналом.

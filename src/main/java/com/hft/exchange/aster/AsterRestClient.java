@@ -11,6 +11,8 @@ import com.hft.model.OrderEnums.Type;
 import com.hft.model.OrderResult;
 import com.hft.rest.ApiException;
 import com.hft.rest.SignedCexClient;
+import com.hft.rest.UserStream;
+import com.hft.rest.WsRpcChannel;
 import com.hft.store.BalanceStore;
 import com.hft.store.SymbolFilters;
 import org.slf4j.Logger;
@@ -33,6 +35,9 @@ import java.util.concurrent.atomic.AtomicLong;
  * монотонно), user и signer; строка параметров подписывается как EIP-712 Message{string msg}
  * с доменом AsterSignTransaction / "1" / chainId 1666 (testnet 714) / нулевой контракт;
  * подпись 0x r‖s‖v добавляется параметром signature.
+ *
+ * Ордера — только REST (WS-ордеров у Aster нет). Исполнения и баланс в LIVE приходят по приватному
+ * потоку (listenKey, события executionReport и outboundAccountPosition в формате Binance), см. {@link UserStream}.
  */
 public final class AsterRestClient extends SignedCexClient {
 
@@ -170,6 +175,8 @@ public final class AsterRestClient extends SignedCexClient {
     /** Статус ордера: из WS-потока, если есть, иначе запрос к бирже. */
     @Override
     public OrderResult orderStatus(String symbol, long orderId) throws Exception {
+        OrderResult st = streamed.get(orderId);
+        if (st != null && wsReady() && !"NEW".equals(st.status()) && !"PARTIALLY_FILLED".equals(st.status())) return st;
         Map<String, String> p = params();
         p.put("symbol", symbol.toUpperCase());
         p.put("orderId", venueId(orderId));
@@ -253,5 +260,71 @@ public final class AsterRestClient extends SignedCexClient {
             if (free > 0 || locked > 0) store.set(b.path("asset").asText(), free, locked);
         }
         store.markSynced();
+    }
+
+    // ------------------------------------------------------------ приватный поток (listenKey)
+
+    /** Поток событий аккаунта; null — только REST. */
+    private volatile UserStream userStream;
+    /** Свой адрес потока без ключа (тесты, прокси). */
+    private volatile String userStreamBase;
+    /** Куда пишутся балансы из потока. */
+    private volatile BalanceStore streamBalances;
+    /** Баланс хотя бы раз пришёл по WS. */
+    private volatile boolean accountSeen;
+
+    /** Свой адрес потока, к которому дописывается listenKey (тесты, прокси). */
+    public void setUserStreamBase(String base) { this.userStreamBase = base; }
+
+    /** Поднять приватный поток: исполнения и балансы. Без ключей или при wsTrade=false — всё по REST. */
+    @Override
+    public void startStreams(BalanceStore store) {
+        if (!credentials.isPresent() || !wsTradeAllowed() || userStream != null) return;
+        streamBalances = store;
+        String base = userStreamBase != null ? userStreamBase
+                : config.testnet() ? "wss://sstream.asterdex-testnet.com/ws/" : "wss://sstream.asterdex.com/ws/";
+        UserStream us = new UserStream("aster", new UserStream.Api() {
+            @Override public String newListenKey() throws Exception { return signed("POST", "/listenKey", params(), false).path("listenKey").asText(); }
+            @Override public void keepAlive(String key) throws Exception { var p = params(); p.put("listenKey", key); signed("PUT", "/listenKey", p, false); }
+            @Override public String url(String key) { return base + key; }
+            @Override public WsRpcChannel.Msg parse(String text) throws Exception {
+                return text.contains("\"e\"") ? WsRpcChannel.Msg.event(text) : WsRpcChannel.Msg.ignore();
+            }
+        }, this::onUserEvent);
+        userStream = us;
+        wsChannel = us.channel();                 // готовность и метрики — как у WS-канала
+        us.start();
+    }
+
+    /** Остановить поток. */
+    @Override
+    public void stopStreams() {
+        UserStream us = userStream;
+        if (us != null) us.stop();
+        userStream = null;
+        wsChannel = null;
+    }
+
+    /** Баланс приходит по WS и актуален. */
+    @Override
+    public boolean balancesStreamed() { return wsReady() && accountSeen; }
+
+    /** executionReport — состояние ордера; outboundAccountPosition — балансы. */
+    private void onUserEvent(String text) throws Exception {
+        JsonNode e = mapper.readTree(text);
+        switch (e.path("e").asText()) {
+            case "executionReport" -> {
+                long id = registerId(e.path("i").asText());
+                streamed.put(id, UserStream.executionReport(e, id, e.path("s").asText()));
+            }
+            case "outboundAccountPosition" -> {
+                BalanceStore store = streamBalances;
+                if (store == null) return;
+                for (JsonNode b : e.path("B")) store.set(b.path("a").asText(), b.path("f").asDouble(), b.path("l").asDouble());
+                store.markSynced();
+                accountSeen = true;
+            }
+            default -> { }
+        }
     }
 }

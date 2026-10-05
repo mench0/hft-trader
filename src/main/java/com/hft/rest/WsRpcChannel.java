@@ -47,6 +47,8 @@ public final class WsRpcChannel {
         public static Msg reply(String id, String text) { return new Msg(Kind.REPLY, id, text, null); }
         /** Событие (ордера, исполнения, баланс). */
         public static Msg event(String text) { return new Msg(Kind.EVENT, null, text, null); }
+        /** Служебное сообщение, на которое надо сразу ответить (pong, подпись приветствия). */
+        public static Msg answer(String reply) { return new Msg(Kind.IGNORE, null, null, reply); }
     }
 
     /** Протокол биржи: адрес, логин, подписки, пинг, разбор. */
@@ -55,6 +57,11 @@ public final class WsRpcChannel {
         String url();
         /** Сообщения логина сразу после подключения; пусто — логина нет. */
         List<String> login() throws Exception;
+        /**
+         * Логин начинает сервер (KuCoin: приветствие, на которое клиент отвечает подписью через Msg.reply).
+         * Тогда при пустом {@link #login()} канал ждёт LOGIN_OK от parse, а не считает себя залогиненным сразу.
+         */
+        default boolean serverInitiatedLogin() { return false; }
         /** Подписки на приватные потоки, после логина. */
         List<String> subscriptions() throws Exception;
         /** Разбор входящего. Исключение до логина = отказ в логине; после — просто ошибка в статистике. */
@@ -240,13 +247,12 @@ public final class WsRpcChannel {
         RateBudget.of(name).acquire(RateBudget.Kind.WS_CONNECT, 1, 60_000);   // лимит подключений на IP
         WebSocket w = http.newWebSocketBuilder().connectTimeout(Duration.ofSeconds(5))
                 .buildAsync(URI.create(protocol.url()), l).get(10, TimeUnit.SECONDS);
-        socket = w;
-        sender = new WsSender(w, 1000);
+        socket = w;                                   // очередь отправки создана в onOpen — до первого входящего сообщения
         lastFrameMs = System.currentTimeMillis();
         connected = true;
         try {
             List<String> login = protocol.login();
-            if (login.isEmpty()) afterLogin(w);
+            if (login.isEmpty()) { if (!protocol.serverInitiatedLogin()) afterLogin(w); }
             else for (String m : login) { RateBudget.of(name).acquire(RateBudget.Kind.WS_MESSAGE, 1, 60_000); sender.send(m); }
 
             long lastPing = System.currentTimeMillis();
@@ -335,7 +341,8 @@ public final class WsRpcChannel {
 
         Listener(CompletableFuture<Void> closed) { this.closed = closed; }
 
-        @Override public void onOpen(WebSocket w) { w.request(1); }
+        /** Очередь отправки — сразу при открытии: сервер может написать первым (KuCoin: приветствие), и ответ нужен немедленно. */
+        @Override public void onOpen(WebSocket w) { sender = new WsSender(w, 1000); w.request(1); }
 
         @Override public CompletionStage<?> onText(WebSocket w, CharSequence data, boolean last) {
             lastFrameMs = System.currentTimeMillis();

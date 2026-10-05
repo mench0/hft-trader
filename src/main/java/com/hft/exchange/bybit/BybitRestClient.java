@@ -2,6 +2,7 @@ package com.hft.exchange.bybit;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.hft.config.Credentials;
 import com.hft.config.ExchangeConfig;
 import com.hft.model.OrderEnums.Side;
@@ -11,6 +12,8 @@ import com.hft.model.OrderResult;
 import com.hft.rest.ExchangeOrderApi;
 import com.hft.rest.RateLimited;
 import com.hft.rest.RateBudget;
+import com.hft.rest.WsRpcChannel;
+import com.hft.store.BalanceStore;
 import com.hft.store.SymbolFilters;
 import com.hft.util.Numbers;
 import com.hft.util.Signer;
@@ -22,6 +25,8 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -35,6 +40,10 @@ import java.util.concurrent.atomic.AtomicLong;
  *   - объём в ордере называется qty, но для MARKET BUY на споте это
  *     сумма в котируемой валюте, а для MARKET SELL — объём в базовой
  *     (в отличие от Binance, где это выбирается параметром quoteOrderQty)
+ *
+ * В LIVE ордера и отмены идут по торговому WebSocket (/v5/trade), исполнения и баланс — по
+ * приватному (/v5/private), см. {@link BybitWs}; REST — запасной канал. Если WS-запрос ушёл,
+ * а ответа нет, ордер не повторяется вслепую: его судьба выясняется по orderLinkId через REST.
  */
 public final class BybitRestClient implements ExchangeOrderApi {
 
@@ -57,6 +66,16 @@ public final class BybitRestClient implements ExchangeOrderApi {
     private final SymbolFilters filters;
     /** Счётчик для orderLinkId. */
     private final AtomicLong clientOrderSeq = new AtomicLong(System.currentTimeMillis());
+    /** Подключение и параметры биржи. */
+    private final ExchangeConfig config;
+    /** WS-протоколы и состояние из потоков; null — только REST. */
+    private volatile BybitWs ws;
+    /** Торговый и приватный сокеты. */
+    private volatile WsRpcChannel tradeChannel, privateChannel;
+    /** Свои адреса сокетов (тесты, прокси). */
+    private volatile String tradeWsUrl, privateWsUrl;
+    /** WS не помог — запрос ушёл по REST. */
+    private final AtomicLong wsFallbacks = new AtomicLong();
 
     /**
      * @param config подключение и параметры биржи
@@ -64,6 +83,7 @@ public final class BybitRestClient implements ExchangeOrderApi {
      * @param filters правила символов
      */
     public BybitRestClient(ExchangeConfig config, Credentials credentials, SymbolFilters filters) {
+        this.config = config;
         this.baseUrl = config.restUrl();
         this.credentials = credentials;
         this.recvWindow = config.recvWindowMs();
@@ -123,8 +143,8 @@ public final class BybitRestClient implements ExchangeOrderApi {
         int count = 0;
         for (JsonNode account : list) {
             for (JsonNode coin : account.path("coin")) {
-                double free = coin.path("walletBalance").asDouble(0);
                 double locked = coin.path("locked").asDouble(0);
+                double free = Math.max(0, coin.path("walletBalance").asDouble(0) - locked);   // walletBalance включает заблокированное
                 if (free > 0 || locked > 0) {
                     store.set(coin.get("coin").asText(), free, locked);
                     count++;
@@ -179,34 +199,50 @@ public final class BybitRestClient implements ExchangeOrderApi {
 
         String clientOrderId = "hft" + clientOrderSeq.incrementAndGet();
 
-        StringBuilder body = new StringBuilder(200);
-        body.append('{')
-            .append("\"category\":\"spot\",")
-            .append("\"symbol\":\"").append(sym).append("\",")
-            .append("\"side\":\"").append(side == Side.BUY ? "Buy" : "Sell").append("\",")
-            .append("\"orderType\":\"").append(type == Type.LIMIT ? "Limit" : "Market").append("\",")
-            .append("\"qty\":\"").append(Numbers.plain(roundedQty, filters.quantityScale(sym))).append("\",")
-            .append("\"orderLinkId\":\"").append(clientOrderId).append("\"");
-
-        if (qtyIsQuote) {
-            body.append(",\"marketUnit\":\"quoteCoin\"");
-        }
+        ObjectNode body = mapper.createObjectNode()
+                .put("category", "spot")
+                .put("symbol", sym)
+                .put("side", side == Side.BUY ? "Buy" : "Sell")
+                .put("orderType", type == Type.LIMIT ? "Limit" : "Market")
+                .put("qty", Numbers.plain(roundedQty, filters.quantityScale(sym)))
+                .put("orderLinkId", clientOrderId);
+        // рыночная покупка на споте по умолчанию считается в котируемой валюте — единицу указываем явно
+        if (type == Type.MARKET) body.put("marketUnit", qtyIsQuote ? "quoteCoin" : "baseCoin");
         if (type == Type.LIMIT) {
             double roundedPrice = filters.roundPrice(sym, price);
-            body.append(",\"price\":\"").append(Numbers.plain(roundedPrice, filters.priceScale(sym))).append('"');
-            body.append(",\"timeInForce\":\"").append(bybitTif(tif)).append('"');
+            body.put("price", Numbers.plain(roundedPrice, filters.priceScale(sym)));
+            body.put("timeInForce", bybitTif(tif));
         }
-        body.append('}');
 
         long start = System.nanoTime();
-        JsonNode json = postSigned("/v5/order/create", body.toString());
+        JsonNode result;
+        try {
+            result = wsCall("order.create", body);                  // сначала WebSocket
+        } catch (WsRpcChannel.WsUnknownOutcomeException e) {
+            wsFallbacks.incrementAndGet();
+            log.warn("[bybit] исход ордера {} неизвестен ({}), проверяю по REST", clientOrderId, e.getMessage());
+            OrderResult st = statusByLinkId(sym, clientOrderId);
+            return new OrderResult(st.orderId(), clientOrderId, sym, side, st.status(),
+                    qtyIsQuote ? 0 : roundedQty, st.executedQty(), st.avgPrice(), System.nanoTime() - start);
+        }
+        if (result == null) result = postSigned("/v5/order/create", body.toString()).path("result");   // REST — если WS не готов
         long latency = System.nanoTime() - start;
-
-        JsonNode result = json.path("result");
         long orderId = result.path("orderId").asLong(0);
 
-        // Bybit не возвращает детали исполнения в ответе на создание —
-        // нужен отдельный запрос статуса, если требуется executedQty сразу
+        // ответ на создание не содержит исполнения: для рыночных/IOC/FOK ждём событие из приватного WS
+        boolean immediate = type == Type.MARKET || tif == TimeInForce.IOC || tif == TimeInForce.FOK;
+        BybitWs w = ws;
+        if (immediate && orderId != 0 && w != null && privateReady()) {
+            long until = System.currentTimeMillis() + config.params().marketFillWaitMs();
+            while (System.currentTimeMillis() < until) {
+                OrderResult st = w.streamed.get(orderId);
+                if (st != null && !"NEW".equals(st.status())) {
+                    return new OrderResult(orderId, clientOrderId, sym, side, st.status(),
+                            qtyIsQuote ? st.requestedQty() : roundedQty, st.executedQty(), st.avgPrice(), latency);
+                }
+                Thread.sleep(10);
+            }
+        }
         return new OrderResult(orderId, clientOrderId, sym, side, "NEW",
                 qtyIsQuote ? 0 : roundedQty, 0, 0, latency);
     }
@@ -224,10 +260,12 @@ public final class BybitRestClient implements ExchangeOrderApi {
     /** Отменить ордер. */
     public void cancelOrder(String symbol, long orderId) throws Exception {
         credentials.require();
-        String body = String.format(
-                "{\"category\":\"spot\",\"symbol\":\"%s\",\"orderId\":\"%d\"}",
-                symbol.toUpperCase(), orderId);
-        postSigned("/v5/order/cancel", body);
+        ObjectNode body = mapper.createObjectNode().put("category", "spot")
+                .put("symbol", symbol.toUpperCase()).put("orderId", Long.toString(orderId));
+        JsonNode r = null;
+        try { r = wsCall("order.cancel", body); }
+        catch (WsRpcChannel.WsUnknownOutcomeException e) { wsFallbacks.incrementAndGet(); }   // отмена идемпотентна — повторяем через REST
+        if (r == null) postSigned("/v5/order/cancel", body.toString());
         log.info("[bybit] Ордер {} по {} отменён", orderId, symbol);
     }
 
@@ -245,7 +283,21 @@ public final class BybitRestClient implements ExchangeOrderApi {
     /** Статус ордера: из WS-потока, если есть, иначе запрос к бирже. */
     public OrderResult orderStatus(String symbol, long orderId) throws Exception {
         credentials.require();
-        String query = "category=spot&symbol=" + symbol.toUpperCase() + "&orderId=" + orderId;
+        BybitWs w = ws;
+        if (w != null && privateReady()) {                     // итог из приватного потока — без запроса
+            OrderResult st = w.streamed.get(orderId);
+            if (st != null && !"NEW".equals(st.status()) && !"PARTIALLY_FILLED".equals(st.status())) return st;
+        }
+        return fromRealtime(symbol, orderId, "category=spot&symbol=" + symbol.toUpperCase() + "&orderId=" + orderId);
+    }
+
+    /** Статус ордера по нашему orderLinkId (после обрыва WS). */
+    private OrderResult statusByLinkId(String symbol, String linkId) throws Exception {
+        return fromRealtime(symbol, 0, "category=spot&symbol=" + symbol + "&orderLinkId=" + linkId);
+    }
+
+    /** Ордер из /v5/order/realtime. */
+    private OrderResult fromRealtime(String symbol, long orderId, String query) throws Exception {
         JsonNode json = getSigned("/v5/order/realtime", query);
         JsonNode order = json.path("result").path("list").get(0);
         if (order == null) throw new IllegalStateException("Ордер не найден");
@@ -256,20 +308,85 @@ public final class BybitRestClient implements ExchangeOrderApi {
         double execQty = order.path("cumExecQty").asDouble(0);
         double avgPrice = order.path("avgPrice").asDouble(0);
 
+        if (orderId == 0) orderId = order.path("orderId").asLong(0);
         return new OrderResult(orderId, order.path("orderLinkId").asText(""),
                 symbol.toUpperCase(), side, status, origQty, execQty, avgPrice, 0);
     }
 
     /** Статус Bybit в наш (NEW, PARTIALLY_FILLED, FILLED, CANCELED, REJECTED). */
-    private static String mapBybitStatus(String bybitStatus) {
-        return switch (bybitStatus) {
-            case "New" -> "NEW";
-            case "PartiallyFilled" -> "PARTIALLY_FILLED";
-            case "Filled" -> "FILLED";
-            case "Cancelled" -> "CANCELED";
-            case "Rejected" -> "REJECTED";
-            default -> bybitStatus.toUpperCase();
-        };
+    private static String mapBybitStatus(String bybitStatus) { return BybitWs.status(bybitStatus); }
+
+    // ======================= WebSocket =======================
+
+    /** Свои адреса сокетов (тесты, прокси). */
+    public void setWsUrls(String trade, String priv) { this.tradeWsUrl = trade; this.privateWsUrl = priv; }
+
+    /** Поднять торговый и приватный сокеты. Без ключей или при wsTrade=false — всё по REST. */
+    public void startStreams(BalanceStore store) {
+        if (!credentials.isPresent() || !config.params().wsTrade() || tradeChannel != null) return;
+        String host = config.testnet() ? "wss://stream-testnet.bybit.com" : "wss://stream.bybit.com";
+        BybitWs w = new BybitWs(tradeWsUrl != null ? tradeWsUrl : host + "/v5/trade",
+                privateWsUrl != null ? privateWsUrl : host + "/v5/private", credentials.apiKey(), signer, recvWindow);
+        w.balances = store;
+        ws = w;
+        privateChannel = new WsRpcChannel("bybit", w.priv).onEvent(w::onEvent);
+        tradeChannel = new WsRpcChannel("bybit", w.trade);
+        privateChannel.start();
+        tradeChannel.start();
+        log.info("[bybit] WebSocket: торговый {} и приватный {}", w.trade.url(), w.priv.url());
+    }
+
+    /** Остановить сокеты. */
+    public void stopStreams() {
+        WsRpcChannel t = tradeChannel, p = privateChannel;
+        if (t != null) t.stop();
+        if (p != null) p.stop();
+        tradeChannel = privateChannel = null;
+        ws = null;
+    }
+
+    /** Подождать готовности сокетов (но не дольше ms). */
+    public void awaitStreams(long ms) throws InterruptedException {
+        long until = System.currentTimeMillis() + ms;
+        while (tradeChannel != null && !(wsReady() && privateReady()) && !tradeChannel.isDisabled() && System.currentTimeMillis() < until) Thread.sleep(50);
+    }
+
+    /** Торговый сокет готов. */
+    public boolean wsReady() { WsRpcChannel c = tradeChannel; return c != null && c.isReady(); }
+
+    /** Приватный сокет готов. */
+    private boolean privateReady() { WsRpcChannel c = privateChannel; return c != null && c.isReady(); }
+
+    /** Баланс приходит по WS и актуален. */
+    public boolean balancesStreamed() { BybitWs w = ws; return w != null && privateReady() && w.walletSeen; }
+
+    /** Метрики сокетов для админки. */
+    public Map<String, Object> stats() {
+        Map<String, Object> m = new LinkedHashMap<>();
+        WsRpcChannel t = tradeChannel, p = privateChannel;
+        m.put("wsTrade", t == null ? "выключен (нет ключей или wsTrade=false)" : t.stats());
+        m.put("wsPrivate", p == null ? "выключен" : p.stats());
+        m.put("wsFallbacks", wsFallbacks.get());
+        m.put("blockedForMs", budget.blockedForMs());
+        return m;
+    }
+
+    /**
+     * Запрос по торговому сокету. null — сокет не готов, вызывающий идёт в REST.
+     * @throws WsRpcChannel.WsUnknownOutcomeException запрос мог уйти, ответа нет
+     */
+    private JsonNode wsCall(String op, ObjectNode body) throws Exception {
+        BybitWs w = ws;
+        WsRpcChannel ch = tradeChannel;
+        if (w == null || ch == null || !ch.isReady()) return null;
+        budget.acquire(RateBudget.Kind.ORDER, 1, 1000);
+        String id = w.nextId();
+        try {
+            return w.result(ch.call(id, w.request(id, op, body), 5000));
+        } catch (WsRpcChannel.WsNotReadyException e) {
+            wsFallbacks.incrementAndGet();
+            return null;
+        }
     }
 
     // ======================= HTTP + ПОДПИСЬ =======================

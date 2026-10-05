@@ -20,7 +20,9 @@ import com.hft.store.SymbolFilters;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Binance целиком: REST-клиент, WebSocket-фид, конвейер и стратегия
@@ -28,7 +30,7 @@ import java.util.List;
  * и не видит внутренней сборки — так же будет с Bybit и любой
  * следующей биржей.
  */
-public final class BinanceExchange implements ExchangeGateway {
+public final class BinanceExchange implements ExchangeGateway, com.hft.exchange.generic.RequestStatsSource {
 
     /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(BinanceExchange.class);
@@ -107,6 +109,12 @@ public final class BinanceExchange implements ExchangeGateway {
         rest.syncTime();
         rest.loadFilters(config.symbols());
         if (paper == null) {
+            try {                                   // сокет WebSocket API: ордера и события аккаунта, REST — запасной
+                rest.startStreams(balances);
+                rest.awaitStreams(4000);
+            } catch (Exception e) {
+                log.warn("[binance] WebSocket API не поднялся ({}), ордера пойдут через REST", e.toString());
+            }
             try {
                 rest.loadBalances(balances);
             } catch (Exception e) {
@@ -124,6 +132,7 @@ public final class BinanceExchange implements ExchangeGateway {
     @Override
     public void stop() {
         strategy.disable();
+        rest.stopStreams();
         feed.stop();
         pipeline.shutdown();
         log.info("[binance] Биржа остановлена");
@@ -177,9 +186,24 @@ public final class BinanceExchange implements ExchangeGateway {
     public void syncBalances() {
         if (paper != null) return;                          // бумажный баланс ведёт движок
         long now = System.currentTimeMillis();
+        // баланс приходит событиями WebSocket API; REST — сверка раз в balanceSyncMs
         if (now - lastBalanceSyncMs < config.params().balanceSyncMs()) return;
         lastBalanceSyncMs = now;
         try { rest.loadBalances(balances); }
         catch (Exception e) { log.warn("[binance] Не удалось обновить балансы: {}", e.getMessage()); }
     }
+
+    /** Режим, фид и (в LIVE) метрики WebSocket API — для админки. */
+    @Override
+    public Map<String, Object> requestStats() {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("mode", paper == null ? "LIVE" : "PAPER");
+        m.put("marketData", Map.of("ws", feed.isConnected(), "messages", feed.messageCount()));
+        if (paper == null) m.put("orders", rest.stats());
+        return m;
+    }
+
+    /** Ордера идут на биржу (LIVE), а не в бумажный движок. */
+    @Override
+    public boolean isLive() { return paper == null; }
 }
