@@ -9,6 +9,7 @@ import com.hft.model.OrderEnums.Type;
 import com.hft.model.OrderResult;
 import com.hft.rest.ApiException;
 import com.hft.rest.SignedCexClient;
+import com.hft.rest.WsRpcChannel;
 import com.hft.store.BalanceStore;
 import com.hft.store.SymbolFilters;
 import com.hft.util.Hmac;
@@ -27,6 +28,9 @@ import java.util.Set;
  *  - ответ {"code":"200000","data":...}; 429000 — превышен лимит;
  *  - символы с дефисом: BTCUSDT -> BTC-USDT;
  *  - orderId строковый — наружу числовой псевдоним.
+ *
+ * В LIVE ордера и отмены идут по торговому WebSocket (Pro WS API), исполнения и балансы — по
+ * приватному потоку (bullet-private), см. {@link KucoinWs}; REST — запасной канал.
  */
 public final class KucoinRestClient extends SignedCexClient {
 
@@ -109,15 +113,29 @@ public final class KucoinRestClient extends SignedCexClient {
              .put("size", plain(o.qty(), filters.quantityScale(o.symbol())))
              .put("price", plain(o.price(), filters.priceScale(o.symbol())));
         }
-        JsonNode r = signed("POST", "/api/v1/orders", b.toString(), true);
-        String id = r.path("data").path("orderId").asText("");
-        if (id.isEmpty()) throw new ApiException(200, "NO_ID", "нет orderId в ответе: " + r, false);
+        JsonNode data;
+        try {
+            data = wsOp("spot.order", b);                          // сначала WebSocket
+        } catch (WsRpcChannel.WsUnknownOutcomeException e) {
+            wsFallbacks.incrementAndGet();
+            log.warn("[kucoin] исход ордера {} неизвестен ({}), проверяю по REST", o.clientId(), e.getMessage());
+            JsonNode d = signed("GET", "/api/v1/order/client-order/" + o.clientId(), "", false).path("data");
+            String vid = d.path("id").asText("");
+            if (vid.isEmpty()) throw new ApiException(200, "WS_UNKNOWN", "ордер " + o.clientId() + " не найден после обрыва WS", false);
+            OrderResult st = fromOrder(d, registerId(vid), o.symbol());
+            return new OrderResult(st.orderId(), o.clientId(), o.symbol(), o.side(), st.status(), o.qtyIsQuote() ? 0 : o.qty(), st.executedQty(), st.avgPrice(), 0);
+        }
+        if (data == null) data = signed("POST", "/api/v1/orders", b.toString(), true).path("data");   // REST — если WS не готов
+        String id = data.path("orderId").asText("");
+        if (id.isEmpty()) throw new ApiException(200, "NO_ID", "нет orderId в ответе: " + data, false);
         return new OrderResult(registerId(id), o.clientId(), o.symbol(), o.side(), "NEW", o.qtyIsQuote() ? 0 : o.qty(), 0, 0, 0);
     }
 
     /** Статус ордера: из WS-потока, если есть, иначе запрос к бирже. */
     @Override
     public OrderResult orderStatus(String symbol, long orderId) throws Exception {
+        OrderResult st = streamed.get(orderId);
+        if (st != null && privateReady() && !"NEW".equals(st.status()) && !"PARTIALLY_FILLED".equals(st.status())) return st;
         return fromOrder(signed("GET", "/api/v1/orders/" + venueId(orderId), "", false).path("data"), orderId, symbol.toUpperCase());
     }
 
@@ -133,7 +151,10 @@ public final class KucoinRestClient extends SignedCexClient {
     /** Отменить ордер. */
     @Override
     public void cancelOrder(String symbol, long orderId) throws Exception {
-        signed("DELETE", "/api/v1/orders/" + venueId(orderId), "", true);
+        JsonNode r = null;
+        try { r = wsOp("spot.cancel", mapper.createObjectNode().put("symbol", venue(symbol)).put("orderId", venueId(orderId))); }
+        catch (WsRpcChannel.WsUnknownOutcomeException e) { wsFallbacks.incrementAndGet(); }   // отмена идемпотентна — повторяем через REST
+        if (r == null) signed("DELETE", "/api/v1/orders/" + venueId(orderId), "", true);
         log.info("[kucoin] ордер {} по {} отменён", orderId, symbol);
     }
 
@@ -144,6 +165,84 @@ public final class KucoinRestClient extends SignedCexClient {
         int n = r.path("data").path("cancelledOrderIds").size();
         log.info("[kucoin] отменено {} ордеров по {}", n, symbol);
         return n;
+    }
+
+    // ------------------------------------------------------------ WebSocket
+
+    /** Протоколы и состояние сокетов; null — только REST. */
+    private volatile KucoinWs ws;
+    /** Приватный поток (исполнения, балансы); торговый сокет — wsChannel базового класса. */
+    private volatile WsRpcChannel privateChannel;
+    /** Свои адреса (тесты, прокси): торговый сокет и приватный поток. */
+    private volatile String tradeWsUrl, privateWsUrl;
+
+    /** Свои адреса сокетов (тесты, прокси). */
+    public void setWsUrls(String trade, String priv) { this.tradeWsUrl = trade; this.privateWsUrl = priv; }
+
+    /** Поднять торговый сокет и приватный поток. Без ключей или при wsTrade=false — всё по REST. */
+    @Override
+    public void startStreams(BalanceStore store) {
+        if (!credentials.isPresent() || !wsTradeAllowed() || wsChannel != null) return;
+        KucoinWs w = new KucoinWs(tradeWsUrl != null ? tradeWsUrl : "wss://wsapi.kucoin.com/v1/private", this::bulletPrivate,
+                credentials.apiKey(), credentials.apiSecret(), passphrase, streamed, this::registerId);
+        w.balances = store;
+        ws = w;
+        privateChannel = new WsRpcChannel("kucoin", w.priv).onEvent(w::onEvent);
+        wsChannel = new WsRpcChannel("kucoin", w.trade);
+        privateChannel.start();
+        wsChannel.start();
+    }
+
+    /** Остановить оба сокета. */
+    @Override
+    public void stopStreams() {
+        super.stopStreams();
+        WsRpcChannel p = privateChannel;
+        if (p != null) p.stop();
+        wsChannel = privateChannel = null;
+        ws = null;
+    }
+
+    /** Баланс приходит по WS и актуален. */
+    @Override
+    public boolean balancesStreamed() { KucoinWs w = ws; return w != null && privateReady() && w.balanceSeen; }
+
+    /** Метрики запросов и обоих сокетов. */
+    @Override
+    public java.util.Map<String, Object> stats() {
+        var m = super.stats();
+        WsRpcChannel p = privateChannel;
+        if (p != null) m.put("wsPrivate", p.stats());
+        return m;
+    }
+
+    /** Приватный поток готов. */
+    private boolean privateReady() { WsRpcChannel c = privateChannel; return c != null && c.isReady(); }
+
+    /** Адрес приватного потока с токеном: POST /api/v1/bullet-private. */
+    private String bulletPrivate() throws Exception {
+        if (privateWsUrl != null) return privateWsUrl;
+        JsonNode d = signed("POST", "/api/v1/bullet-private", "", false).path("data");
+        JsonNode server = d.path("instanceServers").path(0);
+        return server.path("endpoint").asText() + "?token=" + d.path("token").asText() + "&connectId=hft" + System.nanoTime();
+    }
+
+    /**
+     * Запрос по торговому сокету. null — сокет не готов, вызывающий идёт в REST.
+     * @throws WsRpcChannel.WsUnknownOutcomeException запрос мог уйти, ответа нет
+     */
+    private JsonNode wsOp(String op, ObjectNode args) throws Exception {
+        KucoinWs w = ws;
+        WsRpcChannel ch = wsChannel;
+        if (w == null || ch == null || !ch.isReady()) return null;
+        orderLimiter.acquire();
+        String id = w.nextId();
+        try {
+            return w.result(ch.call(id, w.request(id, op, args), 5000));
+        } catch (WsRpcChannel.WsNotReadyException e) {
+            wsFallbacks.incrementAndGet();
+            return null;
+        }
     }
 
     // ------------------------------------------------------------ правила и баланс

@@ -20,6 +20,8 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -29,6 +31,10 @@ import java.util.concurrent.atomic.AtomicLong;
  * поддерживает HTTP/2, пул соединений и keep-alive из коробки.
  * Для REST-части (ордера, балансы) его производительности достаточно,
  * а зависимостей меньше.
+ *
+ * Ордера, отмены и статусы в LIVE идут по WebSocket API ({@link BinanceWsApi}), если он готов
+ * (параметр биржи wsTrade=true); REST — запасной канал. Если WS-запрос ушёл, а ответа нет,
+ * ордер не повторяется вслепую: его судьба выясняется по REST через origClientOrderId.
  *
  * Класс потокобезопасен — HttpClient и Signer можно вызывать из разных потоков.
  */
@@ -57,12 +63,24 @@ public final class BinanceRestClient implements ExchangeOrderApi {
     /** Разница между временем биржи и локальным. Без неё подпись может отвергаться. */
     private volatile long timeOffsetMs = 0;
 
+    /** Подключение и параметры биржи. */
+    private final ExchangeConfig config;
+    /** WebSocket API (ордера и события аккаунта); null — только REST. */
+    private volatile BinanceWsApi ws;
+    /** Сокет WebSocket API. */
+    private volatile WsRpcChannel wsChannel;
+    /** Свой адрес WebSocket API (тесты, прокси). */
+    private volatile String wsApiUrl;
+    /** WS не помог (не готов или исход неизвестен) — запрос ушёл по REST. */
+    private final AtomicLong wsFallbacks = new AtomicLong();
+
     /**
      * @param config подключение и параметры
      * @param credentials ключи
      * @param filters правила символов
      */
     public BinanceRestClient(ExchangeConfig config, Credentials credentials, SymbolFilters filters) {
+        this.config = config;
         this.baseUrl = config.restUrl();
         this.credentials = credentials;
         this.recvWindow = config.recvWindowMs();
@@ -217,50 +235,68 @@ public final class BinanceRestClient implements ExchangeOrderApi {
         credentials.require();
         String sym = symbol.toUpperCase();
 
-        StringBuilder params = new StringBuilder(160);
-        params.append("symbol=").append(sym)
-              .append("&side=").append(side)
-              .append("&type=").append(type);
+        Map<String, String> p = new LinkedHashMap<>();
+        p.put("symbol", sym);
+        p.put("side", side.name());
+        p.put("type", type.name());
 
         if (quoteOrderQty > 0) {
             if (type != Type.MARKET) {
                 throw new IllegalArgumentException("quoteOrderQty работает только с MARKET");
             }
-            params.append("&quoteOrderQty=").append(Numbers.plain(quoteOrderQty, 8));
+            p.put("quoteOrderQty", Numbers.plain(quoteOrderQty, 8));
         } else {
             double roundedQty = filters.roundQuantity(sym, qty);
             String err = filters.validate(sym, roundedQty, type == Type.LIMIT ? price : 0);
             if (err != null) {
                 throw new IllegalArgumentException("Ордер не прошёл проверку: " + err);
             }
-            params.append("&quantity=")
-                  .append(Numbers.plain(roundedQty, filters.quantityScale(sym)));
+            p.put("quantity", Numbers.plain(roundedQty, filters.quantityScale(sym)));
         }
 
         if (type == Type.LIMIT) {
             double roundedPrice = filters.roundPrice(sym, price);
-            params.append("&price=")
-                  .append(Numbers.plain(roundedPrice, filters.priceScale(sym)))
-                  .append("&timeInForce=")
-                  .append(tif == null ? TimeInForce.GTC : tif);
+            p.put("price", Numbers.plain(roundedPrice, filters.priceScale(sym)));
+            p.put("timeInForce", (tif == null ? TimeInForce.GTC : tif).name());
         }
 
         String clientOrderId = "hft" + clientOrderSeq.incrementAndGet();
-        params.append("&newClientOrderId=").append(clientOrderId);
-        params.append("&newOrderRespType=FULL"); // просим полный ответ с деталями исполнения
+        p.put("newClientOrderId", clientOrderId);
+        p.put("newOrderRespType", "FULL"); // просим полный ответ с деталями исполнения
 
         long start = System.nanoTime();
-        JsonNode json = postSigned("/api/v3/order", params.toString());
+        JsonNode json;
+        try {
+            json = wsCall("order.place", p, true);              // сначала WebSocket
+        } catch (WsRpcChannel.WsUnknownOutcomeException e) {
+            wsFallbacks.incrementAndGet();
+            log.warn("[binance] исход ордера {} неизвестен ({}), проверяю по REST", clientOrderId, e.getMessage());
+            json = getSigned("/api/v3/order", "symbol=" + sym + "&origClientOrderId=" + clientOrderId);
+        }
+        if (json == null) json = postSigned("/api/v3/order", query(p));   // REST — только если WS не готов
         long latency = System.nanoTime() - start;
 
         return parseOrderResult(json, sym, side, latency);
+    }
+
+    /** "k=v&k=v" в порядке добавления. */
+    private static String query(Map<String, String> p) {
+        StringBuilder sb = new StringBuilder(160);
+        for (var e : p.entrySet()) {
+            if (sb.length() > 0) sb.append('&');
+            sb.append(e.getKey()).append('=').append(e.getValue());
+        }
+        return sb.toString();
     }
 
     /** Отмена ордера по ID биржи. */
     public void cancelOrder(String symbol, long orderId) throws Exception {
         credentials.require();
         String params = "symbol=" + symbol.toUpperCase() + "&orderId=" + orderId;
-        deleteSigned("/api/v3/order", params);
+        JsonNode r = null;
+        try { r = wsCall("order.cancel", Map.of("symbol", symbol.toUpperCase(), "orderId", Long.toString(orderId)), true); }
+        catch (WsRpcChannel.WsUnknownOutcomeException e) { wsFallbacks.incrementAndGet(); }   // отмена идемпотентна — повторяем через REST
+        if (r == null) deleteSigned("/api/v3/order", params);
         log.info("Ордер {} по {} отменён", orderId, symbol);
     }
 
@@ -268,7 +304,11 @@ public final class BinanceRestClient implements ExchangeOrderApi {
     public int cancelAll(String symbol) throws Exception {
         credentials.require();
         String params = "symbol=" + symbol.toUpperCase();
-        JsonNode json = deleteSigned("/api/v3/openOrders", params);
+        JsonNode json = null;
+        try { json = wsCall("openOrders.cancelAll", Map.of("symbol", symbol.toUpperCase()), true); }
+        catch (WsRpcChannel.WsUnknownOutcomeException e) { wsFallbacks.incrementAndGet(); }
+        catch (ExchangeException e) { if (e.getMessage().contains("-2011")) return 0; throw e; }   // открытых ордеров нет
+        if (json == null) json = deleteSigned("/api/v3/openOrders", params);
         int count = json.isArray() ? json.size() : 0;
         log.info("Отменено {} ордеров по {}", count, symbol);
         return count;
@@ -277,8 +317,16 @@ public final class BinanceRestClient implements ExchangeOrderApi {
     /** Статус ордера: NEW, PARTIALLY_FILLED, FILLED, CANCELED, REJECTED, EXPIRED. */
     public OrderResult orderStatus(String symbol, long orderId) throws Exception {
         credentials.require();
+        BinanceWsApi api = ws;
+        if (api != null && wsReady()) {                       // итог из события — без запроса
+            OrderResult st = api.streamed.get(orderId);
+            if (st != null && !"NEW".equals(st.status()) && !"PARTIALLY_FILLED".equals(st.status())) return st;
+        }
         String params = "symbol=" + symbol.toUpperCase() + "&orderId=" + orderId;
-        JsonNode json = getSigned("/api/v3/order", params);
+        JsonNode json = null;
+        try { json = wsCall("order.status", Map.of("symbol", symbol.toUpperCase(), "orderId", Long.toString(orderId)), false); }
+        catch (WsRpcChannel.WsUnknownOutcomeException e) { wsFallbacks.incrementAndGet(); }   // чтение — можно повторить по REST
+        if (json == null) json = getSigned("/api/v3/order", params);
         Side side = Side.valueOf(json.get("side").asText());
         return parseOrderResult(json, symbol.toUpperCase(), side, 0);
     }
@@ -304,6 +352,75 @@ public final class BinanceRestClient implements ExchangeOrderApi {
 
         return new OrderResult(orderId, clientId, symbol, side, status,
                 origQty, execQty, avgPrice, latency);
+    }
+
+    // ======================= WebSocket API =======================
+
+    /** Свой адрес WebSocket API (тесты, прокси). */
+    public void setWsApiUrl(String url) { this.wsApiUrl = url; }
+
+    /**
+     * Поднять WebSocket API: ордера и события аккаунта (исполнения, балансы).
+     * Без ключей или при wsTrade=false — ничего, всё по REST.
+     */
+    public void startStreams(BalanceStore store) {
+        if (!credentials.isPresent() || !config.params().wsTrade() || wsChannel != null) return;
+        String url = wsApiUrl != null ? wsApiUrl : config.testnet() ? BinanceWsApi.TESTNET : BinanceWsApi.MAINNET;
+        BinanceWsApi api = new BinanceWsApi(url, credentials.apiKey(), signer, this::timestamp);
+        api.balances = store;
+        WsRpcChannel ch = new WsRpcChannel("binance", api).onEvent(api::onEvent);
+        ws = api;
+        wsChannel = ch;
+        ch.start();
+        log.info("[binance] WebSocket API: {}", url);
+    }
+
+    /** Остановить WebSocket API. */
+    public void stopStreams() {
+        WsRpcChannel ch = wsChannel;
+        if (ch != null) ch.stop();
+        wsChannel = null;
+        ws = null;
+    }
+
+    /** Подождать готовности сокета (но не дольше ms). */
+    public void awaitStreams(long ms) throws InterruptedException {
+        long until = System.currentTimeMillis() + ms;
+        while (wsChannel != null && !wsReady() && !wsChannel.isDisabled() && System.currentTimeMillis() < until) Thread.sleep(50);
+    }
+
+    /** WebSocket API готов принимать запросы. */
+    public boolean wsReady() { WsRpcChannel c = wsChannel; return c != null && c.isReady(); }
+
+    /** Балансы приходят событиями и актуальны — REST-сверку можно реже. */
+    public boolean balancesStreamed() { BinanceWsApi a = ws; return a != null && wsReady() && a.accountSeen; }
+
+    /** Метрики WebSocket API для админки. */
+    public Map<String, Object> stats() {
+        Map<String, Object> m = new LinkedHashMap<>();
+        WsRpcChannel c = wsChannel;
+        m.put("ws", c == null ? "выключен (нет ключей или wsTrade=false)" : c.stats());
+        m.put("wsFallbacks", wsFallbacks.get());
+        m.put("blockedForMs", budget.blockedForMs());
+        return m;
+    }
+
+    /**
+     * Запрос по WebSocket API. null — сокет не готов, вызывающий идёт в REST.
+     * @throws WsRpcChannel.WsUnknownOutcomeException запрос мог уйти, ответа нет
+     */
+    private JsonNode wsCall(String method, Map<String, String> params, boolean order) throws Exception {
+        BinanceWsApi api = ws;
+        WsRpcChannel ch = wsChannel;
+        if (api == null || ch == null || !ch.isReady()) return null;
+        budget.acquire(order ? RateBudget.Kind.ORDER : RateBudget.Kind.PRIVATE, order ? 1 : 4, order ? 1000 : 3000);
+        String id = api.nextId();
+        try {
+            return api.result(ch.call(id, api.request(id, method, params), 5000));
+        } catch (WsRpcChannel.WsNotReadyException e) {
+            wsFallbacks.incrementAndGet();
+            return null;
+        }
     }
 
     // ======================= HTTP =======================

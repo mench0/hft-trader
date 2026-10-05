@@ -30,11 +30,11 @@ public final class ExchangeCatalog {
     static {
         add(new ExchangeInfo("binance", "Binance", Kind.CEX_TIER1, Adapter.NATIVE_LIVE,
                 "https://api.binance.com", 20, 0.10, 0.10, "USDT", "BTCUSDT",
-                "Полный адаптер: WS-стакан, REST-ордера, лимитер.",
+                "Полный адаптер: стакан, ордера (WebSocket API) и события аккаунта по WebSocket, REST — запасной.",
                 "wss://stream.binance.com:9443/ws", "https://testnet.binance.vision", "wss://testnet.binance.vision/ws"));
         add(new ExchangeInfo("bybit", "Bybit", Kind.CEX_TIER1, Adapter.NATIVE_LIVE,
                 "https://api.bybit.com", 8, 0.10, 0.10, "USDT", "BTCUSDT",
-                "Полный адаптер. Блокирует IP многих дата-центров (403).",
+                "Полный адаптер: стакан, ордера (/v5/trade), исполнения и баланс (/v5/private) по WebSocket, REST — запасной. Блокирует IP многих дата-центров (403).",
                 "wss://stream.bybit.com/v5/public/spot", "https://api-testnet.bybit.com", "wss://stream-testnet.bybit.com/v5/public/spot"));
         add(new ExchangeInfo("okx", "OKX", Kind.CEX_TIER1, Adapter.LIVE_UNVERIFIED,
                 "https://www.okx.com", 8, 0.08, 0.10, "USDT", "BTCUSDT",
@@ -42,24 +42,25 @@ public final class ExchangeCatalog {
                 "wss://ws.okx.com:8443/ws/v5/public", "https://www.okx.com", "wss://wspap.okx.com:8443/ws/v5/public"));
         add(new ExchangeInfo("mexc", "MEXC", Kind.CEX_TIER3, Adapter.LIVE_UNVERIFIED,
                 "https://api.mexc.com", 5, 0.00, 0.05, "USDT", "BTCUSDT",
-                "Спот, 0% maker. Стакан только REST-опросом: спотовый WS MEXC отдаёт protobuf, декодера нет. Не держите большую часть капитала."));
+                "Спот, 0% maker. Стакан по WebSocket (protobuf, до 30 символов на соединение) + REST-запас; ордера только REST (WS-ордеров у MEXC нет). Не держите большую часть капитала.",
+                "wss://wbs-api.mexc.com/ws", null, null));   // тестовой сети нет
         add(new ExchangeInfo("gate", "Gate", Kind.CEX_TIER3, Adapter.LIVE_UNVERIFIED,
                 "https://api.gateio.ws", 5, 0.20, 0.20, "USDT", "BTCUSDT",
                 "Спот: стакан, ордера (WS API), исполнения и балансы по WebSocket, REST — запасной. Комиссия указана по умолчанию, проверьте тариф.",
                 "wss://api.gateio.ws/ws/v4/", "https://api-testnet.gateapi.io", "wss://ws-testnet.gate.com/v4/ws/spot"));
         add(new ExchangeInfo("bingx", "BingX", Kind.CEX_TIER3, Adapter.LIVE_UNVERIFIED,
                 "https://open-api.bingx.com", 5, 0.10, 0.10, "USDT", "BTCUSDT",
-                "Спот: стакан по WebSocket (depth20, gzip) + REST-запас. Порядок уровней может быть обратным, сортируется."));
+                "Спот: стакан (depth20, gzip) и исполнения (listenKey) по WebSocket, REST-запас; ордера только REST (WS-ордеров у BingX нет). Порядок уровней может быть обратным, сортируется."));
         add(new ExchangeInfo("hyperliquid", "Hyperliquid", Kind.PERP_DEX, Adapter.LIVE_UNVERIFIED,
                 "https://api.hyperliquid.xyz", 5, 0.015, 0.045, "USDC", "BTCUSDC (монета BTC, перп)",
                 "Перпы: стакан, ордера, info-запросы (WS post) и исполнения по WebSocket, REST — запасной. Ордера подписываются agent-ключом (EIP-712) через web3j. HYPERLIQUID_API_KEY = адрес аккаунта, _SECRET = ключ agent-кошелька без права вывода. Лимит адреса: 1 действие на $1 оборота.",
                 "wss://api.hyperliquid.xyz/ws", "https://api.hyperliquid-testnet.xyz", "wss://api.hyperliquid-testnet.xyz/ws"));
         add(new ExchangeInfo("kucoin", "KuCoin", Kind.CEX_TIER1, Adapter.LIVE_UNVERIFIED,
                 "https://api.kucoin.com", 10, 0.10, 0.10, "USDT", "BTCUSDT",
-                "Спот: стакан по WebSocket (level2Depth50, адрес и токен через bullet-public) + REST-запас, ордера через REST. Нужен KUCOIN_PASSPHRASE. Лимиты — пулы весов (публичный 2000/30 с, спот 4000/30 с)."));
+                "Спот: стакан по WebSocket (level2Depth50, адрес и токен через bullet-public) + REST-запас; ордера и отмены по WS API (wsapi.kucoin.com), исполнения и балансы — приватный поток (bullet-private). Нужен KUCOIN_PASSPHRASE; для UTA-счёта — wsTrade=false. Лимиты — пулы весов (публичный 2000/30 с, спот 4000/30 с)."));
         add(new ExchangeInfo("aster", "Aster", Kind.ORDERBOOK_DEX, Adapter.LIVE_UNVERIFIED,
                 "https://sapi.asterdex.com", 5, 0.10, 0.10, "USDT", "BTCUSDT",
-                "Спот, API v3 в формате Binance: стакан по WebSocket (depth20@100ms) + REST-запас, ордера через REST с подписью EIP-712 кошельком-агентом. ASTER_API_KEY = адрес основного кошелька, ASTER_API_SECRET = ключ API-кошелька (signer) без права вывода. Комиссии указаны по умолчанию, проверьте тариф.",
+                "Спот, API v3 в формате Binance: стакан (depth20@100ms), исполнения и баланс (listenKey) по WebSocket + REST-запас; ордера через REST (WS-ордеров нет) с подписью EIP-712 кошельком-агентом. ASTER_API_KEY = адрес основного кошелька, ASTER_API_SECRET = ключ API-кошелька (signer) без права вывода. Комиссии указаны по умолчанию, проверьте тариф.",
                 "wss://sstream.asterdex.com/stream", "https://sapi.asterdex-testnet.com", "wss://sstream.asterdex-testnet.com/stream"));
         add(new ExchangeInfo("dydx", "dYdX v4", Kind.PERP_DEX, Adapter.PAPER_BLIND,
                 "https://indexer.dydx.trade", 5, 0.01, 0.05, "USD", "BTCUSD (рынок BTC-USD, перп)",

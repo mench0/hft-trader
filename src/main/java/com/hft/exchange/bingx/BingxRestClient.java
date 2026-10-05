@@ -8,6 +8,8 @@ import com.hft.model.OrderEnums.Type;
 import com.hft.model.OrderResult;
 import com.hft.rest.ApiException;
 import com.hft.rest.SignedCexClient;
+import com.hft.rest.UserStream;
+import com.hft.rest.WsRpcChannel;
 import com.hft.store.BalanceStore;
 import com.hft.store.SymbolFilters;
 import com.hft.util.Hmac;
@@ -25,6 +27,9 @@ import java.util.Map;
  *  - символ пишется через дефис: BTC-USDT;
  *  - ответ {code, msg, data}; успех — code 0;
  *  - market BUY задаётся суммой (quoteOrderQty), market SELL — объёмом (quantity).
+ *
+ * Ордера — только REST (WS-ордеров у BingX нет). Исполнения в LIVE приходят по приватному потоку
+ * (listenKey, spot.executionReport, gzip), см. {@link UserStream}; баланс — REST.
  */
 public final class BingxRestClient extends SignedCexClient {
 
@@ -105,6 +110,8 @@ public final class BingxRestClient extends SignedCexClient {
     /** Статус ордера: из WS-потока, если есть, иначе запрос к бирже. */
     @Override
     public OrderResult orderStatus(String symbol, long orderId) throws Exception {
+        OrderResult st = streamed.get(orderId);
+        if (st != null && wsReady() && !"NEW".equals(st.status()) && !"PARTIALLY_FILLED".equals(st.status())) return st;
         Map<String, String> p = params();
         p.put("symbol", sym(symbol));
         p.put("orderId", venueId(orderId));
@@ -174,5 +181,75 @@ public final class BingxRestClient extends SignedCexClient {
             if (free > 0 || locked > 0) store.set(b.path("asset").asText(), free, locked);
         }
         store.markSynced();
+    }
+
+    // ------------------------------------------------------------ приватный поток (listenKey)
+
+    /** Поток событий аккаунта; null — только REST. */
+    private volatile UserStream userStream;
+    /** Свой адрес потока без ключа (тесты, прокси). */
+    private volatile String userStreamBase;
+
+    /** Свой адрес потока, к которому дописывается listenKey (тесты, прокси). */
+    public void setUserStreamBase(String base) { this.userStreamBase = base; }
+
+    /** Запрос listenKey (без подписи, только ключ в заголовке). */
+    private JsonNode listenKeyRequest(String method, String query) throws Exception {
+        credentials.require();
+        HttpRequest r = req(baseUrl + "/openApi/user/auth/userDataStream" + query).header("X-BX-APIKEY", credentials.apiKey())
+                .method(method, HttpRequest.BodyPublishers.noBody()).build();
+        return exec(r, false);
+    }
+
+    /** Поднять приватный поток исполнений. Без ключей или при wsTrade=false — всё по REST. */
+    @Override
+    public void startStreams(BalanceStore store) {
+        if (!credentials.isPresent() || !wsTradeAllowed() || userStream != null) return;
+        String base = userStreamBase != null ? userStreamBase : "wss://open-api-ws.bingx.com/market?listenKey=";
+        UserStream us = new UserStream("bingx", new UserStream.Api() {
+            @Override public String newListenKey() throws Exception {
+                JsonNode r = listenKeyRequest("POST", "");
+                String k = r.path("listenKey").asText(r.path("data").path("listenKey").asText(""));
+                if (k.isEmpty()) throw new IllegalStateException("нет listenKey в ответе: " + r);
+                return k;
+            }
+            @Override public void keepAlive(String key) throws Exception { listenKeyRequest("PUT", "?listenKey=" + enc(key)); }
+            @Override public String url(String key) { return base + key; }
+            @Override public java.util.List<String> subscriptions() {
+                return java.util.List.of(mapper.createObjectNode().put("id", "sub-" + System.nanoTime())
+                        .put("reqType", "sub").put("dataType", "spot.executionReport").toString());
+            }
+            @Override public WsRpcChannel.Msg parse(String text) throws Exception {
+                if (text.equals("Ping") || text.equals("ping")) return WsRpcChannel.Msg.answer("Pong");
+                JsonNode n = mapper.readTree(text);
+                if (n.has("data") && n.path("dataType").asText().endsWith("executionReport")) return WsRpcChannel.Msg.event(text);
+                if (n.path("code").asInt(0) != 0) throw new IllegalStateException("BingX: " + n.path("code").asText() + " " + n.path("msg").asText());
+                return WsRpcChannel.Msg.ignore();
+            }
+            @Override public String decodeBinary(byte[] d) throws Exception {
+                try (var gz = new java.util.zip.GZIPInputStream(new java.io.ByteArrayInputStream(d))) {
+                    return new String(gz.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+                }
+            }
+        }, this::onUserEvent);
+        userStream = us;
+        wsChannel = us.channel();                 // готовность и метрики — как у WS-канала
+        us.start();
+    }
+
+    /** Остановить поток. */
+    @Override
+    public void stopStreams() {
+        UserStream us = userStream;
+        if (us != null) us.stop();
+        userStream = null;
+        wsChannel = null;
+    }
+
+    /** spot.executionReport — состояние ордера (символ BTC-USDT -> BTCUSDT). */
+    private void onUserEvent(String text) throws Exception {
+        JsonNode e = mapper.readTree(text).path("data");
+        long id = registerId(e.path("i").asText());
+        streamed.put(id, UserStream.executionReport(e, id, e.path("s").asText().replace("-", "")));
     }
 }

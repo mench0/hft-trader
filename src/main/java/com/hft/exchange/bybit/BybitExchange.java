@@ -19,7 +19,9 @@ import com.hft.store.SymbolFilters;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Bybit целиком, собран по тому же паттерну, что и {@link com.hft.exchange.binance.BinanceExchange}.
@@ -27,7 +29,7 @@ import java.util.List;
  * добавить биржу, нужно реализовать REST-клиент и WS-фид под её API,
  * а сборка (эта обёртка) почти дословно повторяется.
  */
-public final class BybitExchange implements ExchangeGateway {
+public final class BybitExchange implements ExchangeGateway, com.hft.exchange.generic.RequestStatsSource {
 
     /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(BybitExchange.class);
@@ -105,6 +107,12 @@ public final class BybitExchange implements ExchangeGateway {
     public void start() throws Exception {
         rest.loadFilters(config.symbols());
         if (paper == null) {
+            try {                                   // торговый и приватный сокеты, REST — запасной
+                rest.startStreams(balances);
+                rest.awaitStreams(4000);
+            } catch (Exception e) {
+                log.warn("[bybit] WebSocket не поднялся ({}), ордера пойдут через REST", e.toString());
+            }
             try {
                 rest.loadBalances(balances);
             } catch (Exception e) {
@@ -122,6 +130,7 @@ public final class BybitExchange implements ExchangeGateway {
     @Override
     public void stop() {
         strategy.disable();
+        rest.stopStreams();
         feed.stop();
         pipeline.shutdown();
         log.info("[bybit] Биржа остановлена");
@@ -172,4 +181,18 @@ public final class BybitExchange implements ExchangeGateway {
         try { rest.loadBalances(balances); }
         catch (Exception e) { log.warn("[bybit] Не удалось обновить балансы: {}", e.getMessage()); }
     }
+
+    /** Режим, фид и (в LIVE) метрики сокетов — для админки. */
+    @Override
+    public Map<String, Object> requestStats() {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("mode", paper == null ? "LIVE" : "PAPER");
+        m.put("marketData", Map.of("ws", feed.isConnected(), "messages", feed.messageCount()));
+        if (paper == null) m.put("orders", rest.stats());
+        return m;
+    }
+
+    /** Ордера идут на биржу (LIVE), а не в бумажный движок. */
+    @Override
+    public boolean isLive() { return paper == null; }
 }

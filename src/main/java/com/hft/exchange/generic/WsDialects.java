@@ -34,7 +34,6 @@ public final class WsDialects {
     /** Сборка и разбор JSON (только для редких сообщений; стакан — потоково). */
     private static final ObjectMapper JSON = new ObjectMapper();
 
-    /** Есть ли WS-диалект для биржи (у MEXC нет: спотовый WS отдаёт protobuf). */
     /** WS-диалект биржи с её параметрами (для Uniswap — пулы из uniPools). */
     public static Optional<WsDialect> forExchange(String id, com.hft.config.ExchangeConfig cfg) {
         return id.equals("uniswapv2") ? Optional.of(new Uniswap(cfg.params().uniPools())) : forExchange(id);
@@ -51,6 +50,7 @@ public final class WsDialects {
             case "uniswapv2" -> Optional.of(new Uniswap(""));
             case "kucoin" -> Optional.of(new Kucoin());
             case "aster" -> Optional.of(new Aster());
+            case "mexc" -> Optional.of(new MexcWsDialect());
             default -> Optional.empty();
         };
     }
