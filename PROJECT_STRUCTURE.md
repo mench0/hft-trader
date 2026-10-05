@@ -1,7 +1,7 @@
 # hft-trader: структура проекта
 
 Java 21, Maven, один fat-jar (`target/hft-trader.jar`). Бот стартует без бирж; выбор бирж, тикеров,
-параметров и запуск торговли — через веб-админку (`admin-panel/index.html`, отдельная страница) или HTTP API.
+параметров и запуск торговли — через веб-админку (отдельный проект hft-admin-panel) или HTTP API.
 Состояние хранится в SQLite (`data/state.db`), API-ключи — только в переменных окружения.
 
 ```
@@ -40,7 +40,6 @@ hft-trader/
 │   └── util/                         # Signer/Hmac, Numbers, BoundedMap, MsgPack
 ├── src/main/resources/
 │   └── logback.xml
-├── admin-panel/index.html            # веб-админка: отдельная страница, в jar не входит
 ├── src/test/java/                    # проверки-раннеры с main(): *Check.java (без JUnit)
 ├── run.sh                            # запуск с JVM-флагами под низкую задержку
 ├── .env.example                      # пример переменных окружения

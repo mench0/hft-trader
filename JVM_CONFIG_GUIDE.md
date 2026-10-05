@@ -60,7 +60,7 @@ java -XX:+UseG1GC -XX:MaxGCPauseMillis=5 \
 ## Конфигурация процесса
 
 Файл и окружение задают только админку; всё остальное настраивается на лету через веб-админку
-(`admin-panel/index.html`) или API и сохраняется в SQLite (`data/state.db`, путь — `STATE_DB`).
+(отдельный проект hft-admin-panel) или API и сохраняется в SQLite (`data/state.db`, путь — `STATE_DB`).
 
 | Что | Где | Перезапуск |
 |---|---|---|
