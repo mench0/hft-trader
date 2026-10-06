@@ -1,13 +1,17 @@
 package com.hft.config;
 
 /**
- * API-ключи одной биржи. Читаются из переменных окружения с префиксом
- * по имени биржи:
+ * API-ключи одной биржи.
  *
- *   BINANCE_API_KEY / BINANCE_API_SECRET
- *   BYBIT_API_KEY / BYBIT_API_SECRET
+ * <p>Читаются из переменных окружения с префиксом, соответствующим
+ * имени биржи:
+ * <ul>
+ *   <li>{@code BINANCE_API_KEY} / {@code BINANCE_API_SECRET}</li>
+ *   <li>{@code BYBIT_API_KEY} / {@code BYBIT_API_SECRET}</li>
+ * </ul>
  *
- * Так ключи разных бирж не путаются и не конфликтуют по именам.
+ * <p>Благодаря префиксу ключи разных бирж не пересекаются и не конфликтуют
+ * по именам.
  */
 public record Credentials(String apiKey, String apiSecret) {
 
