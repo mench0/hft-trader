@@ -19,7 +19,7 @@ import java.time.Duration;
  */
 final class Http {
     /** Разбор JSON. */
-    static final ObjectMapper JSON = new ObjectMapper();
+    static final ObjectMapper objectMapper = new ObjectMapper();
     /** HTTP-клиент подбора. */
     private static final HttpClient CLIENT = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
 
@@ -63,7 +63,7 @@ final class Http {
             throw new IllegalStateException(exchange + ": HTTP " + code + " — пауза 2 мин");
         }
         if (code / 100 != 2) throw new IllegalStateException(exchange + ": HTTP " + code + " " + abbreviate(resp.body()));
-        return JSON.readTree(resp.body());
+        return objectMapper.readTree(resp.body());
     }
 
     /** Обрезать длинный текст для сообщений об ошибке. */

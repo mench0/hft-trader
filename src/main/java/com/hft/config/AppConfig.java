@@ -10,21 +10,39 @@ import java.io.InputStream;
 import java.util.Map;
 
 /**
- * Только то, без чего админка не может запуститься: включена ли она, порт и токен.
+ * Минимальная конфигурация, необходимая для запуска админки:
+ * включена ли админка, её порт и токен доступа.
  *
- * Всё остальное — выбор бирж, их подключение (testnet, адреса), риск, стратегии, фоновые задачи —
- * задаётся через админку и хранится в SQLite ({@link TradingParams}, {@link GlobalParams}).
+ * <p>Вся остальная конфигурация — выбор бирж, параметры подключения
+ * (testnet, адреса), риск-менеджмент, стратегии и фоновые задачи —
+ * задаётся через админку и хранится в SQLite:
+ * {@link TradingParams}, {@link GlobalParams}.
  *
- * Источники, от высшего к низшему: переменные окружения ADMIN_ENABLED/ADMIN_PORT/ADMIN_TOKEN,
- * блок admin в application.yml рядом с jar (или -Dconfig.file=…), значения по умолчанию.
- * API-ключи бирж — только в окружении (ID_API_KEY/_SECRET), в файлы и базу не попадают.
+ * <p>Источники конфигурации в порядке приоритета:
+ * <ol>
+ *   <li>
+ *     Переменные окружения {@code ADMIN_ENABLED}, {@code ADMIN_PORT},
+ *     {@code ADMIN_TOKEN}.
+ *   </li>
+ *   <li>
+ *     Блок {@code admin} в {@code application.yml}, расположенном рядом
+ *     с JAR, либо в файле, указанном через {@code -Dconfig.file=...}.
+ *   </li>
+ *   <li>
+ *     Значения по умолчанию.
+ *   </li>
+ * </ol>
+ *
+ * <p>API-ключи бирж хранятся только в окружении
+ * ({@code <EXCHANGE>_API_KEY}/{@code <EXCHANGE>_API_SECRET})
+ * и не сохраняются ни в файлы, ни в базу данных.
  */
 public final class AppConfig {
 
     /** Логгер конфигурации. */
     private static final Logger log = LoggerFactory.getLogger(AppConfig.class);
     /** Разбор YAML. */
-    private static final ObjectMapper YAML = new ObjectMapper(new YAMLFactory());
+    private static final ObjectMapper objectMapper = new ObjectMapper(new YAMLFactory());
 
     /** Включена ли админка. */
     private boolean adminEnabled = true;
@@ -57,10 +75,10 @@ public final class AppConfig {
         try {
             if (external.exists()) {
                 log.info("Читаю конфигурацию из файла: {}", external.getAbsolutePath());
-                return YAML.readValue(external, Map.class);
+                return objectMapper.readValue(external, Map.class);
             }
             try (InputStream in = AppConfig.class.getResourceAsStream("/application.yml")) {
-                if (in != null) return YAML.readValue(in, Map.class);
+                if (in != null) return objectMapper.readValue(in, Map.class);
             }
         } catch (Exception e) {
             log.warn("Не удалось прочитать YAML: {}", e.getMessage());

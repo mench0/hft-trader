@@ -13,7 +13,6 @@ import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -32,7 +31,7 @@ public final class WsDialects {
     private WsDialects() {}
 
     /** Сборка и разбор JSON (только для редких сообщений; стакан — потоково). */
-    private static final ObjectMapper JSON = new ObjectMapper();
+    private static final ObjectMapper objectMapper = new ObjectMapper();
 
     /** WS-диалект биржи с её параметрами (для Uniswap — пулы из uniPools). */
     public static Optional<WsDialect> forExchange(String id, com.hft.config.ExchangeConfig cfg) {
@@ -97,7 +96,7 @@ public final class WsDialects {
         private List<String> op(String op, List<String> v) {
             List<String> out = new ArrayList<>();
             for (int i = 0; i < v.size(); i += 20) {
-                ObjectNode o = JSON.createObjectNode().put("op", op);
+                ObjectNode o = objectMapper.createObjectNode().put("op", op);
                 ArrayNode args = o.putArray("args");
                 for (String s : v.subList(i, Math.min(v.size(), i + 20)))
                     args.addObject().put("channel", "books").put("instId", s);
@@ -182,7 +181,7 @@ public final class WsDialects {
         private List<String> ev(String event, List<String> v) {
             List<String> out = new ArrayList<>();
             for (String s : v) {
-                ObjectNode o = JSON.createObjectNode().put("time", System.currentTimeMillis() / 1000)
+                ObjectNode o = objectMapper.createObjectNode().put("time", System.currentTimeMillis() / 1000)
                         .put("channel", "spot.order_book").put("event", event);
                 o.putArray("payload").add(s).add("20").add("100ms");
                 out.add(msg(o));
@@ -190,7 +189,7 @@ public final class WsDialects {
             return out;
         }
         @Override public String pingMessage() {
-            return msg(JSON.createObjectNode().put("time", System.currentTimeMillis() / 1000).put("channel", "spot.ping"));
+            return msg(objectMapper.createObjectNode().put("time", System.currentTimeMillis() / 1000).put("channel", "spot.ping"));
         }
 
         /** Разобрать сообщение биржи в out; служебные — пропустить, ошибки — исключение. */
@@ -258,7 +257,7 @@ public final class WsDialects {
         private List<String> op(String type, List<String> v) {
             List<String> out = new ArrayList<>();
             for (String s : v)
-                out.add(msg(JSON.createObjectNode().put("id", java.util.UUID.randomUUID().toString())
+                out.add(msg(objectMapper.createObjectNode().put("id", java.util.UUID.randomUUID().toString())
                         .put("reqType", type).put("dataType", s + "@depth20")));
             return out;
         }
@@ -336,7 +335,7 @@ public final class WsDialects {
         private List<String> op(String method, List<String> v) {
             List<String> out = new ArrayList<>();
             for (String s : v) {
-                ObjectNode o = JSON.createObjectNode().put("method", method);
+                ObjectNode o = objectMapper.createObjectNode().put("method", method);
                 o.putObject("subscription").put("type", "l2Book").put("coin", s);
                 out.add(msg(o));
             }
@@ -408,7 +407,7 @@ public final class WsDialects {
         public List<String> subscribe(List<String> v, int d) {
             List<String> out = new ArrayList<>();
             for (String s : v)
-                out.add(msg(JSON.createObjectNode().put("type", "subscribe").put("channel", "v4_orderbook")
+                out.add(msg(objectMapper.createObjectNode().put("type", "subscribe").put("channel", "v4_orderbook")
                         .put("id", s).put("batched", true)));
             return out;
         }
@@ -416,7 +415,7 @@ public final class WsDialects {
         public List<String> unsubscribe(List<String> v, int d) {
             List<String> out = new ArrayList<>();
             for (String s : v)
-                out.add(msg(JSON.createObjectNode().put("type", "unsubscribe").put("channel", "v4_orderbook").put("id", s)));
+                out.add(msg(objectMapper.createObjectNode().put("type", "unsubscribe").put("channel", "v4_orderbook").put("id", s)));
             return out;
         }
 
@@ -516,7 +515,7 @@ public final class WsDialects {
         /** Сообщения подписки на стаканы символов. */
         public List<String> subscribe(List<String> v, int d) {
             List<String> out = new ArrayList<>();
-            ObjectNode sub = JSON.createObjectNode().put("jsonrpc", "2.0").put("id", "sub:logs").put("method", "eth_subscribe");
+            ObjectNode sub = objectMapper.createObjectNode().put("jsonrpc", "2.0").put("id", "sub:logs").put("method", "eth_subscribe");
             ArrayNode params = sub.putArray("params").add("logs");
             ObjectNode filter = params.addObject();
             ArrayNode addrs = filter.putArray("address");
@@ -524,7 +523,7 @@ public final class WsDialects {
             filter.putArray("topics").add(SYNC_TOPIC);
             out.add(msg(sub));
             for (String addr : v) {
-                ObjectNode call = JSON.createObjectNode().put("jsonrpc", "2.0").put("id", "call:" + addr).put("method", "eth_call");
+                ObjectNode call = objectMapper.createObjectNode().put("jsonrpc", "2.0").put("id", "call:" + addr).put("method", "eth_call");
                 ArrayNode cp = call.putArray("params");
                 cp.addObject().put("to", addr).put("data", "0x0902f1ac");
                 cp.add("latest");
@@ -541,7 +540,7 @@ public final class WsDialects {
         /** Разобрать сообщение биржи в out; служебные — пропустить, ошибки — исключение. */
         public String parse(char[] c, int len, BookBatch out) throws Exception {
             out.reset();
-            JsonNode n = JSON.readTree(new String(c, 0, len));
+            JsonNode n = objectMapper.readTree(new String(c, 0, len));
             if ("eth_subscription".equals(n.path("method").asText())) {
                 JsonNode r = n.path("params").path("result");
                 if (r.path("removed").asBoolean(false)) return null;          // реорг: следующий Sync исправит
@@ -598,7 +597,7 @@ public final class WsDialects {
                     .timeout(java.time.Duration.ofSeconds(10)).POST(java.net.http.HttpRequest.BodyPublishers.noBody()).build();
             var resp = HTTP.send(req, java.net.http.HttpResponse.BodyHandlers.ofString());
             budget.onResponse(resp.statusCode(), resp.headers());
-            JsonNode r = JSON.readTree(resp.body());
+            JsonNode r = objectMapper.readTree(resp.body());
             if (!"200000".equals(r.path("code").asText())) throw new IllegalStateException("KuCoin bullet-public: " + abbreviate(resp.body()));
             JsonNode d = r.path("data");
             JsonNode server = d.path("instanceServers").path(0);
@@ -617,7 +616,7 @@ public final class WsDialects {
         private List<String> op(String type, List<String> v) {
             List<String> out = new ArrayList<>();
             for (int i = 0; i < v.size(); i += 100) {
-                ObjectNode o = JSON.createObjectNode().put("id", String.valueOf(ids.incrementAndGet())).put("type", type)
+                ObjectNode o = objectMapper.createObjectNode().put("id", String.valueOf(ids.incrementAndGet())).put("type", type)
                         .put("topic", "/spotMarket/level2Depth50:" + String.join(",", v.subList(i, Math.min(v.size(), i + 100))))
                         .put("privateChannel", false).put("response", true);
                 out.add(msg(o));
@@ -704,7 +703,7 @@ public final class WsDialects {
             String depth = d <= 5 ? "5" : d <= 10 ? "10" : "20";
             List<String> out = new ArrayList<>();
             for (int i = 0; i < v.size(); i += 50) {
-                ObjectNode o = JSON.createObjectNode().put("method", method).put("id", ids.incrementAndGet());
+                ObjectNode o = objectMapper.createObjectNode().put("method", method).put("id", ids.incrementAndGet());
                 ArrayNode params = o.putArray("params");
                 for (String s : v.subList(i, Math.min(v.size(), i + 50))) params.add(s + "@depth" + depth + "@100ms");
                 out.add(msg(o));

@@ -358,17 +358,26 @@ public final class AdminServer {
     }
 
     // ======================= ТОРГОВЫЕ ПАРАМЕТРЫ =======================
-
     /**
-     * Торговые параметры каждой биржи (риск, стратегия, размеры стакана/окна цен).
+     * Торговые параметры каждой биржи: риск, стратегия, глубина стакана
+     * и размер ценового окна.
      *
-     * GET  /exchange/params                        — параметры выбранных, запущенных и уже настроенных бирж
-     * GET  /exchange/params?exchange=bybit         — одной биржи
-     * POST /exchange/params?exchange=bybit&maxPositionQuote=50&maxDailyLossQuote=20&entryZ=2.5
+     * <p>Endpoints:
+     * <ul>
+     *   <li>{@code GET /exchange/params} — параметры выбранных, запущенных
+     *       и уже настроенных бирж.</li>
+     *   <li>{@code GET /exchange/params?exchange=bybit} — параметры одной биржи.</li>
+     *   <li>{@code POST /exchange/params?exchange=bybit&maxPositionQuote=50
+     *       &maxDailyLossQuote=20&entryZ=2.5} — изменение параметров.</li>
+     * </ul>
      *
-     * Любой параметр можно передать отдельно, остальные не меняются. Значение вне допустимого
-     * диапазона — ошибка 400, и тогда не меняется ничего. Работающая биржа подхватывает новые
-     * значения на следующем тике; bookDepth и priceWindow — после /control/stop и /control/start.
+     * <p>Любой параметр можно передать отдельно — остальные значения не меняются.
+     * Если значение выходит за допустимый диапазон, возвращается {@code 400},
+     * и настройки не изменяются.
+     *
+     * <p>Работающая биржа подхватывает новые значения на следующем тике.
+     * Параметры {@code bookDepth} и {@code priceWindow} применяются после
+     * выполнения {@code /control/stop} и {@code /control/start}.
      */
     private void handleExchangeParams(HttpExchange ex) throws IOException {
         Map<String, String> q = query(ex);
@@ -581,9 +590,29 @@ public final class AdminServer {
     }
 
     /**
-     * GET /env — какие переменные заданы и откуда (значения секретов замаскированы).
-     * POST /env?BINANCE_API_KEY=…&BINANCE_API_SECRET=… — записать в .env; пустое значение удаляет.
-     * Ключи бирж применяются при следующем /control/start; ADMIN_* и STATE_DB — после перезапуска процесса.
+     * Управление переменными окружения через админский API.
+     *
+     * <p>Endpoints:
+     * <ul>
+     *   <li>
+     *     {@code GET /env} — список заданных переменных и источник их значения.
+     *     Значения секретов замаскированы.
+     *   </li>
+     *   <li>
+     *     {@code POST /env?BINANCE_API_KEY=…&BINANCE_API_SECRET=…} —
+     *     записать переменные в {@code .env}. Пустое значение удаляет переменную.
+     *   </li>
+     * </ul>
+     *
+     * <p>Применение изменений:
+     * <ul>
+     *   <li>
+     *     Ключи бирж применяются при следующем {@code /control/start}.
+     *   </li>
+     *   <li>
+     *     {@code ADMIN_*} и {@code STATE_DB} применяются после перезапуска процесса.
+     *   </li>
+     * </ul>
      */
     private void handleEnv(HttpExchange ex) throws IOException {
         Map<String, String> q = query(ex);

@@ -16,16 +16,16 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Общий бюджет запросов к одной бирже на весь процесс.
- *
+ * <p>
  * Биржа считает лимит на IP или ключ, а не на объект в программе: торговый клиент, REST-опрос стакана,
  * подбор тикеров и WebSocket-подписки тратят один и тот же лимит. Поэтому бюджет один на биржу
  * ({@link #of(String)}), и все компоненты берут разрешение у него.
- *
+ * <p>
  * Устройство: набор «вёдер» из {@link RateLimits} — у каждого ёмкость (с запасом 20% от официального
  * лимита), окно и виды запросов, которые в него входят. Запрос с весом w ждёт, пока во всех его вёдрах
  * наберётся w жетонов (жетоны можно занять заранее — запросы выстраиваются в очередь без гонки).
  * Если ждать дольше maxWaitMs — ApiException(429, LOCAL), поток не зависает.
- *
+ * <p>
  * Ответы биржи: 429/418/403 и коды лимита останавливают все запросы к бирже на время из Retry-After
  * (или по умолчанию), повторные — вдвое дольше. Заголовки с израсходованным весом (Binance/Aster),
  * остатком и временем сброса (Bybit, Gate, KuCoin) подтягивают наш счёт к счёту биржи.
@@ -38,7 +38,9 @@ public final class RateBudget {
     private static final Map<String, RateBudget> ALL = new ConcurrentHashMap<>();
 
     /** Вид запроса: в какие вёдра он попадает, решает {@link RateLimits}. */
-    public enum Kind { PUBLIC, PRIVATE, ORDER, WS_MESSAGE, WS_CONNECT }
+    public enum Kind {
+        PUBLIC, PRIVATE, ORDER, WS_MESSAGE, WS_CONNECT
+    }
 
     /** Ведро: capacity жетонов, полностью восполняется за windowMs. */
     public record Limit(String name, double capacity, long windowMs, Set<Kind> kinds) {
