@@ -1,13 +1,7 @@
 package com.hft.config;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import java.io.File;
-import java.io.InputStream;
-import java.util.Map;
 
 /**
  * Минимальная конфигурация, необходимая для запуска админки:
@@ -21,28 +15,24 @@ import java.util.Map;
  * <p>Источники конфигурации в порядке приоритета:
  * <ol>
  *   <li>
- *     Переменные окружения {@code ADMIN_ENABLED}, {@code ADMIN_PORT},
- *     {@code ADMIN_TOKEN}.
+ *     Переменные {@code ADMIN_ENABLED}, {@code ADMIN_PORT}, {@code ADMIN_TOKEN}
+ *     из файла {@code .env} ({@link Env}).
  *   </li>
  *   <li>
- *     Блок {@code admin} в {@code application.yml}, расположенном рядом
- *     с JAR, либо в файле, указанном через {@code -Dconfig.file=...}.
+ *     Те же переменные окружения процесса.
  *   </li>
  *   <li>
  *     Значения по умолчанию.
  *   </li>
  * </ol>
  *
- * <p>API-ключи бирж хранятся только в окружении
- * ({@code <EXCHANGE>_API_KEY}/{@code <EXCHANGE>_API_SECRET})
- * и не сохраняются ни в файлы, ни в базу данных.
+ * <p>API-ключи бирж ({@code <EXCHANGE>_API_KEY}/{@code <EXCHANGE>_API_SECRET})
+ * берутся оттуда же и не сохраняются в базу данных.
  */
 public final class AppConfig {
 
     /** Логгер конфигурации. */
     private static final Logger log = LoggerFactory.getLogger(AppConfig.class);
-    /** Разбор YAML. */
-    private static final ObjectMapper objectMapper = new ObjectMapper(new YAMLFactory());
 
     /** Включена ли админка. */
     private boolean adminEnabled = true;
@@ -54,59 +44,20 @@ public final class AppConfig {
     /** Создаётся через load() или defaults(). */
     private AppConfig() {}
 
-    /** Прочитать application.yml (если есть) и переменные окружения. */
+    /** Прочитать ADMIN_* из .env и окружения. */
     public static AppConfig load() {
         AppConfig cfg = new AppConfig();
-        Map<String, Object> yaml = readYaml();
-        if (yaml != null) cfg.applyAdminYaml(yaml);
-        cfg.applyEnv();
+        cfg.adminEnabled = bool(env("ADMIN_ENABLED"), cfg.adminEnabled);
+        cfg.adminPort = intOf(env("ADMIN_PORT"), cfg.adminPort);
+        cfg.adminToken = str(env("ADMIN_TOKEN"), cfg.adminToken);
         log.info("Админка: {}", cfg.adminEnabled ? "порт " + cfg.adminPort + (cfg.adminToken.isBlank() ? " (без токена)" : " (с токеном)") : "выключена");
         return cfg;
     }
 
-    /** Значения по умолчанию без файлов и окружения (тесты). */
+    /** Значения по умолчанию без .env и окружения (тесты). */
     public static AppConfig defaults() { return new AppConfig(); }
 
-    /** application.yml рядом с jar (или -Dconfig.file), иначе из ресурсов jar; null — файла нет. */
-    @SuppressWarnings("unchecked")
-    private static Map<String, Object> readYaml() {
-        String path = System.getProperty("config.file", "application.yml");
-        File external = new File(path);
-        try {
-            if (external.exists()) {
-                log.info("Читаю конфигурацию из файла: {}", external.getAbsolutePath());
-                return objectMapper.readValue(external, Map.class);
-            }
-            try (InputStream in = AppConfig.class.getResourceAsStream("/application.yml")) {
-                if (in != null) return objectMapper.readValue(in, Map.class);
-            }
-        } catch (Exception e) {
-            log.warn("Не удалось прочитать YAML: {}", e.getMessage());
-        }
-        return null;
-    }
-
-    /** Блок admin из YAML; про устаревшие блоки risk и exchanges — предупреждение в лог. */
-    @SuppressWarnings("unchecked")
-    private void applyAdminYaml(Map<String, Object> root) {
-        for (String legacy : new String[]{"risk", "exchanges"}) {
-            if (root.containsKey(legacy))
-                log.warn("Блок «{}» в application.yml больше не читается: эти настройки задаются через админку", legacy);
-        }
-        Map<String, Object> admin = (Map<String, Object>) root.getOrDefault("admin", Map.of());
-        adminEnabled = bool(admin.get("enabled"), adminEnabled);
-        adminPort = intOf(admin.get("port"), adminPort);
-        adminToken = str(admin.get("token"), adminToken);
-    }
-
-    /** Переменные окружения ADMIN_* важнее YAML. */
-    private void applyEnv() {
-        adminEnabled = bool(env("ADMIN_ENABLED"), adminEnabled);
-        adminPort = intOf(env("ADMIN_PORT"), adminPort);
-        adminToken = str(env("ADMIN_TOKEN"), adminToken);
-    }
-
-    /** Переменная окружения или null, если не задана или пуста. */
+    /** Переменная из .env или окружения; null, если не задана или пуста. */
     private static String env(String key) {
         String v = Env.get(key);
         return v == null || v.isBlank() ? null : v;

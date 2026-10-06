@@ -33,7 +33,7 @@ JVM_OPTS=(
 mkdir -p logs
 
 echo "Запуск. Конфигурация:"
-echo "  ADMIN_PORT=${ADMIN_PORT:-из application.yml или 8080}"
+echo "  ADMIN_PORT=${ADMIN_PORT:-из .env или 8080}"
 echo "  Торговые параметры бирж — через админку (/exchange/params), хранятся в ${STATE_DB:-data/state.db}"
 echo ""
 
