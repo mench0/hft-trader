@@ -116,6 +116,37 @@ public class KucoinWsCheck {
       c.stopStreams();
       ck("stopped", !c.wsReady());
     }
+    // ───── UTA: uta.order / uta.cancel с tradeType=SPOT (KUCOIN_UTA=true в .env рабочей папки)
+    java.nio.file.Path envFile = java.nio.file.Path.of(".env");
+    java.nio.file.Files.writeString(envFile, "KUCOIN_UTA=true\n");
+    try (var tr = new MiniWsServer(); var pv = new MiniWsServer()) {
+      String welcome = "{\"sessionId\":\"s-2\",\"data\":\"welcome\",\"timestamp\":1}";
+      tr.onOpen = cn -> cn.text(welcome);
+      tr.onText = (cn, t) -> {
+        if (!t.startsWith("{")) { cn.text("{\"sessionId\":\"s-2\",\"data\":\"ok\",\"timestamp\":2}"); return; }
+        JsonNode n = j(t); String op = n.path("op").asText(), id = n.path("id").asText();
+        if (op.equals("uta.order")) cn.text("{\"id\":\""+id+"\",\"op\":\"uta.order\",\"code\":\"200000\",\"data\":{\"orderId\":\"u-1\",\"clientOid\":\"c\",\"tradeType\":\"SPOT\"}}");
+        if (op.equals("uta.cancel")) cn.text("{\"id\":\""+id+"\",\"op\":\"uta.cancel\",\"code\":\"200000\",\"data\":{\"orderId\":\"u-1\"}}");
+      };
+      pv.onOpen = cn -> cn.text("{\"id\":\"w\",\"type\":\"welcome\"}");
+      var cu = new KucoinRestClient(cfg, cr, f);
+      cu.setWsUrls(tr.url(), pv.url());
+      cu.startStreams(new BalanceStore());
+      cu.awaitStreams(3000);
+      int restBefore = h("POST /api/v1/orders");
+      var ur = cu.buyLimit("BTCUSDT", 0.5, 100, TimeInForce.GTC);
+      cu.cancelOrder("BTCUSDT", ur.orderId());
+      JsonNode uo = tr.received.stream().filter(x -> x.contains("uta.order")).map(KucoinWsCheck::j).findFirst().orElse(null);
+      JsonNode uc = tr.received.stream().filter(x -> x.contains("uta.cancel")).map(KucoinWsCheck::j).findFirst().orElse(null);
+      ck("uta.order with tradeType=SPOT", uo != null && uo.path("args").path("tradeType").asText().equals("SPOT") && uo.path("args").path("symbol").asText().equals("BTC-USDT"));
+      ck("uta.cancel with tradeType=SPOT", uc != null && uc.path("args").path("tradeType").asText().equals("SPOT") && uc.path("args").path("orderId").asText().equals("u-1"));
+      ck("uta: no spot.* ops, no REST", tr.received.stream().noneMatch(x -> x.contains("spot.order") || x.contains("spot.cancel")) && h("POST /api/v1/orders")==restBefore);
+      cu.stopStreams();
+    } finally {
+      java.nio.file.Files.deleteIfExists(envFile);
+    }
+    Thread.sleep(20);
+
     var c2 = new KucoinRestClient(cfg, cr, f);
     var r2 = c2.buyLimit("BTCUSDT", 0.5, 100, TimeInForce.GTC);
     ck("REST fallback when no ws", r2.status().equals("NEW") && h("POST /api/v1/orders")==1);
