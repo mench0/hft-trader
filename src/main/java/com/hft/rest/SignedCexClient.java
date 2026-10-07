@@ -199,12 +199,13 @@ public abstract class SignedCexClient implements ExchangeOrderApi {
             long until = System.currentTimeMillis() + config.params().marketFillWaitMs();
             while (System.currentTimeMillis() < until) {
                 OrderResult s = streamed.get(r.orderId());
-                if (s != null && !"NEW".equals(s.status())) { cur = s; break; }
+                if (s != null) cur = s;
+                if (terminal(cur.status())) break;            // частичное исполнение — ещё не итог, ждём дальше
                 Thread.sleep(15);
             }
         }
         for (int i = 0; i < 4; i++) {
-            if (!"NEW".equals(cur.status())) break;
+            if (terminal(cur.status())) break;
             Thread.sleep(40L * (i + 1));
             try { cur = orderStatus(r.symbol(), r.orderId()); }
             catch (ApiException e) { if (e.isRateLimit()) break; throw e; }
@@ -215,6 +216,14 @@ public abstract class SignedCexClient implements ExchangeOrderApi {
         }
         return new OrderResult(cur.orderId(), cur.clientOrderId(), cur.symbol(), cur.side(), st,
                 cur.requestedQty() > 0 ? cur.requestedQty() : r.requestedQty(), cur.executedQty(), cur.avgPrice(), 0);
+    }
+
+    /** Конечный статус ордера: дальше он не изменится. */
+    protected static boolean terminal(String status) {
+        return switch (status) {
+            case "FILLED", "CANCELED", "REJECTED", "EXPIRED" -> true;
+            default -> false;
+        };
     }
 
     // ------------------------------------------------------------ id

@@ -43,7 +43,6 @@ public final class Dialects {
             case "okx" -> new Okx();
             case "mexc" -> new Mexc();
             case "gate" -> new Gate();
-            case "bingx" -> new Bingx();
             case "hyperliquid" -> new Hyperliquid();
             case "dydx" -> new Dydx();
             case "uniswapv2" -> new UniswapV2("");
@@ -171,22 +170,6 @@ public final class Dialects {
             JsonNode r = JSON.readTree(body);
             return book(levels(r.get("bids"), null, null, true, MAX),
                     levels(r.get("asks"), null, null, false, MAX), r.path("current").asLong(System.currentTimeMillis()));
-        }
-    }
-
-    /** GET /openApi/spot/v1/market/depth?symbol=BTC-USDT&limit=20 -> {code:0,data:{bids,asks,ts}} */
-    static final class Bingx implements BookDialect {
-        /** Запрос стакана символа. */
-        public HttpRequest request(String b, String s, int d) {
-            return get(b + "/openApi/spot/v1/market/depth?symbol=" + base(s) + "-" + quote(s) + "&limit=" + Math.min(d, 100));
-        }
-        /** Разобрать ответ в стакан; ошибка биржи — исключение. */
-        public ParsedBook parse(String body, String s) throws Exception {
-            JsonNode r = JSON.readTree(body);
-            if (r.path("code").asInt(-1) != 0) throw new IllegalStateException("BingX: " + body);
-            JsonNode d = r.get("data");
-            return book(levels(d.get("bids"), null, null, true, MAX),
-                    levels(d.get("asks"), null, null, false, MAX), d.path("ts").asLong(System.currentTimeMillis()));
         }
     }
 

@@ -7,7 +7,6 @@ import java.net.InetSocketAddress;
 import java.util.*;
 import java.util.concurrent.atomic.*;
 import java.util.function.BooleanSupplier;
-import java.util.zip.GZIPOutputStream;
 import com.sun.net.httpserver.HttpServer;
 
 public class WsFeedCheck {
@@ -27,7 +26,6 @@ public class WsFeedCheck {
     return new Rig(f, m, books, gu, ticks);
   }
 
-  static byte[] gzip(String s) throws Exception { var bo=new ByteArrayOutputStream(); try(var g=new GZIPOutputStream(bo)){ g.write(s.getBytes()); } return bo.toByteArray(); }
 
   public static void main(String[] a) throws Exception {
     // ───── OKX: подписка, snapshot, update, удаление уровня, фрагментация
@@ -113,25 +111,6 @@ public class WsFeedCheck {
       srv.conns.get(0).text("{\"time\":3,\"channel\":\"spot.order_book\",\"event\":\"subscribe\",\"error\":{\"code\":2,\"message\":\"invalid pair\"}}");
       ck("gate error counted", await(() -> ((Long) r.feed().stats().get("parseErrors")) == 1L, 3000));
       ck("gate error text", String.valueOf(r.feed().stats().get("lastError")).contains("invalid pair"));
-      r.feed().stop();
-    }
-
-    // ───── BingX: gzip + Ping/Pong
-    try (var srv = new MiniWsServer()) {
-      var r = rig("bingx", srv.url(), List.of("BTCUSDT"), 30000, 50);
-      srv.onText = (c, t) -> { if (t.contains("\"sub\"")) {
-        try {
-          c.binary(gzip("{\"id\":\"x\",\"code\":0,\"msg\":\"\",\"dataType\":\"\",\"data\":null}"));
-          c.binary(gzip("{\"code\":0,\"dataType\":\"BTC-USDT@depth20\",\"data\":{\"bids\":[[\"98\",\"1\"],[\"99\",\"2\"]],\"asks\":[[\"102\",\"1\"],[\"101\",\"5\"]]},\"ts\":1700000000000}"));
-          c.binary(gzip("Ping"));
-        } catch (Exception e) { throw new RuntimeException(e); }
-      }};
-      r.feed().start();
-      var b = r.market().book("BTCUSDT");
-      ck("bingx gzip book sorted", await(() -> near(b.bestBid(), 99) && near(b.bestAsk(), 101) && near(b.bestAskQty(), 5), 5000));
-      ck("bingx Pong reply", await(() -> srv.received.contains("Pong"), 3000));
-      ck("bingx sub msg", srv.received.stream().anyMatch(t -> t.contains("BTC-USDT@depth20") && t.contains("\"reqType\":\"sub\"")));
-      ck("bingx no parse errors", r.feed().stats().get("parseErrors").equals(0L));
       r.feed().stop();
     }
 
@@ -237,7 +216,7 @@ public class WsFeedCheck {
     // ───── каталог/диалекты
     ck("mexc has ws dialect (protobuf)", WsDialects.forExchange("mexc").isPresent() && WsDialects.forExchange("mexc").get().parsesBinary());
     ck("binance no generic ws dialect", WsDialects.forExchange("binance").isEmpty());
-    for (String id : List.of("okx","gate","bingx","hyperliquid","dydx")) ck("dialect "+id, WsDialects.forExchange(id).isPresent());
+    for (String id : List.of("okx","gate","hyperliquid","dydx")) ck("dialect "+id, WsDialects.forExchange(id).isPresent());
     ck("okx venue", WsDialects.forExchange("okx").get().venueSymbol("BTCUSDT").equals("BTC-USDT"));
     ck("hl venue", WsDialects.forExchange("hyperliquid").get().venueSymbol("BTCUSDC").equals("BTC"));
     ck("dydx venue", WsDialects.forExchange("dydx").get().venueSymbol("BTCUSD").equals("BTC-USD"));

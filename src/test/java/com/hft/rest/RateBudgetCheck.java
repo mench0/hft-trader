@@ -58,7 +58,7 @@ public class RateBudgetCheck {
 
     // ---- один бюджет на биржу на процесс
     ck("RateBudget.of is shared per exchange", RateBudget.of("binance") == RateBudget.of("binance") && RateBudget.of("binance") != RateBudget.of("okx"));
-    ck("every live exchange has a WS connect limit", List.of("binance","bybit","okx","gate","mexc","bingx","hyperliquid","kucoin","aster","uniswapv2","dydx")
+    ck("every live exchange has a WS connect limit", List.of("binance","bybit","okx","gate","mexc","hyperliquid","kucoin","aster","uniswapv2","dydx")
         .stream().allMatch(id -> RateLimits.forExchange(id).stream().anyMatch(l -> l.kinds().contains(Kind.WS_CONNECT))));
     ck("Binance weights from docs", RateLimits.weight("binance","GET","/api/v3/account","") == 20 && RateLimits.weight("binance","GET","/api/v3/ticker/24hr","") == 80
         && RateLimits.weight("binance","GET","/api/v3/depth","symbol=X&limit=500") == 25 && RateLimits.weight("binance","POST","/api/v3/order","") == 1);

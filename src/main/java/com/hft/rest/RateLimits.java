@@ -73,13 +73,6 @@ public final class RateLimits {
                     Limit.of("orders", 5, 1_000, ORDER),
                     Limit.of("wsMessages", 100, 1_000, WS_MESSAGE),
                     Limit.of("wsConnects", 100, 60_000, WS_CONNECT));
-            // BingX: рыночные данные 100/10 с на IP, аккаунт 1000/10 с, ордера 10/с
-            case "bingx" -> List.of(
-                    Limit.of("public", 100, 10_000, PUBLIC),
-                    Limit.of("private", 1000, 10_000, PRIVATE),
-                    Limit.of("orders", 10, 1_000, ORDER),
-                    Limit.of("wsMessages", 10, 1_000, WS_MESSAGE),
-                    Limit.of("wsConnects", 60, 60_000, WS_CONNECT));
             // Hyperliquid: вес 1200/мин на IP (info — 2..20, действие — 1); WS: 2000 сообщений/мин, 100 подключений
             case "hyperliquid" -> List.of(
                     Limit.of("weight", 1200, 60_000, REST),

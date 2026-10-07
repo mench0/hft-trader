@@ -1,5 +1,5 @@
 import com.hft.config.*;
-import com.hft.exchange.okx.*; import com.hft.exchange.mexc.*; import com.hft.exchange.gate.*; import com.hft.exchange.bingx.*;
+import com.hft.exchange.okx.*; import com.hft.exchange.mexc.*; import com.hft.exchange.gate.*;
 import com.hft.model.OrderResult; import com.hft.model.OrderEnums.*;
 import com.hft.rest.*; import com.hft.store.*; import com.hft.util.Hmac;
 import com.sun.net.httpserver.*; import java.net.InetSocketAddress; import java.util.*;
@@ -99,21 +99,6 @@ public class ExchangeClientsCheck {
     status[0]=400; routes.put("POST /api/v4/spot/orders","{\"label\":\"BALANCE_NOT_ENOUGH\",\"message\":\"Not enough balance\"}");
     thrown=false; try{ gate.buyMarket("BTCUSDT",0.5);}catch(ApiException e){thrown=e.getMessage().contains("Not enough");}
     ck("gate error", thrown); status[0]=200; seen.clear();
-
-    // ---------- BingX
-    routes.put("POST /openApi/spot/v1/trade/order", "{\"code\":0,\"msg\":\"\",\"data\":{\"orderId\":987,\"status\":\"NEW\"}}");
-    routes.put("GET /openApi/spot/v1/trade/query", "{\"code\":0,\"data\":{\"status\":\"FILLED\",\"executedQty\":\"0.5\",\"cummulativeQuoteQty\":\"50\",\"origQty\":\"0.5\",\"side\":\"SELL\"}}");
-    var bx = new BingxRestClient(cfg("bingx",url), cr, filt());
-    r = bx.sellMarket("BTCUSDT", 0.5);
-    ck("bingx sell filled", r.isFilled() && near(r.avgPrice(),100) && r.side()==Side.SELL && r.orderId()==987);
-    Seen b0 = seen.get(0);
-    ck("bingx symbol dash", b0.uri().contains("symbol=BTC-USDT") && b0.uri().contains("type=MARKET") && b0.uri().contains("quantity=0.5"));
-    full = b0.uri().substring(b0.uri().indexOf('?')+1); ix = full.indexOf("&signature=");
-    ck("bingx sign", full.substring(ix+11).equals(Hmac.sha256Hex("SECRET", full.substring(0,ix))));
-    ck("bingx header", "KEY".equals(b0.h().getFirst("X-BX-APIKEY")));
-    routes.put("POST /openApi/spot/v1/trade/order","{\"code\":100500,\"msg\":\"Insufficient\"}");
-    thrown=false; try{ bx.buyMarket("BTCUSDT",0.5);}catch(ApiException e){thrown=e.getMessage().contains("Insufficient");}
-    ck("bingx error", thrown);
 
     // ---------- валидация до отправки
     int before = seen.size();

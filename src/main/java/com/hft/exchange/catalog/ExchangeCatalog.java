@@ -48,9 +48,6 @@ public final class ExchangeCatalog {
                 "https://api.gateio.ws", 5, 0.20, 0.20, "USDT", "BTCUSDT",
                 "Спот: стакан, ордера (WS API), исполнения и балансы по WebSocket, REST — запасной. Комиссия указана по умолчанию, проверьте тариф.",
                 "wss://api.gateio.ws/ws/v4/", "https://api-testnet.gateapi.io", "wss://ws-testnet.gate.com/v4/ws/spot"));
-        add(new ExchangeInfo("bingx", "BingX", Kind.CEX_TIER3, Adapter.LIVE_UNVERIFIED,
-                "https://open-api.bingx.com", 5, 0.10, 0.10, "USDT", "BTCUSDT",
-                "Спот: стакан (depth20, gzip) и исполнения (listenKey) по WebSocket, REST-запас; ордера только REST (WS-ордеров у BingX нет). Порядок уровней может быть обратным, сортируется."));
         add(new ExchangeInfo("hyperliquid", "Hyperliquid", Kind.PERP_DEX, Adapter.LIVE_UNVERIFIED,
                 "https://api.hyperliquid.xyz", 5, 0.015, 0.045, "USDC", "BTCUSDC (монета BTC, перп)",
                 "Перпы: стакан, ордера, info-запросы (WS post) и исполнения по WebSocket, REST — запасной. Ордера подписываются agent-ключом (EIP-712) через web3j. HYPERLIQUID_API_KEY = адрес аккаунта, _SECRET = ключ agent-кошелька без права вывода. Лимит адреса: 1 действие на $1 оборота.",

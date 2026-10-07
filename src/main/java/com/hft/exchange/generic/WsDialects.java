@@ -8,7 +8,6 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.hft.store.BalanceStore;
 
-import java.io.ByteArrayInputStream;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -16,7 +15,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.zip.GZIPInputStream;
 
 import static com.hft.exchange.generic.FastJson.*;
 
@@ -43,7 +41,6 @@ public final class WsDialects {
         return switch (id) {
             case "okx" -> Optional.of(new Okx());
             case "gate" -> Optional.of(new Gate());
-            case "bingx" -> Optional.of(new Bingx());
             case "hyperliquid" -> Optional.of(new Hyperliquid());
             case "dydx" -> Optional.of(new Dydx());
             case "uniswapv2" -> Optional.of(new Uniswap(""));
@@ -236,81 +233,6 @@ public final class WsDialects {
             if (!orderBook) { out.reset(); throw new IllegalStateException("Gate: неожиданное сообщение " + abbreviate(c, len)); }
             if (!update) { out.reset(); return null; }                     // ответы на подписку
             if (out.venue == null) throw new IllegalStateException("Gate: нет пары в обновлении");
-            out.snapshot = true;
-            if (out.tsMs == 0) out.tsMs = System.currentTimeMillis();
-            return null;
-        }
-    }
-
-    // ───────────────────────── BingX ─────────────────────────
-
-    /** BingX: depth20 (снимки в gzip), пинг Ping/Pong. */
-    static final class Bingx implements WsDialect {
-        public String defaultUrl(boolean testnet) { return "wss://open-api-ws.bingx.com/market"; }
-        /** Имя символа на бирже. */
-        public String venueSymbol(String s) { return base(s) + "-" + quote(s); }
-        /** Сообщения подписки на стаканы символов. */
-        public List<String> subscribe(List<String> v, int d) { return op("sub", v); }
-        /** Сообщения подписки на стаканы символов. */
-        public List<String> unsubscribe(List<String> v, int d) { return op("unsub", v); }
-        /** Сообщения подписки/отписки пачками. */
-        private List<String> op(String type, List<String> v) {
-            List<String> out = new ArrayList<>();
-            for (String s : v)
-                out.add(msg(objectMapper.createObjectNode().put("id", java.util.UUID.randomUUID().toString())
-                        .put("reqType", type).put("dataType", s + "@depth20")));
-            return out;
-        }
-        @Override public String decodeBinary(byte[] data) throws Exception {
-            try (GZIPInputStream gz = new GZIPInputStream(new ByteArrayInputStream(data))) {
-                return new String(gz.readAllBytes(), StandardCharsets.UTF_8);
-            }
-        }
-
-        /** Разобрать сообщение биржи в out; служебные — пропустить, ошибки — исключение. */
-        public String parse(char[] c, int len, BookBatch out) throws Exception {
-            out.reset();
-            if (FastJson.equals(c, len, "Ping") || FastJson.equals(c, len, "ping")) return "Pong";
-            if (FastJson.equals(c, len, "Pong") || FastJson.equals(c, len, "pong")) return null;
-            int code = 0;
-            String errMsg = null;
-            boolean depth = false, data = false;
-            try (JsonParser p = open(c, len)) {
-                while (p.nextToken() == JsonToken.FIELD_NAME) {
-                    String f = p.currentName();
-                    p.nextToken();
-                    switch (f) {
-                        case "code" -> code = (int) longOf(p, 0);
-                        case "msg" -> errMsg = p.getText();
-                        case "dataType" -> {
-                            char[] t = p.getTextCharacters(); int off = p.getTextOffset(), n = p.getTextLength();
-                            int at = -1;
-                            for (int i = 0; i < n; i++) if (t[off + i] == '@') { at = i; break; }
-                            if (at > 0) {
-                                out.venue = out.resolve(t, off, at);
-                                depth = n - at >= 6 && t[off + at + 1] == 'd' && t[off + at + 2] == 'e' && t[off + at + 3] == 'p';
-                            } else if (n > 0) throw new IllegalStateException("BingX: неожиданный dataType " + p.getText());
-                        }
-                        case "data" -> {
-                            if (p.currentToken() != JsonToken.START_OBJECT) { p.skipChildren(); break; }
-                            data = true;
-                            while (p.nextToken() == JsonToken.FIELD_NAME) {
-                                String g = p.currentName(); p.nextToken();
-                                switch (g) {
-                                    case "bids" -> levels(p, out, true);
-                                    case "asks" -> levels(p, out, false);
-                                    default -> p.skipChildren();
-                                }
-                            }
-                        }
-                        case "ts" -> out.tsMs = longOf(p, 0);
-                        default -> p.skipChildren();
-                    }
-                }
-            }
-            if (code != 0) { out.reset(); throw new IllegalStateException("BingX error " + code + ": " + errMsg); }
-            if (!data || out.venue == null) { out.reset(); return null; }   // ответ на подписку
-            if (!depth) { out.reset(); throw new IllegalStateException("BingX: не стакан"); }
             out.snapshot = true;
             if (out.tsMs == 0) out.tsMs = System.currentTimeMillis();
             return null;
