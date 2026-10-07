@@ -37,7 +37,7 @@ public interface WsDialect {
     /** Интервал прикладного пинга, мс. */
     default long pingIntervalMs() { return 15_000; }
 
-    /** Бинарные сообщения (например, gzip у BingX) -> текст. */
+    /** Бинарные сообщения (например, сжатые gzip) -> текст. */
     default String decodeBinary(byte[] data) throws Exception { return new String(data, StandardCharsets.UTF_8); }
 
     /** Бинарные кадры разбираются самим диалектом ({@link #parseBinary}), а не через decodeBinary + parse (protobuf у MEXC). */

@@ -31,7 +31,7 @@ public final class MarketSources {
 
     /** Биржи, для которых есть источник сводок. */
     public static List<String> supported() {
-        return List.of("binance", "bybit", "okx", "gate", "mexc", "bingx", "kucoin", "aster", "hyperliquid", "dydx");
+        return List.of("binance", "bybit", "okx", "gate", "mexc", "kucoin", "aster", "hyperliquid", "dydx");
     }
 
     /** Источник сводок биржи по адресу из каталога; пусто — источника нет. */
@@ -56,7 +56,6 @@ public final class MarketSources {
             case "bybit" -> new Bybit(b, http);
             case "okx" -> new Okx(b, http);
             case "gate" -> new Gate(b, http);
-            case "bingx" -> new Bingx(b, http);
             case "hyperliquid" -> new Hyperliquid(b, http);
             case "dydx" -> new Dydx(b, http);
             default -> null;
@@ -254,36 +253,6 @@ public final class MarketSources {
             List<double[]> rows = new ArrayList<>();
             for (JsonNode k : http.get(base + "/api/v4/spot/candlesticks?currency_pair=" + t.venueSymbol() + "&interval=1m&limit=" + Math.min(limit, 1000)))
                 rows.add(new double[]{d(k, 0), d(k, 2)});           // [t, объём в котировке, close, high, low, open, …]
-            return closes(rows);
-        }
-    }
-
-    // ───────────────────────── BingX ─────────────────────────
-
-    /** BingX: /openApi/spot/v1/ticker/24hr и /market/kline. */
-    static final class Bingx implements MarketSource {
-        /** REST-адрес биржи и HTTP-клиент с лимитами. */
-        final String base; final Http http;
-        Bingx(String base, Http http) { this.base = base; this.http = http; }
-        /** Идентификатор биржи. */
-        public String exchange() { return "bingx"; }
-        /** Суточная сводка по всем тикерам биржи. */
-        public List<TickerSnapshot> tickers() throws Exception {
-            List<TickerSnapshot> out = new ArrayList<>();
-            JsonNode r = http.get(base + "/openApi/spot/v1/ticker/24hr?timestamp=" + System.currentTimeMillis());
-            if (r.path("code").asInt(0) != 0) throw new IllegalStateException("BingX: " + r.path("msg").asText());
-            for (JsonNode t : r.path("data")) {
-                TickerSnapshot s = spot("bingx", t.path("symbol").asText(), d(t, "lastPrice"), d(t, "bidPrice"), d(t, "askPrice"),
-                        d(t, "highPrice"), d(t, "lowPrice"), d(t, "openPrice"), d(t, "quoteVolume"), -1);
-                if (s != null) out.add(s);
-            }
-            return out;
-        }
-        /** Минутные цены закрытия тикера (не больше limit). */
-        public double[] closes1m(TickerSnapshot t, int limit) throws Exception {
-            List<double[]> rows = new ArrayList<>();
-            JsonNode r = http.get(base + "/openApi/spot/v2/market/kline?symbol=" + t.venueSymbol() + "&interval=1m&limit=" + Math.min(limit, 1000));
-            for (JsonNode k : r.path("data")) rows.add(new double[]{d(k, 0), d(k, 4)});
             return closes(rows);
         }
     }

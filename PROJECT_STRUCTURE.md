@@ -19,7 +19,7 @@ hft-trader/
 │   │   ├── ExchangeFactory.java      # id биржи -> реализация
 │   │   ├── catalog/                  # ExchangeCatalog/ExchangeInfo: список бирж, комиссии, лимиты, статус адаптера
 │   │   ├── binance/, bybit/          # нативные адаптеры (свой WS-фид на Netty + REST)
-│   │   ├── okx/, gate/, mexc/, bingx/, kucoin/, aster/, hyperliquid/, uniswap/
+│   │   ├── okx/, gate/, mexc/, kucoin/, aster/, hyperliquid/, uniswap/
 │   │   │                             # REST-клиенты на общем скелете SignedCexClient
 │   │   └── generic/                  # SignedCexExchange, PaperExchange (dYdX), фиды стакана:
 │   │                                 # WsBookFeed, PollingBookFeed, HybridBookFeed; диалекты
@@ -54,7 +54,7 @@ hft-trader/
 | Биржа | Реализация | Режим по умолчанию |
 |---|---|---|
 | Binance, Bybit | BinanceExchange, BybitExchange | LIVE при ключах и `live=true` |
-| OKX, Gate, MEXC, BingX, KuCoin, Aster | SignedCexExchange + свой RestClient | PAPER, LIVE не проверен |
+| OKX, Gate, MEXC, KuCoin, Aster | SignedCexExchange + свой RestClient | PAPER, LIVE не проверен |
 | Hyperliquid, Uniswap V2 | SignedCexExchange + HyperliquidRestClient / UniswapV2Client | PAPER, LIVE не проверен |
 | dYdX v4 | PaperExchange | только PAPER |
 

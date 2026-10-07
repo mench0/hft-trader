@@ -4,7 +4,6 @@ import com.hft.config.ExchangeConfig;
 import com.hft.config.TradingSettings;
 import com.hft.exchange.aster.AsterRestClient;
 import com.hft.exchange.binance.BinanceExchange;
-import com.hft.exchange.bingx.BingxRestClient;
 import com.hft.exchange.bybit.BybitExchange;
 import com.hft.exchange.catalog.ExchangeCatalog;
 import com.hft.exchange.catalog.ExchangeInfo;
@@ -33,7 +32,6 @@ public final class ExchangeFactory {
             case "gate" -> new SignedCexExchange(id, ec, settings, GateRestClient::new);
             case "hyperliquid" -> new SignedCexExchange(id, ec, settings, HyperliquidRestClient::new);
             case "uniswapv2" -> new SignedCexExchange(id, ec, settings, UniswapV2Client::new);
-            case "bingx" -> new SignedCexExchange(id, ec, settings, BingxRestClient::new);
             case "kucoin" -> new SignedCexExchange(id, ec, settings, KucoinRestClient::new);
             case "aster" -> new SignedCexExchange(id, ec, settings, AsterRestClient::new);
             default -> {

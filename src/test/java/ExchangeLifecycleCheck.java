@@ -36,7 +36,7 @@ public class ExchangeLifecycleCheck {
     }
     // остальные классы конструируются и стартуют в paper-режиме (стакан возьмут REST-опросом позже; тут — только жизненный цикл)
     List<ExchangeGateway> all = new ArrayList<>();
-    String[][] defs = {{"gate","BTCUSDT"},{"mexc","BTCUSDT"},{"bingx","BTCUSDT"},{"hyperliquid","BTCUSDC"}};
+    String[][] defs = {{"gate","BTCUSDT"},{"mexc","BTCUSDT"},{"hyperliquid","BTCUSDC"}};
     for (String[] d : defs) {
       var cfg = new ExchangeConfig(d[0], false, "http://127.0.0.1:9", "ws://127.0.0.1:9/ws", 5000, List.of(d[1]), 20, 100);
       ExchangeGateway g = ExchangeFactory.create(d[0], cfg, app);

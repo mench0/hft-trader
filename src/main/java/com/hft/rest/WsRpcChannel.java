@@ -323,9 +323,9 @@ public final class WsRpcChannel {
                     if (f != null) f.complete(m.text());
                 }
                 case EVENT -> {
-                    events.incrementAndGet();
                     try { eventSink.accept(m.text()); }
                     catch (Exception e) { lastError = "event: " + e; parseErrors.incrementAndGet(); }
+                    finally { events.incrementAndGet(); }   // после обработки: метрика = обработанные события
                 }
                 case IGNORE -> {}
             }

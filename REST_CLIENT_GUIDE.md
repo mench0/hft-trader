@@ -12,7 +12,6 @@
 | OKX | `exchange/okx/OkxRestClient` | `OKX_API_KEY`, `OKX_API_SECRET`, `OKX_PASSPHRASE` |
 | Gate | `exchange/gate/GateRestClient` | `GATE_API_KEY`, `GATE_API_SECRET` |
 | MEXC | `exchange/mexc/MexcRestClient` | `MEXC_API_KEY`, `MEXC_API_SECRET` |
-| BingX | `exchange/bingx/BingxRestClient` | `BINGX_API_KEY`, `BINGX_API_SECRET` |
 | KuCoin | `exchange/kucoin/KucoinRestClient` | `KUCOIN_API_KEY`, `KUCOIN_API_SECRET`, `KUCOIN_PASSPHRASE` |
 | Aster | `exchange/aster/AsterRestClient` | `ASTER_API_KEY` (user), `ASTER_API_SECRET` (signer) |
 | Hyperliquid | `exchange/hyperliquid/HyperliquidRestClient` | `HYPERLIQUID_API_KEY` (адрес), `HYPERLIQUID_API_SECRET` (agent-ключ) |

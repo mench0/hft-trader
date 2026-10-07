@@ -13,7 +13,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Приватный поток событий аккаунта через listenKey (BingX, Aster — как у Binance): ключ берётся по REST
+ * Приватный поток событий аккаунта через listenKey (Aster, MEXC — как у Binance): ключ берётся по REST
  * перед каждым подключением, продлевается раз в 25 минут (биржи держат его 60 минут), события идут по WS.
  * Ордера у этих бирж — только REST, поток нужен, чтобы исполнения и баланс приходили без опроса.
  */
@@ -36,7 +36,7 @@ public final class UserStream {
         Msg parse(String text) throws Exception;
         /** Прикладной пинг; null — не нужен. */
         default String ping() { return null; }
-        /** Бинарный кадр в текст (gzip у BingX). */
+        /** Бинарный кадр в текст (у MEXC — protobuf). */
         default String decodeBinary(byte[] d) throws Exception { return new String(d, java.nio.charset.StandardCharsets.UTF_8); }
     }
 

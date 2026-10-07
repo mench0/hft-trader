@@ -24,7 +24,7 @@ public final class Hmac {
         }
     }
 
-    /** HMAC-SHA256 в hex (Binance, MEXC, BingX). */
+    /** HMAC-SHA256 в hex (Binance, MEXC). */
     public static String sha256Hex(String secret, String data) {
         return HexFormat.of().formatHex(raw("HmacSHA256", secret, data));
     }

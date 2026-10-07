@@ -236,7 +236,7 @@ public final class BybitRestClient implements ExchangeOrderApi {
             long until = System.currentTimeMillis() + config.params().marketFillWaitMs();
             while (System.currentTimeMillis() < until) {
                 OrderResult st = w.streamed.get(orderId);
-                if (st != null && !"NEW".equals(st.status())) {
+                if (st != null && !"NEW".equals(st.status()) && !"PARTIALLY_FILLED".equals(st.status())) {   // ждём итог, а не первое частичное
                     return new OrderResult(orderId, clientOrderId, sym, side, st.status(),
                             qtyIsQuote ? st.requestedQty() : roundedQty, st.executedQty(), st.avgPrice(), latency);
                 }
