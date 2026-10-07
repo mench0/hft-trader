@@ -44,6 +44,7 @@ hft-trader/
 ├── run.sh                            # запуск с JVM-флагами под низкую задержку
 ├── .env.example                      # пример переменных окружения
 ├── README.md                         # основная документация и все эндпоинты
+├── EXCHANGES.md                      # как бот работает с каждой биржей: WebSocket или REST
 ├── REST_CLIENT_GUIDE.md              # REST-клиенты бирж и ручные ордера
 └── JVM_CONFIG_GUIDE.md               # JVM-флаги и конфигурация процесса
 ```

@@ -608,6 +608,7 @@ OKX, Gate, BingX, KuCoin, Aster, MEXC, Hyperliquid и dYdX получают ст
 ## Что идёт по WebSocket, а что по REST/RPC
 
 Принцип: сокет — всегда, где он есть; REST — только когда сокет не готов или у биржи его нет.
+Подробно по каждой бирже (каналы, ключи, ограничения, что остаётся на REST и почему) — **[EXCHANGES.md](EXCHANGES.md)**.
 
 | Биржа | Стакан | Ордера/отмены | Исполнения | Баланс | Остаётся на REST |
 |---|---|---|---|---|---|
@@ -620,7 +621,7 @@ OKX, Gate, BingX, KuCoin, Aster, MEXC, Hyperliquid и dYdX получают ст
 | Uniswap V2 | WS-RPC: `eth_subscribe` на `Sync` + первый `eth_call` | JSON-RPC по сокету ноды | чтение по сокету | `eth_call` по сокету | HTTP — запасной |
 | Aster | WS | REST (WS-ордеров нет) | WS `executionReport` (listenKey) | WS `outboundAccountPosition` | ордера |
 | BingX | WS | REST (WS-ордеров нет) | WS `spot.executionReport` (listenKey, gzip) | REST | ордера, баланс |
-| MEXC | WS (protobuf) | REST (WS-ордеров нет) | REST | REST | ордера, исполнения, баланс (приватный поток MEXC — тоже protobuf, не реализован) |
+| MEXC | WS (protobuf) | REST (WS-ордеров нет) | WS `spot@private.orders.v3.api.pb` (listenKey, protobuf) | WS `spot@private.account.v3.api.pb` | ордера |
 | dYdX | WS | только paper (нужен Cosmos RPC) | — | — | — |
 
 Безопасность ордеров по WS (`WsRpcChannel`):
@@ -647,8 +648,8 @@ REST-клиент, `RiskManager`, `OrderService`, конвейер `TickPipeline
 
 WS-ордеров нет в документации MEXC, BingX и Aster — у них ордера по REST, а события аккаунта у BingX и Aster
 идут по приватному потоку через `listenKey` (`UserStream`: ключ по REST перед подключением, продление раз в 25 минут).
-У dYdX ордера — транзакции Cosmos, не WebSocket. KuCoin в режиме UTA торгует через `uta.order` — не поддерживается:
-для UTA-счёта задайте `wsTrade=false`.
+У dYdX ордера — транзакции Cosmos, не WebSocket. KuCoin в режиме UTA торгует через `uta.order` / `uta.cancel` (`tradeType=SPOT`):
+для UTA-счёта задайте `KUCOIN_UTA=true` в `.env` (схема аргументов UTA сверена не полностью — проверьте на малой сумме).
 
 ## Производительность: что исправлено
 
@@ -686,6 +687,7 @@ WS-ордеров нет в документации MEXC, BingX и Aster — у
 - **2026-10:** биржа LBank удалена целиком (клиент, диалекты REST/WS, источник подбора тикеров, лимиты, каталог, тесты):
   низкая ликвидность и непроверенная схема подписи. Выбор `exchange=lbank` теперь отклоняется.
 - **2026-10:** веб-админка — отдельный проект `hft-admin-panel`, бот только отдаёт API.
+- **2026-10:** MEXC — исполнения и баланс по приватному WS-потоку (protobuf); KuCoin — режим UTA (`KUCOIN_UTA=true`).
 - **2026-10:** чтение `application.yml` убрано (и зависимость jackson-dataformat-yaml): все параметры процесса — только `.env` и окружение.
 - **2026-10:** торговля по WebSocket у Binance, Bybit и KuCoin; приватные потоки у Binance, Bybit, KuCoin, BingX и Aster;
   стакан MEXC по WebSocket (protobuf). REST везде остаётся запасным каналом.

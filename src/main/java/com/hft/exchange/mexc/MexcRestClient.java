@@ -8,9 +8,12 @@ import com.hft.model.OrderEnums.Type;
 import com.hft.model.OrderResult;
 import com.hft.rest.ApiException;
 import com.hft.rest.SignedCexClient;
+import com.hft.rest.UserStream;
+import com.hft.rest.WsRpcChannel;
 import com.hft.store.BalanceStore;
 import com.hft.store.SymbolFilters;
 import com.hft.util.Hmac;
+import com.hft.util.Protobuf;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -26,6 +29,10 @@ import java.util.Map;
  *  - IOC и FOK — это значения type (IMMEDIATE_OR_CANCEL, FILL_OR_KILL), а не timeInForce;
  *  - orderId строковый и не обязательно числовой — наружу отдаём числовой псевдоним;
  *  - ошибка приходит как {code, msg} с HTTP 4xx.
+ *
+ * Ордера — только REST (WS-ордеров у MEXC нет). Исполнения и баланс в LIVE приходят по приватному
+ * потоку (listenKey, каналы spot@private.orders.v3.api.pb и spot@private.account.v3.api.pb, protobuf),
+ * см. {@link UserStream} и {@link Protobuf}.
  */
 public final class MexcRestClient extends SignedCexClient {
 
@@ -107,6 +114,8 @@ public final class MexcRestClient extends SignedCexClient {
     /** Статус ордера: из WS-потока, если есть, иначе запрос к бирже. */
     @Override
     public OrderResult orderStatus(String symbol, long orderId) throws Exception {
+        OrderResult st = streamed.get(orderId);
+        if (st != null && wsReady() && !"NEW".equals(st.status()) && !"PARTIALLY_FILLED".equals(st.status())) return st;
         Map<String, String> p = params();
         p.put("symbol", symbol.toUpperCase());
         p.put("orderId", venueId(orderId));
@@ -185,5 +194,150 @@ public final class MexcRestClient extends SignedCexClient {
             if (free > 0 || locked > 0) store.set(b.path("asset").asText(), free, locked);
         }
         store.markSynced();
+    }
+
+    // ------------------------------------------------------------ приватный поток (listenKey, protobuf)
+
+    /** Поток событий аккаунта; null — только REST. */
+    private volatile UserStream userStream;
+    /** Свой адрес потока, к которому дописывается listenKey (тесты, прокси). */
+    private volatile String userStreamBase;
+    /** Куда пишутся балансы из потока. */
+    private volatile BalanceStore streamBalances;
+    /** Баланс хотя бы раз пришёл по WS. */
+    private volatile boolean accountSeen;
+    /** Бинарный кадр (protobuf) передаётся в разбор событий текстом с этим префиксом и Base64. */
+    private static final String PB = "pb:";
+
+    /** Свой адрес потока, к которому дописывается listenKey (тесты, прокси). */
+    public void setUserStreamBase(String base) { this.userStreamBase = base; }
+
+    /** Поднять приватный поток: исполнения и балансы. Без ключей или при wsTrade=false — всё по REST. */
+    @Override
+    public void startStreams(BalanceStore store) {
+        if (!credentials.isPresent() || !wsTradeAllowed() || userStream != null) return;
+        streamBalances = store;
+        String base = userStreamBase != null ? userStreamBase : "wss://wbs-api.mexc.com/ws?listenKey=";
+        UserStream us = new UserStream("mexc", new UserStream.Api() {
+            @Override public String newListenKey() throws Exception {
+                String k = signed("POST", "/api/v3/userDataStream", params(), false).path("listenKey").asText("");
+                if (k.isEmpty()) throw new IllegalStateException("нет listenKey в ответе");
+                return k;
+            }
+            @Override public void keepAlive(String key) throws Exception {
+                Map<String, String> p = params();
+                p.put("listenKey", key);
+                signed("PUT", "/api/v3/userDataStream", p, false);
+            }
+            @Override public String url(String key) { return base + enc(key); }
+            @Override public java.util.List<String> subscriptions() {
+                return java.util.List.of("{\"method\":\"SUBSCRIPTION\",\"params\":[\"spot@private.orders.v3.api.pb\",\"spot@private.account.v3.api.pb\"]}");
+            }
+            @Override public String ping() { return "{\"method\":\"PING\"}"; }
+            @Override public WsRpcChannel.Msg parse(String text) throws Exception {
+                if (text.startsWith(PB)) return WsRpcChannel.Msg.event(text);
+                if (text.contains("Not Subscribed") || text.contains("Blocked")) throw new IllegalStateException("MEXC: подписка отклонена: " + text);
+                JsonNode n = mapper.readTree(text);
+                if (n.path("code").asInt(0) != 0) throw new IllegalStateException("MEXC: " + text);
+                return WsRpcChannel.Msg.ignore();              // подтверждение подписки, PONG
+            }
+            @Override public String decodeBinary(byte[] d) { return PB + java.util.Base64.getEncoder().encodeToString(d); }
+        }, this::onUserEvent);
+        userStream = us;
+        wsChannel = us.channel();                 // готовность и метрики — как у WS-канала
+        us.start();
+    }
+
+    /** Остановить поток. */
+    @Override
+    public void stopStreams() {
+        UserStream us = userStream;
+        if (us != null) us.stop();
+        userStream = null;
+        wsChannel = null;
+    }
+
+    /** Баланс приходит по WS и актуален. */
+    @Override
+    public boolean balancesStreamed() { return wsReady() && accountSeen; }
+
+    /**
+     * PushDataV3ApiWrapper { symbol = 3; privateOrders = 304; privateAccount = 307 } (схема mexcdevelop/websocket-proto).
+     * PrivateOrdersV3Api: id 1, clientId 2, quantity 4, avgPrice 6, tradeType 8 (1 — покупка, 2 — продажа),
+     *   cumulativeQuantity 13, cumulativeAmount 14, status 15 (1 новый, 2 исполнен, 3 частично, 4 отменён, 5 частично и отменён).
+     * PrivateAccountV3Api: vcoinName 1, balanceAmount 3 (свободно), frozenAmount 5 (заблокировано).
+     */
+    private void onUserEvent(String text) {
+        if (!text.startsWith(PB)) return;
+        byte[] b = java.util.Base64.getDecoder().decode(text.substring(PB.length()));
+        Protobuf.Reader w = new Protobuf.Reader(b, 0, b.length);
+        String symbol = "";
+        Protobuf.Reader order = null, account = null;
+        while (w.next()) {
+            switch (w.field()) {
+                case 3 -> symbol = w.string();
+                case 304 -> order = w.message();
+                case 307 -> account = w.message();
+                default -> w.skip();
+            }
+        }
+        if (order != null) onOrder(order, symbol);
+        if (account != null) onAccount(account);
+    }
+
+    /** Состояние ордера из privateOrders. */
+    private void onOrder(Protobuf.Reader r, String symbol) {
+        String id = "", clientId = "";
+        double qty = 0, avg = 0, cumQty = 0, cumAmount = 0;
+        long side = 1, status = 0;
+        while (r.next()) {
+            switch (r.field()) {
+                case 1 -> id = r.string();
+                case 2 -> clientId = r.string();
+                case 4 -> qty = num(r.string());
+                case 6 -> avg = num(r.string());
+                case 8 -> side = r.varintValue();
+                case 13 -> cumQty = num(r.string());
+                case 14 -> cumAmount = num(r.string());
+                case 15 -> status = r.varintValue();
+                default -> r.skip();
+            }
+        }
+        if (id.isEmpty()) throw new IllegalStateException("MEXC: ордер без id в потоке");
+        String st = switch ((int) status) {
+            case 1 -> "NEW";
+            case 2 -> "FILLED";
+            case 3 -> "PARTIALLY_FILLED";
+            case 4, 5 -> "CANCELED";
+            default -> "UNKNOWN";
+        };
+        long oid = registerId(id);
+        streamed.put(oid, new OrderResult(oid, clientId, symbol.toUpperCase(), side == 2 ? Side.SELL : Side.BUY, st,
+                qty, cumQty, cumQty > 0 ? cumAmount / cumQty : avg, 0));
+    }
+
+    /** Баланс актива из privateAccount. */
+    private void onAccount(Protobuf.Reader r) {
+        String asset = "";
+        double free = 0, locked = 0;
+        while (r.next()) {
+            switch (r.field()) {
+                case 1 -> asset = r.string();
+                case 3 -> free = num(r.string());
+                case 5 -> locked = num(r.string());
+                default -> r.skip();
+            }
+        }
+        BalanceStore store = streamBalances;
+        if (store == null || asset.isEmpty()) return;
+        store.set(asset, free, locked);
+        store.markSynced();
+        accountSeen = true;
+    }
+
+    /** Число из строки; пусто или мусор — 0. */
+    private static double num(String s) {
+        if (s == null || s.isEmpty()) return 0;
+        try { return Double.parseDouble(s); } catch (NumberFormatException e) { return 0; }
     }
 }

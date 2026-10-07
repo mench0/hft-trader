@@ -34,7 +34,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * изменения ордеров, /account/balance — балансы.
  *
  * ВНИМАНИЕ: формат взят из документации KuCoin без доступа к живому API. Счёт в режиме UTA
- * торгует через uta.order — здесь не поддерживается, используйте classic-счёт или wsTrade=false.
+ * торгует через uta.order / uta.cancel (tradeType=SPOT) — включается KUCOIN_UTA=true, см. KucoinRestClient.
  */
 final class KucoinWs {
 

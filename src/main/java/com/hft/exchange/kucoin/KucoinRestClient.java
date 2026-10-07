@@ -37,6 +37,12 @@ public final class KucoinRestClient extends SignedCexClient {
     /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(KucoinRestClient.class);
 
+    /**
+     * Счёт в режиме UTA (единый торговый счёт): ордера по WS идут командами uta.order / uta.cancel
+     * с tradeType=SPOT вместо spot.order / spot.cancel. Включается KUCOIN_UTA=true.
+     * ВНИМАНИЕ: схема аргументов UTA взята из описаний документации, полностью не сверена.
+     */
+    private final boolean uta;
     /** Фраза API-ключа. */
     private final String passphrase;
 
@@ -52,6 +58,7 @@ public final class KucoinRestClient extends SignedCexClient {
             throw new IllegalStateException("KuCoin требует KUCOIN_PASSPHRASE (фраза, заданная при создании API-ключа)");
         }
         this.passphrase = p == null ? "" : p.trim();
+        this.uta = "true".equalsIgnoreCase(com.hft.config.Env.get("KUCOIN_UTA"));
     }
 
     /** BTCUSDT -> BTC-USDT */
@@ -115,7 +122,7 @@ public final class KucoinRestClient extends SignedCexClient {
         }
         JsonNode data;
         try {
-            data = wsOp("spot.order", b);                          // сначала WebSocket
+            data = wsOp(uta ? "uta.order" : "spot.order", uta ? b.deepCopy().put("tradeType", "SPOT") : b);   // сначала WebSocket
         } catch (WsRpcChannel.WsUnknownOutcomeException e) {
             wsFallbacks.incrementAndGet();
             log.warn("[kucoin] исход ордера {} неизвестен ({}), проверяю по REST", o.clientId(), e.getMessage());
@@ -152,7 +159,9 @@ public final class KucoinRestClient extends SignedCexClient {
     @Override
     public void cancelOrder(String symbol, long orderId) throws Exception {
         JsonNode r = null;
-        try { r = wsOp("spot.cancel", mapper.createObjectNode().put("symbol", venue(symbol)).put("orderId", venueId(orderId))); }
+        ObjectNode cancel = mapper.createObjectNode().put("symbol", venue(symbol)).put("orderId", venueId(orderId));
+        if (uta) cancel.put("tradeType", "SPOT");
+        try { r = wsOp(uta ? "uta.cancel" : "spot.cancel", cancel); }
         catch (WsRpcChannel.WsUnknownOutcomeException e) { wsFallbacks.incrementAndGet(); }   // отмена идемпотентна — повторяем через REST
         if (r == null) signed("DELETE", "/api/v1/orders/" + venueId(orderId), "", true);
         log.info("[kucoin] ордер {} по {} отменён", orderId, symbol);

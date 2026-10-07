@@ -586,6 +586,7 @@ public final class AdminServer {
         }
         keys.add("OKX_PASSPHRASE");
         keys.add("KUCOIN_PASSPHRASE");
+        keys.add("KUCOIN_UTA");
         return keys;
     }
 
