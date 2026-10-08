@@ -371,7 +371,7 @@ public final class WsDialects {
         /** Имя символа на бирже. */
         public String venueSymbol(String s) {
             Dialects.UniswapV2.Pool p = amm.pools.get(s.toUpperCase());
-            if (p == null) throw new IllegalArgumentException("Нет пула для " + s + " в UNISWAPV2_POOLS");
+            if (p == null) throw new IllegalArgumentException("Нет пула для " + s + " в параметре uniPools");
             String addr = p.pair().toLowerCase();
             byAddr.put(addr, p);
             return addr;

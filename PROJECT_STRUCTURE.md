@@ -25,7 +25,7 @@ hft-trader/
 │   │   │                             # BinanceFuturesClient — USDⓈ-M (fapi, ws-fapi, listenKey);
 │   │   │                             # фьючерсы остальных: GateFuturesClient, KucoinFuturesClient, MexcFuturesClient,
 │   │   │                             # Aster — тот же AsterRestClient с /fapi/v3
-│   │   ├── okx/, gate/, mexc/, kucoin/, aster/, hyperliquid/, uniswap/
+│   │   ├── okx/, gate/, mexc/, kucoin/, aster/, hyperliquid/, uniswapv2/
 │   │   │                             # REST-клиенты на общем скелете SignedCexClient
 │   │   └── generic/                  # SignedCexExchange, ContractSizes (размер контракта перпов), фиды стакана:
 │   │                                 # WsBookFeed, PollingBookFeed, HybridBookFeed; диалекты

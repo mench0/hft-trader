@@ -5,7 +5,7 @@ import com.hft.exchange.generic.*;
 import com.hft.exchange.gate.GateRestClient;
 import com.hft.exchange.hyperliquid.HyperliquidRestClient;
 import com.hft.exchange.okx.OkxRestClient;
-import com.hft.exchange.uniswap.UniswapV2Client;
+import com.hft.exchange.uniswapv2.UniswapV2Client;
 import com.hft.model.OrderEnums.*;
 import com.hft.model.OrderResult;
 import com.hft.rest.*;

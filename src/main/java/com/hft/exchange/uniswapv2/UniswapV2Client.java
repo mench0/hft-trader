@@ -1,4 +1,4 @@
-package com.hft.exchange.uniswap;
+package com.hft.exchange.uniswapv2;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -36,12 +36,12 @@ import java.util.Map;
  *   cancelAll — всегда 0 (в сети нечего снимать).
  * Исполнение атомарно: транзакция либо проходит целиком, либо откатывается (газ при откате теряется).
  *
- * Конфигурация (переменные окружения):
- *   UNISWAPV2_API_KEY / UNISWAPV2_API_SECRET — адрес кошелька (метка) и его приватный ключ (отдельный горячий
- *                                              кошелёк с небольшой суммой, не основной!)
- *   UNISWAPV2_ROUTER   — адрес Router02 в нужной сети
- *   UNISWAPV2_TOKENS   — "WETH=0xАДРЕС:18;USDC=0xАДРЕС:6"
- *   UNISWAPV2_SLIPPAGE_PCT — допустимое проскальзывание, по умолчанию 0.5
+ * Конфигурация:
+ *   UNISWAPV2_API_KEY / UNISWAPV2_API_SECRET (окружение) — адрес кошелька (метка) и его приватный ключ
+ *                                              (отдельный горячий кошелёк с небольшой суммой, не основной!)
+ *   uniRouter          — параметр биржи: адрес Router02 в нужной сети
+ *   uniTokens          — параметр биржи: "WETH=0xАДРЕС:18;USDC=0xАДРЕС:6"
+ *   uniSlippagePercent — параметр биржи: допустимое проскальзывание, по умолчанию 0.5
  *   restUrl биржи — RPC-узел (для защиты от сэндвичей берите приватный RPC, напр. Flashbots Protect)
  *
  * Символ WETHUSDC: base — WETH, quote — USDC. Газ платится в ETH — следите за его балансом.

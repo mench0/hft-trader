@@ -11,7 +11,7 @@ import com.hft.exchange.hyperliquid.HyperliquidRestClient;
 import com.hft.exchange.kucoin.KucoinRestClient;
 import com.hft.exchange.mexc.MexcRestClient;
 import com.hft.exchange.okx.OkxRestClient;
-import com.hft.exchange.uniswap.UniswapV2Client;
+import com.hft.exchange.uniswapv2.UniswapV2Client;
 
 /** Создание шлюза биржи по её id. */
 public final class ExchangeFactory {

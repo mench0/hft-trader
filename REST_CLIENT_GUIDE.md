@@ -15,7 +15,7 @@
 | KuCoin | `exchange/kucoin/KucoinRestClient` | `KUCOIN_API_KEY`, `KUCOIN_API_SECRET`, `KUCOIN_PASSPHRASE` |
 | Aster | `exchange/aster/AsterRestClient` | `ASTER_API_KEY` (user), `ASTER_API_SECRET` (signer) |
 | Hyperliquid | `exchange/hyperliquid/HyperliquidRestClient` | `HYPERLIQUID_API_KEY` (адрес), `HYPERLIQUID_API_SECRET` (agent-ключ) |
-| Uniswap V2 | `exchange/uniswap/UniswapV2Client` | `UNISWAPV2_API_KEY`, `UNISWAPV2_API_SECRET` |
+| Uniswap V2 | `exchange/uniswapv2/UniswapV2Client` | `UNISWAPV2_API_KEY`, `UNISWAPV2_API_SECRET` |
 
 Все клиенты, кроме Binance и Bybit, наследуют `SignedCexClient`: общие HTTP-клиент, подпись,
 бюджет запросов (`RateBudget`, 80% официальных лимитов из `RateLimits`), разделение лимитеров ордеров
