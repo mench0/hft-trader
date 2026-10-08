@@ -2,7 +2,7 @@ package com.hft.exchange.generic;
 
 import com.hft.config.Credentials;
 import com.hft.config.ExchangeConfig;
-import com.hft.engine.StrategySet;
+import com.hft.strategy.StrategySet;
 import com.hft.engine.OrderService;
 import com.hft.engine.TickPipeline;
 import com.hft.exchange.catalog.ExchangeInfo;

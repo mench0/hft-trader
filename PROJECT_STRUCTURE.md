@@ -27,12 +27,16 @@ hft-trader/
 │   │                                 # Dialects (REST) и WsDialects (WS), LocalBook, FastJson
 │   ├── rest/                         # SignedCexClient, BinanceRestClient, RateBudget/RateLimits/PacedLimiter,
 │   │                                 # WsRpcChannel (ордера по WS), WsSender, ExchangeOrderApi
-│   ├── engine/                       # TickPipeline (Disruptor), MarketDataHandler, OrderService, OrderExecutor,
-│   │                                 # стратегии: MeanReversion, StatArb, TriangularArb (StrategySet)
+│   ├── engine/                       # ядро исполнения: TickPipeline (Disruptor), MarketDataHandler, OrderService
+│   ├── strategy/                     # все стратегии — спот и перпы вместе:
+│   │                                 #   одна биржа (на тиках, StrategySet): MeanReversionStrategy (спот: лонг; перп: лонг и шорт),
+│   │                                 #   StatArbStrategy (спот: дешёвая нога; перп: пара лонг/шорт), TriangularArbStrategy (только спот);
+│   │                                 #   между биржами (по таймеру, BotController): FundingArbitrage, PerpPriceArbitrage (перп/перп),
+│   │                                 #   FundingCarry (спот + шорт перпа); база Strategy, OrderExecutor
 │   ├── risk/RiskManager.java         # проверки перед ордером, дневной лимит, kill switch
 │   ├── paper/PaperOrderApi.java      # бумажное исполнение против живого стакана (спот и перпы)
-│   ├── perp/                         # фьючерсы: PerpAccount (позиции, плечо, опрос funding),
-│   │                                 # FundingSource (ставки по REST бирж), FundingArbitrage (межбиржевая стратегия)
+│   ├── perp/                         # фьючерсный счёт: PerpAccount (позиции, плечо, опрос funding),
+│   │                                 # FundingSource (ставки по REST бирж)
 │   ├── discovery/                    # подбор тикеров под стратегии: MarketSources (сводки 24ч бирж),
 │   │                                 # профили стратегий, бэктест возврата к среднему
 │   ├── store/                        # MarketDataStore, OrderBook (StampedLock), PriceWindow, BalanceStore, SymbolFilters,
