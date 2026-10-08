@@ -633,7 +633,7 @@ scrape_configs:
 инструментам, счётчик отклонённых риск-менеджером ордеров как индикатор
 проблем.
 
-
+## Как добавить биржу
 
 1. Константа в enum `Exchange`: строковый id и рынки (`Market.SPOT`, `Market.PERP`)
 2. REST-клиент на `SignedCexClient` (подпись, ордера, баланс, правила); для перпов — отдельный клиент фьючерсов
@@ -643,6 +643,37 @@ scrape_configs:
 
 При старте бот проверяет, что каждая биржа enum `Exchange` описана в каталоге; дальше она сама появится
 в `/control/exchanges`, `/exchanges/catalog` и в админке.
+
+## Своя стратегия
+
+Наследуйтесь от `Strategy` и добавьте в конвейер в `Main`:
+
+```java
+public final class MyStrategy extends Strategy {
+
+    public MyStrategy(MarketDataStore market, OrderService orders) {
+        super("моя-стратегия", market, orders);
+    }
+
+    @Override
+    protected void onTick(Tick tick) {
+        OrderBook book = market.book(tick.symbol());
+        PriceWindow window = market.window(tick.symbol());
+        if (book == null || !book.isReady() || !window.isWarmedUp()) return;
+
+        double z = window.currentZScore();
+        double imbalance = book.imbalance(5);
+
+        if (z < -2.0 && imbalance > 0.2) {
+            orders.buyMarket(tick.symbol(), 0.001);
+        }
+    }
+}
+```
+
+`MeanReversionStrategy` в проекте — рабочий пример на z-score с
+подтверждением по стакану, стоп-лоссом и таймаутом позиции. Параметры
+подобраны навскидку: перед реальными деньгами их нужно проверять на истории.
 
 ## Что стоит добавить дальше
 
