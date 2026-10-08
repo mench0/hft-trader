@@ -8,7 +8,7 @@ import com.hft.exchange.catalog.ExchangeInfo;
 import com.hft.exchange.catalog.ExchangeCatalog;
 import com.hft.paper.PaperOrderApi;
 import com.hft.engine.MarketDataHandler;
-import com.hft.engine.StrategySet;
+import com.hft.strategy.StrategySet;
 import com.hft.engine.OrderService;
 import com.hft.engine.TickPipeline;
 import com.hft.exchange.ExchangeGateway;

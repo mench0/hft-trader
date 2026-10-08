@@ -1,10 +1,10 @@
-package com.hft.perp;
+package com.hft.strategy;
 
 import com.hft.config.GlobalParams;
 import com.hft.exchange.ExchangeGateway;
 import com.hft.model.OrderEnums.Side;
 import com.hft.model.OrderResult;
-import com.hft.perp.FundingArbitrage.Venue;
+import com.hft.strategy.FundingArbitrage.Venue;
 import com.hft.store.BalanceStore;
 import com.hft.store.FundingStore.Funding;
 import org.slf4j.Logger;

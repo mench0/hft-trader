@@ -1,5 +1,6 @@
-package com.hft.perp;
+package com.hft.strategy;
 
+import com.hft.perp.PerpAccount;
 import com.hft.config.GlobalParams;
 import com.hft.engine.OrderService;
 import com.hft.exchange.ExchangeGateway;

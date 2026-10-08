@@ -1,5 +1,6 @@
-package com.hft.engine;
+package com.hft.strategy;
 
+import com.hft.engine.OrderService;
 import com.hft.config.TradingSettings;
 import com.hft.model.Tick;
 import com.hft.store.MarketDataStore;
