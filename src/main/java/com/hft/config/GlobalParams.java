@@ -33,7 +33,17 @@ public record GlobalParams(
         double discoverySpreadMinVolume,
         double discoverySpreadMaxVolume,
         double discoverySpreadMinEdgePercent,
-        double discoverySpreadMaxPercent
+        double discoverySpreadMaxPercent,
+        // ---- funding-арбитраж (между биржами, только перпы) ----
+        boolean fundingArbEnabled,
+        long fundingPollSec,
+        double fundingArbMinDiffPercent,
+        double fundingArbExitDiffPercent,
+        double fundingArbOrderQuote,
+        int fundingArbMaxPositions,
+        double fundingArbMaxBasisPercent,
+        double fundingArbMaxHoldHours,
+        String fundingArbSymbols
 ) {
 
     /** Описания всех параметров. */
@@ -59,7 +69,18 @@ public record GlobalParams(
             num("discoverySpreadMinVolume", 50_000, 0, 1e15, "Сбор спреда: оборот за 24 ч не меньше"),
             num("discoverySpreadMaxVolume", 5_000_000, 0, 1e15, "Сбор спреда: оборот за 24 ч не больше (ликвидные пары заняты маркет-мейкерами)"),
             num("discoverySpreadMinEdgePercent", 0.1, 0, 100, "Сбор спреда: спред минус две maker-комиссии не меньше, %"),
-            num("discoverySpreadMaxPercent", 3, 0, 100, "Сбор спреда: спред не шире, %")
+            num("discoverySpreadMaxPercent", 3, 0, 100, "Сбор спреда: спред не шире, %"),
+            // funding-арбитраж
+            flag("fundingArbEnabled", false, "Funding-арбитраж между биржами: шорт перпа там, где ставка funding выше, лонг — где ниже. "
+                    + "Нужны минимум две биржи с market=perp и общими символами; торгует только на биржах с включённой торговлей"),
+            num("fundingPollSec", 30, 5, 3600, "Как часто обновлять ставки funding по REST, с").needsRestart(),
+            num("fundingArbMinDiffPercent", 0.03, 0.001, 10, "Вход: разница ставок (за 8 ч) больше этого, % — должна окупать 4 комиссии тейкера"),
+            num("fundingArbExitDiffPercent", 0.005, -10, 10, "Выход: разница ставок (за 8 ч) упала ниже этого, %"),
+            num("fundingArbOrderQuote", 50, 0, 1e9, "Размер каждой ноги в котируемой валюте (без плеча)"),
+            num("fundingArbMaxPositions", 3, 1, 100, "Сколько пар позиций держать одновременно"),
+            num("fundingArbMaxBasisPercent", 0.15, 0, 10, "Вход только если цены на двух биржах отличаются не больше, %"),
+            num("fundingArbMaxHoldHours", 72, 1, 24 * 90, "Закрыть пару позиций по таймауту, ч"),
+            text("fundingArbSymbols", "", "([A-Z0-9]+(,[A-Z0-9]+)*)?", "Символы для арбитража через запятую; пусто — все общие символы бирж с market=perp")
     ));
 
     /** Значения по умолчанию. */
@@ -80,9 +101,12 @@ public record GlobalParams(
         for (var e : updates.entrySet()) {
             if (!SPECS.containsKey(e.getKey())) continue;
             String v = e.getValue().trim();
-            m.put(e.getKey(), e.getKey().equals("discoveryQuotes") ? v.toUpperCase() : e.getKey().equals("discoveryExchanges") ? v.toLowerCase() : v);
+            m.put(e.getKey(), e.getKey().equals("discoveryQuotes") || e.getKey().equals("fundingArbSymbols") ? v.toUpperCase() : e.getKey().equals("discoveryExchanges") ? v.toLowerCase() : v);
         }
-        return ParamSpec.build(GlobalParams.class, SPECS, m);
+        GlobalParams g = ParamSpec.build(GlobalParams.class, SPECS, m);
+        if (g.fundingArbExitDiffPercent >= g.fundingArbMinDiffPercent)
+            throw new IllegalArgumentException("нужно fundingArbExitDiffPercent < fundingArbMinDiffPercent");
+        return g;
     }
 
     /** Все параметры строками. */

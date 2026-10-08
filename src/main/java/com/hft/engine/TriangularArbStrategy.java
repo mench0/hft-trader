@@ -184,7 +184,7 @@ public final class TriangularArbStrategy extends Strategy {
     @Override
     protected void onTick(Tick tick) {
         TradingParams p = settings.get();
-        if (!p.triangularEnabled()) return;
+        if (!p.triangularEnabled() || orders.isPerp()) return;   // круг через три валюты — только на споте
         ensureBuilt(p.triHomeAsset());
         List<Cycle> touched = bySymbol.get(tick.symbol());
         if (touched == null || executor.isBusy("tri") || !realtime.getAsBoolean()) return;
@@ -263,7 +263,8 @@ public final class TriangularArbStrategy extends Strategy {
         Map<String, Object> m = new LinkedHashMap<>();
         // до первого тика треугольники ещё не построены — показываем, какие будут
         List<Cycle> cs = builtFor != null ? cycles : buildCycles(market.symbols(), settings.get().triHomeAsset());
-        m.put("enabled", settings.get().triangularEnabled());
+        m.put("enabled", settings.get().triangularEnabled() && !orders.isPerp());
+        if (orders.isPerp()) m.put("note", "только для market=spot");
         m.put("triangles", cs.stream().map(Cycle::name).toList());
         m.put("opportunities", opportunities.get());
         m.put("executed", executed.get());

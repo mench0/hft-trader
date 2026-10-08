@@ -11,6 +11,8 @@ import com.hft.exchange.ExchangeGateway;
 import com.hft.exchange.catalog.ExchangeCatalog;
 import com.hft.exchange.catalog.ExchangeInfo;
 import com.hft.paper.PaperOrderApi;
+import com.hft.perp.PerpAccount;
+import com.hft.store.PositionStore;
 import com.hft.risk.RiskManager;
 import com.hft.rest.ExchangeOrderApi;
 import com.hft.rest.SignedCexClient;
@@ -62,6 +64,9 @@ public final class SignedCexExchange implements ExchangeGateway, RequestStatsSou
     /** Отправка ордеров с проверками и учётом баланса. */
     private final OrderService orderService;
 
+    /** Фьючерсный счёт; null — спот. */
+    private final PerpAccount perp;
+
     /** Первая стадия конвейера: запись тиков в память. */
     private final MarketDataHandler dataHandler;
     /** Стратегии биржи. */
@@ -91,12 +96,20 @@ public final class SignedCexExchange implements ExchangeGateway, RequestStatsSou
 
         boolean live = ExchangeSupport.isLive(info, config, credentials);
         this.rest = live ? clientFactory.create(config, credentials, filters) : null;
-        this.paper = live ? null : new PaperOrderApi(market, balances, info.makerFeePct(), info.takerFeePct());
+        // Hyperliquid в боте — только перпы, даже если в старом конфиге market не задан
+        boolean isPerp = config.params().isPerp() || !ExchangeCatalog.supportsSpot(info.id());
+        PositionStore positions = new PositionStore();
+        var fees = ExchangeSupport.fees(info, config);
+        this.paper = live ? null : new PaperOrderApi(market, balances, fees[0], fees[1]);
+        if (paper != null && isPerp) paper.perp(positions);
         ExchangeOrderApi api = live ? rest : paper;
+        if (api.isPerp() != isPerp)
+            throw new IllegalStateException("[" + info.id() + "] клиент биржи не поддерживает market=" + config.params().market());
         if (paper != null) config.symbols().forEach(s -> ExchangeSupport.putDefaultFilter(filters, s));
 
         this.risk = new RiskManager(settings, market, info.id());
-        this.orderService = new OrderService(api, market, balances, filters, risk, settings);
+        this.orderService = new OrderService(api, market, balances, filters, risk, settings, positions);
+        this.perp = isPerp ? new PerpAccount(info.id(), config, market, balances, positions, api, !live) : null;
 
         this.dataHandler = new MarketDataHandler(market);
         this.strategy = new StrategySet(market, orderService, info.id(), settings);
@@ -132,15 +145,18 @@ public final class SignedCexExchange implements ExchangeGateway, RequestStatsSou
         } else {
             ExchangeSupport.seedPaperBalances(balances, config);
         }
+        if (perp != null) perp.start();
         pipeline.start();
         feed.start();
-        log.info("[{}] Биржа запущена ({}), символы: {}", info.id(), rest != null ? "LIVE" : "PAPER", config.symbols());
+        log.info("[{}] Биржа запущена ({}, {}), символы: {}", info.id(), rest != null ? "LIVE" : "PAPER",
+                perp != null ? "фьючерсы, плечо " + config.params().leverage() + "x" : "спот", config.symbols());
     }
 
     /** Остановить стратегии, фид и конвейер. */
     @Override
     public void stop() {
         strategy.disable();
+        if (perp != null) perp.stop();
         if (rest != null) rest.stopStreams();
         feed.stop();
         pipeline.shutdown();
@@ -191,7 +207,12 @@ public final class SignedCexExchange implements ExchangeGateway, RequestStatsSou
         lastRestSyncMs = System.currentTimeMillis();
         try { rest.loadBalances(balances); }
         catch (Exception e) { log.warn("[{}] Не удалось обновить балансы: {}", info.id(), e.getMessage()); }
+        if (perp != null) perp.syncPositions();
     }
+
+    /** Фьючерсный счёт; null — спот. */
+    @Override
+    public PerpAccount perp() { return perp; }
 
     /** Источник данных потерян: снять заявки, закрыть позиции, остановить стратегию. */
     private void onFeedGaveUp() {
@@ -203,6 +224,7 @@ public final class SignedCexExchange implements ExchangeGateway, RequestStatsSou
     public Map<String, Object> requestStats() {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("mode", rest != null ? "LIVE" : "PAPER");
+        m.put("market", config.params().market());
         m.put("marketData", feed.stats());
         m.put("realtime", feed.isRealtime());
         m.put("strategies", strategy.stats());

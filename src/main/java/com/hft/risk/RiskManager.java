@@ -86,6 +86,11 @@ public final class RiskManager {
      */
     public Decision check(OrderRequest request, double resolvedQty, double estimatedPrice) {
         TradingParams p = settings.get();
+        // закрытие позиции (reduceOnly) уменьшает риск: его не блокируют ни kill switch, ни лимиты входа
+        if (request.isReduceOnly()) {
+            acceptedCount.incrementAndGet();
+            return Decision.OK;
+        }
         if (killSwitch.get()) {
             return reject("Торговля остановлена (kill switch)");
         }
@@ -137,6 +142,24 @@ public final class RiskManager {
         }
 
         acceptedCount.incrementAndGet();
+        return Decision.OK;
+    }
+
+    /**
+     * Дополнительные проверки фьючерсного ордера, увеличивающего позицию:
+     * позиция после сделки не больше maxPositionQuote, начальной маржи хватает.
+     *
+     * @param positionAfter объём позиции со знаком после исполнения
+     * @param freeMargin свободные средства в котируемой валюте
+     */
+    public Decision checkPerp(double resolvedQty, double estimatedPrice, double positionAfter, double freeMargin) {
+        TradingParams p = settings.get();
+        double posNotional = Math.abs(positionAfter) * estimatedPrice;
+        if (posNotional > p.maxPositionQuote() * (1 + 1e-9))
+            return reject(String.format("Позиция после сделки %.2f превысит лимит %.2f", posNotional, p.maxPositionQuote()));
+        double margin = resolvedQty * estimatedPrice / Math.max(1, p.leverage());
+        if (margin > freeMargin)
+            return reject(String.format("Недостаточно маржи: нужно %.2f, свободно %.2f (плечо %d)", margin, freeMargin, p.leverage()));
         return Decision.OK;
     }
 

@@ -34,19 +34,23 @@ public final class Dialects {
 
     /** Диалект биржи с её параметрами (для Uniswap — пулы из uniPools). */
     public static BookDialect forExchange(String id, com.hft.config.ExchangeConfig cfg) {
+        if (cfg.params().isPerp()) {
+            if (id.equals("binance")) return new Aster("/fapi/v1/depth");
+            if (id.equals("okx")) return new Okx(true, cfg.restUrl());
+        }
         return id.equals("uniswapv2") ? new UniswapV2(cfg.params().uniPools()) : forExchange(id);
     }
 
     /** Диалект REST-стакана биржи (без параметров: для Uniswap пулы пусты). */
     public static BookDialect forExchange(String id) {
         return switch (id) {
-            case "okx" -> new Okx();
+            case "okx" -> new Okx(false, "");
             case "mexc" -> new Mexc();
             case "gate" -> new Gate();
             case "hyperliquid" -> new Hyperliquid();
             case "uniswapv2" -> new UniswapV2("");
             case "kucoin" -> new Kucoin();
-            case "aster" -> new Aster();
+            case "aster" -> new Aster("/api/v3/depth");
             default -> throw new IllegalArgumentException("Нет диалекта для биржи: " + id);
         };
     }
@@ -98,17 +102,29 @@ public final class Dialects {
 
     /** GET /api/v5/market/books?instId=BTC-USDT&sz=20 -> {"code":"0","data":[{asks,bids,ts}]} */
     static final class Okx implements BookDialect {
+        /** Перпы: инструмент -SWAP, объёмы в контрактах. */
+        private final boolean swap;
+        /** REST для справочника контрактов. */
+        private final String restUrl;
+        Okx(boolean swap, String restUrl) { this.swap = swap; this.restUrl = restUrl; }
+        /** Имя инструмента. */
+        private String inst(String s) { return swap ? com.hft.exchange.okx.OkxContracts.instId(s) : base(s) + "-" + quote(s); }
         /** Запрос стакана символа. */
         public HttpRequest request(String b, String s, int d) {
-            return get(b + "/api/v5/market/books?instId=" + base(s) + "-" + quote(s) + "&sz=" + Math.min(d, 400));
+            return get(b + "/api/v5/market/books?instId=" + inst(s) + "&sz=" + Math.min(d, 400));
         }
         /** Разобрать ответ в стакан; ошибка биржи — исключение. */
         public ParsedBook parse(String body, String s) throws Exception {
             JsonNode r = JSON.readTree(body);
             if (!"0".equals(r.path("code").asText())) throw new IllegalStateException("OKX: " + body);
             JsonNode d = r.path("data").get(0);
-            return book(levels(d.get("bids"), null, null, true, MAX),
-                    levels(d.get("asks"), null, null, false, MAX), d.path("ts").asLong(System.currentTimeMillis()));
+            double[][] bids = levels(d.get("bids"), null, null, true, MAX), asks = levels(d.get("asks"), null, null, false, MAX);
+            if (swap) {                                                  // контракты -> базовая валюта
+                double ct = com.hft.exchange.okx.OkxContracts.ctVal(restUrl, inst(s));
+                for (int i = 0; i < bids[1].length; i++) bids[1][i] *= ct;
+                for (int i = 0; i < asks[1].length; i++) asks[1][i] *= ct;
+            }
+            return book(bids, asks, d.path("ts").asLong(System.currentTimeMillis()));
         }
     }
 
@@ -144,10 +160,13 @@ public final class Dialects {
 
     /** Aster спот: GET /api/v3/depth?symbol=BTCUSDT&limit=20 -> {lastUpdateId,E?,bids,asks} (формат Binance) */
     static final class Aster implements BookDialect {
+        /** Путь стакана: /api/v3/depth (Aster) или /fapi/v1/depth (Binance USDⓈ-M). */
+        private final String path;
+        Aster(String path) { this.path = path; }
         /** Запрос стакана символа. */
         public HttpRequest request(String b, String s, int d) {
             int limit = d <= 5 ? 5 : d <= 10 ? 10 : d <= 20 ? 20 : d <= 50 ? 50 : 100;
-            return get(b + "/api/v3/depth?symbol=" + s + "&limit=" + limit);
+            return get(b + path + "?symbol=" + s + "&limit=" + limit);
         }
         /** Разобрать ответ в стакан; ошибка биржи — исключение. */
         public ParsedBook parse(String body, String s) throws Exception {

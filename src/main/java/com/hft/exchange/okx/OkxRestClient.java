@@ -47,6 +47,12 @@ public final class OkxRestClient extends SignedCexClient {
 
     /** Фраза API-ключа. */
     private final String passphrase;
+    /** Перпы (market=perp): инструменты -SWAP, объём в контрактах, tdMode=cross. */
+    private final boolean swap;
+    /** Шаг объёма в контрактах по instId (для формата sz). */
+    private final Map<String, Double> lotSz = new ConcurrentHashMap<>();
+    /** Куда пишутся позиции из WS. */
+    private volatile com.hft.store.PositionStore positionStore;
 
     /**
      * @param config подключение и параметры биржи
@@ -60,11 +66,33 @@ public final class OkxRestClient extends SignedCexClient {
             throw new IllegalStateException("OKX требует OKX_PASSPHRASE (фраза, заданная при создании API-ключа)");
         }
         this.passphrase = p == null ? "" : p.trim();
+        this.swap = config.params().isPerp();
     }
 
-    /** Имя символа на бирже. */
-    static String instId(String symbol) {
-        return BalanceStore.baseAsset(symbol) + "-" + BalanceStore.quoteAsset(symbol);
+    @Override public boolean isPerp() { return swap; }
+
+    /** Имя символа на бирже: BTC-USDT (спот) или BTC-USDT-SWAP (перп). */
+    private String instId(String symbol) {
+        return swap ? OkxContracts.instId(symbol) : BalanceStore.baseAsset(symbol) + "-" + BalanceStore.quoteAsset(symbol);
+    }
+
+    /** Наш символ по instId: BTC-USDT-SWAP -> BTCUSDT. */
+    static String symbolOf(String instId) { return instId.replace("-SWAP", "").replace("-", ""); }
+
+    /** Тип инструментов для запросов: SPOT или SWAP. */
+    private String instType() { return swap ? "SWAP" : "SPOT"; }
+
+    /** Множитель «контракты -> базовая валюта» (на споте 1). */
+    private double ct(String instId) { return instId.endsWith("-SWAP") ? OkxContracts.ctValOrOne(instId) : 1; }
+
+    /** Объём в базовой валюте -> строка sz в контрактах (перп) или как есть (спот). */
+    private String sz(String symbol, double qty) {
+        if (!swap) return plain(qty, filters.quantityScale(symbol));
+        String inst = instId(symbol);
+        double lot = lotSz.getOrDefault(inst, 1.0);
+        double contracts = Math.floor(qty / ct(inst) / lot + 1e-9) * lot;
+        return java.math.BigDecimal.valueOf(contracts).setScale(Math.max(0, java.math.BigDecimal.valueOf(lot).stripTrailingZeros().scale()),
+                java.math.RoundingMode.DOWN).stripTrailingZeros().toPlainString();
     }
 
     // ------------------------------------------------------------ HTTP
@@ -117,19 +145,20 @@ public final class OkxRestClient extends SignedCexClient {
     @Override
     protected OrderResult placeRaw(Order o) throws Exception {
         ObjectNode b = mapper.createObjectNode();
+        if (swap && o.qtyIsQuote()) throw new IllegalArgumentException("OKX SWAP: ордер на сумму не поддерживается — задайте объём");
         b.put("instId", instId(o.symbol()));
-        b.put("tdMode", "cash");
+        b.put("tdMode", swap ? "cross" : "cash");
         b.put("side", o.side() == Side.BUY ? "buy" : "sell");
         b.put("clOrdId", o.clientId());
-        int qs = filters.quantityScale(o.symbol());
+        if (o.reduceOnly()) b.put("reduceOnly", true);
         if (o.type() == Type.MARKET) {
             b.put("ordType", "market");
-            b.put("tgtCcy", o.qtyIsQuote() ? "quote_ccy" : "base_ccy");
-            b.put("sz", plain(o.qty(), o.qtyIsQuote() ? 8 : qs));
+            if (!swap) b.put("tgtCcy", o.qtyIsQuote() ? "quote_ccy" : "base_ccy");
+            b.put("sz", o.qtyIsQuote() ? plain(o.qty(), 8) : sz(o.symbol(), o.qty()));
         } else {
             b.put("ordType", switch (o.tif()) { case GTC -> "limit"; case IOC -> "ioc"; case FOK -> "fok"; });
             b.put("px", plain(o.price(), filters.priceScale(o.symbol())));
-            b.put("sz", plain(o.qty(), qs));
+            b.put("sz", sz(o.symbol(), o.qty()));
         }
         JsonNode r;
         try {
@@ -165,8 +194,9 @@ public final class OkxRestClient extends SignedCexClient {
             default -> o.path("state").asText().toUpperCase();
         };
         Side side = "buy".equals(o.path("side").asText()) ? Side.BUY : Side.SELL;
+        double k = ct(o.path("instId").asText(""));
         return new OrderResult(orderId, o.path("clOrdId").asText(""), symbol.toUpperCase(), side, status,
-                d(o, "sz"), exec, d(o, "avgPx"), 0);
+                d(o, "sz") * k, exec * k, d(o, "avgPx"), 0);
     }
 
     /** Отменить ордер. */
@@ -204,7 +234,7 @@ public final class OkxRestClient extends SignedCexClient {
                 log.warn("[okx] отмена по WS не удалась ({}), делаю через REST", e.getMessage());
             }
         }
-        JsonNode pending = signed("GET", "/api/v5/trade/orders-pending?instType=SPOT&instId=" + instId(symbol), "", false);
+        JsonNode pending = signed("GET", "/api/v5/trade/orders-pending?instType=" + instType() + "&instId=" + instId(symbol), "", false);
         ArrayNode batch = mapper.createArrayNode();
         int total = 0;
         for (JsonNode o : pending.path("data")) {
@@ -237,7 +267,7 @@ public final class OkxRestClient extends SignedCexClient {
         if (!credentials.isPresent() || !wsTradeAllowed() || wsChannel != null) return;
         balanceStore = store;
         try {                                                   // единственный REST: список открытых ордеров на старте
-            JsonNode pending = signed("GET", "/api/v5/trade/orders-pending?instType=SPOT", "", false);
+            JsonNode pending = signed("GET", "/api/v5/trade/orders-pending?instType=" + instType(), "", false);
             for (JsonNode o : pending.path("data")) openOrders.put(o.path("ordId").asText(), o.path("instId").asText());
             openKnown = true;
         } catch (Exception e) {
@@ -279,7 +309,7 @@ public final class OkxRestClient extends SignedCexClient {
             JsonNode d = r.path("data").path(0);
             long id = registerId(d.path("ordId").asText());
             OrderResult st = fromOrder(d, id, o.symbol());
-            return new OrderResult(st.orderId(), o.clientId(), st.symbol(), st.side(), "NEW".equals(st.status()) ? "NEW" : st.status(),
+            return new OrderResult(st.orderId(), o.clientId(), st.symbol(), st.side(), st.status(),
                     o.qtyIsQuote() ? 0 : o.qty(), st.executedQty(), st.avgPrice(), 0);
         } catch (ApiException e) {
             throw new ApiException(200, "WS_UNKNOWN", "ордер " + o.clientId() + " не найден после обрыва WS: " + e.getMessage(), false);
@@ -295,7 +325,8 @@ public final class OkxRestClient extends SignedCexClient {
                 String ordId = o.path("ordId").asText();
                 String inst = o.path("instId").asText();
                 String state = o.path("state").asText();
-                String sym = inst.replace("-", "");
+                String sym = symbolOf(inst);
+                double k = ct(inst);
                 long id = registerId(ordId);
                 Side side = "buy".equals(o.path("side").asText()) ? Side.BUY : Side.SELL;
                 String status = switch (state) {
@@ -306,7 +337,7 @@ public final class OkxRestClient extends SignedCexClient {
                     default -> state.toUpperCase();
                 };
                 streamed.put(id, new OrderResult(id, o.path("clOrdId").asText(""), sym, side, status,
-                        d(o, "sz"), d(o, "accFillSz"), d(o, "avgPx"), 0));
+                        d(o, "sz") * k, d(o, "accFillSz") * k, d(o, "avgPx"), 0));
                 if ("live".equals(state) || "partially_filled".equals(state)) openOrders.put(ordId, inst);
                 else openOrders.remove(ordId);
             }
@@ -318,6 +349,14 @@ public final class OkxRestClient extends SignedCexClient {
                 }
             if (store != null) store.markSynced();
             accountSeen = true;
+        } else if (ch.equals("positions")) {
+            com.hft.store.PositionStore ps = positionStore;
+            if (ps == null) return;
+            for (JsonNode p : n.path("data")) {
+                String inst = p.path("instId").asText();
+                if (!inst.endsWith("-SWAP") || !"net".equals(p.path("posSide").asText("net"))) continue;
+                ps.set(symbolOf(inst), d(p, "pos") * ct(inst), d(p, "avgPx"));
+            }
         }
     }
 
@@ -339,8 +378,9 @@ public final class OkxRestClient extends SignedCexClient {
         @Override public List<String> subscriptions() {
             ObjectNode m = mapper.createObjectNode().put("op", "subscribe");
             ArrayNode a = m.putArray("args");
-            a.addObject().put("channel", "orders").put("instType", "SPOT");
+            a.addObject().put("channel", "orders").put("instType", instType());
             a.addObject().put("channel", "account");
+            if (swap) a.addObject().put("channel", "positions").put("instType", "SWAP");
             return List.of(m.toString());
         }
 
@@ -362,21 +402,56 @@ public final class OkxRestClient extends SignedCexClient {
         }
     }
 
+    // ------------------------------------------------------------ перпы: плечо и позиции
+
+    /** Плечо инструмента (кросс-маржа). */
+    @Override
+    public void setLeverage(String symbol, int leverage) throws Exception {
+        if (!swap) return;
+        ObjectNode b = mapper.createObjectNode().put("instId", instId(symbol)).put("lever", Integer.toString(leverage)).put("mgnMode", "cross");
+        signed("POST", "/api/v5/account/set-leverage", b.toString(), false);
+        log.info("[okx] плечо {}x для {}", leverage, symbol);
+    }
+
+    /** Открытые позиции SWAP (режим net), объём — в базовой валюте. */
+    @Override
+    public void loadPositions(com.hft.store.PositionStore store) throws Exception {
+        if (!swap) return;
+        positionStore = store;
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (JsonNode p : signed("GET", "/api/v5/account/positions?instType=SWAP", "", false).path("data")) {
+            String inst = p.path("instId").asText();
+            double pos = d(p, "pos") * ct(inst);
+            if (pos == 0) continue;
+            store.set(symbolOf(inst), pos, d(p, "avgPx"));
+            seen.add(symbolOf(inst));
+        }
+        for (String s : store.snapshot().keySet()) if (!seen.contains(s)) store.set(s, 0, 0);
+    }
+
     // ------------------------------------------------------------ правила и баланс
 
     /** Загрузить правила торговли символов (шаги объёма и цены, минимальная сумма). */
     @Override
     public void loadFilters(Iterable<String> symbols) throws Exception {
-        JsonNode r = publicGet("/api/v5/public/instruments?instType=SPOT");
+        JsonNode r = publicGet("/api/v5/public/instruments?instType=" + instType());
         int loaded = 0;
         for (JsonNode s : r.path("data")) {
-            String sym = s.path("instId").asText().replace("-", "");
+            String inst = s.path("instId").asText();
+            String sym = symbolOf(inst);
             boolean wanted = false;
             for (String w : symbols) if (w.equalsIgnoreCase(sym)) { wanted = true; break; }
-            if (!wanted) continue;
+            if (!wanted || swap && !"USDT".equals(s.path("settleCcy").asText("USDT"))) continue;
+            // перпы: размеры в контрактах -> в базовую валюту (ctVal), чтобы бот везде считал в монетах
+            double k = 1;
+            if (swap) {
+                k = d(s, "ctVal");
+                OkxContracts.put(inst, k);
+                lotSz.put(inst, d(s, "lotSz"));
+            }
             double max = d(s, "maxLmtSz");
-            filters.put(sym, new SymbolFilters.Filter(d(s, "minSz"), max > 0 ? max : Double.MAX_VALUE,
-                    d(s, "lotSz"), 0, 0, d(s, "tickSz"), 1.0));
+            filters.put(sym, new SymbolFilters.Filter(d(s, "minSz") * k, max > 0 ? max * k : Double.MAX_VALUE,
+                    d(s, "lotSz") * k, 0, 0, d(s, "tickSz"), 1.0));
             loaded++;
         }
         if (loaded == 0) throw new IllegalStateException("OKX: правила торговли не найдены для " + symbols);
@@ -388,7 +463,7 @@ public final class OkxRestClient extends SignedCexClient {
     public void loadBalances(BalanceStore store) throws Exception {
         JsonNode r = signed("GET", "/api/v5/account/balance", "", false);
         for (JsonNode bal : r.path("data").path(0).path("details")) {
-            double free = d(bal, "availBal"), locked = d(bal, "frozenBal");
+            double free = d(bal, swap && !bal.path("availEq").asText("").isEmpty() ? "availEq" : "availBal"), locked = d(bal, "frozenBal");
             if (free > 0 || locked > 0) store.set(bal.path("ccy").asText(), free, locked);
         }
         store.markSynced();

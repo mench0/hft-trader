@@ -33,6 +33,13 @@
 | `cancelOrder(symbol, orderId)`, `cancelAll(symbol)` | отмена |
 | `orderStatus(symbol, orderId)` | статус и исполнение |
 | `loadFilters(symbols)`, `loadBalances(store)` | правила торговли и балансы (без правил LIVE-старт отменяется) |
+| `isPerp()` | клиент торгует фьючерсами (`market=perp`) |
+| `reduceMarket(symbol, side, qty)` | закрывающий рыночный ордер: на фьючерсах — reduceOnly, на споте — обычный |
+| `setLeverage(symbol, leverage)`, `loadPositions(store)` | плечо и открытые позиции (фьючерсы) |
+
+На фьючерсах объём — тоже в монетах базовой валюты (у OKX клиент сам пересчитывает его в контракты по `ctVal`).
+Клиенты фьючерсов: `BinanceFuturesClient` (USDⓈ-M), `BybitRestClient` с `category=linear`,
+`OkxRestClient` с инструментами `-SWAP`, `HyperliquidRestClient`.
 
 ## Ручные ордера через админку
 
@@ -49,6 +56,9 @@ curl -H "$H" -X POST "localhost:8080/order?exchange=binance&symbol=BTCUSDT&side=
 # отменить все ордера символа
 curl -H "$H" -X POST "localhost:8080/cancel-all?exchange=binance&symbol=BTCUSDT"
 ```
+
+На фьючерсах `side=SELL` открывает или увеличивает шорт, а «весь баланс» — это свободная маржа × `leverage`.
+Закрыть позицию — `POST /positions/close?exchange=bybit&symbol=BTCUSDT` (reduceOnly, `symbol=all` — все).
 
 Ответ: `orderId`, `статус`, `исполнено`, `средняя_цена`. Ордера проходят те же риск-проверки, что и
 ордера стратегий (`RiskManager`: размер позиции, дневной убыток, частота, возраст данных).

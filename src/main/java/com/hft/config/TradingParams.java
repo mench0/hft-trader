@@ -26,6 +26,9 @@ public record TradingParams(
         int recvWindowMs,
         boolean wsTrade,
         double paperStartBalance,
+        // ---- рынок ----
+        String market,
+        int leverage,
         // ---- работа фидов и клиента ----
         long wsStaleMs,
         long wsReconnectBaseMs,
@@ -103,6 +106,11 @@ public record TradingParams(
             num("recvWindowMs", 5000, 100, 60_000, "Окно годности подписанного запроса, мс").needsRestart(),
             flag("wsTrade", true, "Отправлять ордера по WebSocket, где биржа это умеет (иначе REST)").needsRestart(),
             num("paperStartBalance", 1000, 0, 1e12, "Стартовый бумажный баланс в котируемой валюте каждого символа").needsRestart(),
+            // рынок
+            text("market", "spot", "(spot|perp)", "Рынок: perp — бессрочные фьючерсы (USDT-M; лонг и шорт, плечо, funding), spot — спот. "
+                    + "Новая биржа с фьючерсами (Binance, Bybit, OKX, Hyperliquid) получает perp, остальные — spot; у Hyperliquid — только perp, "
+                    + "у Gate, KuCoin, MEXC, Aster, Uniswap — только spot").needsRestart(),
+            num("leverage", 2, 1, 50, "Плечо для фьючерсов (выставляется на бирже при старте); на споте не используется").needsRestart(),
             // фиды и клиент
             num("wsStaleMs", 0, 0, 600_000, "Тишина в WebSocket, после которой переподключение, мс (0 — по умолчанию для биржи)").needsRestart(),
             num("wsReconnectBaseMs", 500, 50, 60_000, "Начальная пауза перед переподключением WebSocket, мс (дальше растёт вдвое)").needsRestart(),
@@ -125,11 +133,11 @@ public record TradingParams(
             num("maxOrdersPerMinute", 30, 1, 100_000, "Лимит ордеров в минуту (защита от цикла в стратегии)"),
             num("maxDataAgeMs", 5000, 50, 600_000, "Стакан старше — ордер отклоняется, мс"),
             // mean reversion
-            flag("meanReversionEnabled", true, "Стратегия возврата к среднему включена"),
-            num("entryZ", 2.0, 0.1, 20, "Вход, когда цена ниже среднего на столько сигм"),
+            flag("meanReversionEnabled", true, "Стратегия возврата к среднему включена (на фьючерсах — лонг и шорт)"),
+            num("entryZ", 2.0, 0.1, 20, "Вход, когда цена ниже (лонг) или, на фьючерсах, выше (шорт) среднего на столько сигм"),
             num("exitZ", 0.3, -20, 20, "Выход, когда отклонение вернулось к этому значению"),
             num("stopLossPercent", 0.5, 0.01, 100, "Стоп-лосс, %"),
-            num("minImbalance", 0.15, -1, 1, "Минимальный перевес бидов в стакане для входа"),
+            num("minImbalance", 0.15, -1, 1, "Минимальный перевес бидов (для шорта — асков) в стакане для входа"),
             num("imbalanceLevels", 5, 1, 1000, "По скольким уровням считается перевес"),
             num("orderQuote", 20, 0, 1e9, "Размер сделки в котируемой валюте"),
             num("maxBookAgeMs", 2000, 10, 600_000, "Вход только по стакану не старше, мс"),
@@ -138,7 +146,7 @@ public record TradingParams(
             num("bookDepth", 20, 1, 1000, "Глубина стакана в памяти, уровней").needsRestart(),
             num("priceWindow", 1000, 4, 1_000_000, "Окно цен для среднего и сигмы, тиков").needsRestart(),
             // треугольный арбитраж
-            flag("triangularEnabled", false, "Треугольный арбитраж включён"),
+            flag("triangularEnabled", false, "Треугольный арбитраж включён (только market=spot: обмен через три валюты на фьючерсах невозможен)"),
             text("triHomeAsset", "USDT", "[A-Z0-9]{2,10}", "Валюта, с которой начинается и где заканчивается круг").needsRestart(),
             num("triMinProfitPercent", 0.15, 0, 10, "Минимальная чистая прибыль круга после трёх комиссий, %"),
             num("triOrderQuote", 20, 0, 1e9, "Размер круга в triHomeAsset"),
@@ -147,7 +155,7 @@ public record TradingParams(
             num("triCooldownMs", 3000, 0, 3_600_000, "Пауза перед повтором того же круга, мс"),
             flag("triUnwindOnFail", true, "Нога не исполнилась — продать остаток обратно в triHomeAsset"),
             // статистический арбитраж
-            flag("statArbEnabled", false, "Статистический арбитраж (пары) включён"),
+            flag("statArbEnabled", false, "Статистический арбитраж (пары) включён; на фьючерсах — лонг дешёвой ноги и шорт дорогой"),
             text("statArbPairs", "", "([A-Z0-9]+/[A-Z0-9]+(,[A-Z0-9]+/[A-Z0-9]+)*)?", "Пары A/B через запятую; пусто — все пары выбранных символов с одной котируемой валютой").needsRestart(),
             num("statArbMaxAutoPairs", 15, 1, 500, "Сколько пар брать автоматически, если statArbPairs пуст").needsRestart(),
             num("statArbWindow", 300, 30, 100_000, "Окно в отсчётах").needsRestart(),
@@ -168,6 +176,10 @@ public record TradingParams(
 
     /** Значения по умолчанию. */
     public static final TradingParams DEFAULTS = ParamSpec.build(TradingParams.class, SPECS, Map.of());
+
+    /** Торговля бессрочными фьючерсами (иначе спот). Не параметр — в JSON админки не выводится. */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    public boolean isPerp() { return "perp".equals(market); }
 
     /** Параметры, которые уходят в верхний регистр (тикеры, валюты). */
     private static final java.util.Set<String> UPPER = java.util.Set.of("triHomeAsset", "statArbPairs");
@@ -191,7 +203,7 @@ public record TradingParams(
         for (var e : updates.entrySet()) {
             if (!SPECS.containsKey(e.getKey())) continue;
             String v = e.getValue().trim();
-            m.put(e.getKey(), UPPER.contains(e.getKey()) ? v.toUpperCase() : v);
+            m.put(e.getKey(), UPPER.contains(e.getKey()) ? v.toUpperCase() : e.getKey().equals("market") ? v.toLowerCase() : v);
         }
         TradingParams p = ParamSpec.build(TradingParams.class, SPECS, m);
         if (p.statArbExitZ >= p.statArbEntryZ || p.statArbStopZ <= p.statArbEntryZ)

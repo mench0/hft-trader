@@ -12,6 +12,7 @@ import com.hft.risk.RiskManager;
 import com.hft.store.BalanceStore;
 import com.hft.store.MarketDataStore;
 import com.hft.store.OrderBook;
+import com.hft.store.PositionStore;
 import com.hft.store.SymbolFilters;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,6 +45,10 @@ public final class OrderService {
     private final RiskManager risk;
     /** Параметры биржи (резерв под комиссию). */
     private final TradingSettings settings;
+    /** Позиции по перпам (на споте пусто). */
+    private final PositionStore positions;
+    /** Торгуются перпы: объём ордера меняет позицию, а не баланс базовой валюты. */
+    private final boolean perp;
 
     /** Риск-менеджер биржи (стратегии пишут в него результат сделок). */
     public RiskManager risk() { return risk; }
@@ -51,11 +56,36 @@ public final class OrderService {
     /** Локальные балансы биржи. */
     public BalanceStore balances() { return balances; }
 
+    /** Позиции по перпам. */
+    public PositionStore positions() { return positions; }
+
+    /** Правила символов биржи (округление объёма). */
+    public SymbolFilters filters() { return filters; }
+
+    /** Рыночные данные биржи. */
+    public MarketDataStore market() { return market; }
+
+    /** Торгуются перпы (лонг и шорт), а не спот. */
+    public boolean isPerp() { return perp; }
+
+    /** Клиент биржи или бумажный движок (плечо, позиции). */
+    public ExchangeOrderApi api() { return rest; }
+
     /** Время от отправки ордера до ответа. */
     private final Latency orderLatency = new Latency("Латентность ордера");
 
     public OrderService(ExchangeOrderApi rest, MarketDataStore market, BalanceStore balances,
                         SymbolFilters filters, RiskManager risk, TradingSettings settings) {
+        this(rest, market, balances, filters, risk, settings, new PositionStore());
+    }
+
+    /**
+     * @param positions позиции по перпам (используются, если клиент торгует перпами)
+     */
+    public OrderService(ExchangeOrderApi rest, MarketDataStore market, BalanceStore balances,
+                        SymbolFilters filters, RiskManager risk, TradingSettings settings, PositionStore positions) {
+        this.positions = positions;
+        this.perp = rest.isPerp();
         this.rest = rest;
         this.market = market;
         this.balances = balances;
@@ -117,6 +147,22 @@ public final class OrderService {
         return execute(OrderRequest.market(symbol, Side.SELL).balancePortion(portion));
     }
 
+    /**
+     * Закрыть (уменьшить) позицию по перпу рыночным reduceOnly-ордером. side — сторона закрытия:
+     * SELL закрывает лонг, BUY — шорт. На споте — обычный рыночный ордер.
+     */
+    public OrderResult reduceMarket(String symbol, Side side, double qty) {
+        OrderRequest r = OrderRequest.market(symbol, side).quantity(qty);
+        return execute(perp ? r.reduceOnly() : r);
+    }
+
+    /** Закрыть всю позицию символа по перпу; нет позиции — null. */
+    public OrderResult closePosition(String symbol) {
+        double q = positions.qty(symbol);
+        if (Math.abs(q) < 1e-12) return null;
+        return reduceMarket(symbol, q > 0 ? Side.SELL : Side.BUY, Math.abs(q));
+    }
+
     // ======================= ОСНОВНОЙ МЕТОД =======================
 
     /**
@@ -139,7 +185,13 @@ public final class OrderService {
                 return failed(symbol, request.side(), "Недостаточно средств для ордера");
             }
 
-            // 3. Риск-менеджер
+            // 3. Риск-менеджер (на перпах сначала — лимит позиции и маржа для ордеров, увеличивающих позицию)
+            if (perp && !request.isReduceOnly()) {
+                double after = positions.qty(symbol) + (request.side() == Side.BUY ? qty : -qty);
+                double freeMargin = balances.free(BalanceStore.quoteAsset(symbol));
+                RiskManager.Decision pd = risk.checkPerp(qty, refPrice, after, freeMargin);
+                if (!pd.allowed()) return failed(symbol, request.side(), pd.reason());
+            }
             RiskManager.Decision decision = risk.check(request, qty, refPrice);
             if (!decision.allowed()) {
                 return failed(symbol, request.side(), decision.reason());
@@ -177,7 +229,14 @@ public final class OrderService {
      */
     private double resolveQuantity(OrderRequest request, double price) {
         if (!request.isFullBalance()) {
-            return filters.roundQuantity(request.symbol(), request.rawQuantity());
+            double q = filters.roundQuantity(request.symbol(), request.rawQuantity());
+            if (perp && request.isReduceOnly()) q = Math.min(q, Math.abs(positions.qty(request.symbol())));
+            return q;
+        }
+        if (perp) {                                    // перпы: свободная маржа × плечо, в обе стороны
+            double reserve = 1.0 - settings.get().feeReservePercent() / 100.0;
+            double margin = balances.free(BalanceStore.quoteAsset(request.symbol())) * request.quotePortion() * reserve;
+            return filters.roundQuantity(request.symbol(), margin * Math.max(1, settings.get().leverage()) / price);
         }
 
         String[] assets = BalanceStore.splitSymbol(request.symbol());
@@ -226,6 +285,7 @@ public final class OrderService {
                     ? rest.buyLimit(request.symbol(), qty, request.price(), tif)
                     : rest.sellLimit(request.symbol(), qty, request.price(), tif);
         }
+        if (request.isReduceOnly()) return rest.reduceMarket(request.symbol(), request.side(), qty);
         return request.side() == Side.BUY
                 ? rest.buyMarket(request.symbol(), qty)
                 : rest.sellMarket(request.symbol(), qty);
@@ -238,6 +298,11 @@ public final class OrderService {
      */
     private void applyToBalances(OrderResult r) {
         String[] assets = BalanceStore.splitSymbol(r.symbol());
+        if (perp) {                                    // перпы: меняется позиция, в баланс идёт только реализованный результат
+            double pnl = positions.apply(r.symbol(), r.side() == Side.BUY, r.executedQty(), r.avgPrice());
+            if (pnl != 0) balances.adjust(assets[1], pnl);
+            return;
+        }
         double quoteAmount = r.executedQty() * r.avgPrice();
         if (r.side() == Side.BUY) {
             balances.adjust(assets[0], r.executedQty());
@@ -275,13 +340,14 @@ public final class OrderService {
         }
     }
 
-    /** Аварийный выход: отменить всё и остановить торговлю. */
+    /** Аварийный выход: отменить всё, остановить торговлю, на перпах — закрыть позиции. */
     public void panicClose(String reason) {
         log.error("АВАРИЙНОЕ ЗАКРЫТИЕ: {}", reason);
         risk.stopTrading(reason);
         for (String symbol : market.symbols()) {
             cancelAll(symbol);
         }
+        if (perp) positions.snapshot().keySet().forEach(this::closePosition);   // reduceOnly проходит и при kill switch
     }
 
     /** Латентность ордеров. */

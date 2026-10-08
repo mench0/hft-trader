@@ -64,6 +64,8 @@ public final class BybitExchange implements ExchangeGateway, com.hft.exchange.ge
     private final TickPipeline pipeline;
     /** Фид рыночных данных. */
     private final BybitMarketDataFeed feed;
+    /** Фьючерсный счёт (market=perp); null — спот. */
+    private final com.hft.perp.PerpAccount perp;
 
     /**
      * @param config подключение и параметры биржи
@@ -81,10 +83,13 @@ public final class BybitExchange implements ExchangeGateway, com.hft.exchange.ge
         this.rest = new BybitRestClient(config, credentials, filters);
         this.risk = new RiskManager(settings, market, config.id());
         boolean live = config.params().live() && credentials.isPresent();
-        this.paper = live ? null : new PaperOrderApi(market, balances,
-                ExchangeCatalog.find(config.id()).map(ExchangeInfo::makerFeePct).orElse(0.1),
-                ExchangeCatalog.find(config.id()).map(ExchangeInfo::takerFeePct).orElse(0.1));
-        this.orderService = new OrderService(live ? rest : paper, market, balances, filters, risk, settings);
+        double[] fees = ExchangeSupport.fees(ExchangeCatalog.find(config.id()).orElseThrow(), config);
+        this.paper = live ? null : new PaperOrderApi(market, balances, fees[0], fees[1]);
+        com.hft.store.PositionStore positions = new com.hft.store.PositionStore();
+        if (paper != null && config.params().isPerp()) paper.perp(positions);
+        this.orderService = new OrderService(live ? rest : paper, market, balances, filters, risk, settings, positions);
+        this.perp = config.params().isPerp()
+                ? new com.hft.perp.PerpAccount("bybit", config, market, balances, positions, live ? rest : paper, !live) : null;
         log.info("[bybit] режим {}", live ? "LIVE — ордера пойдут на биржу" : "PAPER (для LIVE нужны ключи и live=true)");
 
         this.dataHandler = new MarketDataHandler(market);
@@ -121,15 +126,17 @@ public final class BybitExchange implements ExchangeGateway, com.hft.exchange.ge
         } else {
             ExchangeSupport.seedPaperBalances(balances, config);
         }
+        if (perp != null) perp.start();
         pipeline.start();
         feed.start();
-        log.info("[bybit] Биржа запущена, символы: {}", config.symbols());
+        log.info("[bybit] Биржа запущена ({}), символы: {}", perp != null ? "фьючерсы linear, плечо " + config.params().leverage() + "x" : "спот", config.symbols());
     }
 
     /** Остановить стратегии, фид и конвейер. */
     @Override
     public void stop() {
         strategy.disable();
+        if (perp != null) perp.stop();
         rest.stopStreams();
         feed.stop();
         pipeline.shutdown();
@@ -180,13 +187,19 @@ public final class BybitExchange implements ExchangeGateway, com.hft.exchange.ge
         lastBalanceSyncMs = now;
         try { rest.loadBalances(balances); }
         catch (Exception e) { log.warn("[bybit] Не удалось обновить балансы: {}", e.getMessage()); }
+        if (perp != null) perp.syncPositions();
     }
+
+    /** Фьючерсный счёт; null — спот. */
+    @Override
+    public com.hft.perp.PerpAccount perp() { return perp; }
 
     /** Режим, фид и (в LIVE) метрики сокетов — для админки. */
     @Override
     public Map<String, Object> requestStats() {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("mode", paper == null ? "LIVE" : "PAPER");
+        m.put("market", config.params().market());
         m.put("marketData", Map.of("ws", feed.isConnected(), "messages", feed.messageCount()));
         if (paper == null) m.put("orders", rest.stats());
         return m;

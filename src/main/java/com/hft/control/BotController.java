@@ -210,8 +210,13 @@ public final class BotController {
     public static TradingParams defaultsFor(String exchangeId) {
         TradingParams d = TradingParams.DEFAULTS;
         TradingParams p = ExchangeCatalog.find(exchangeId)
-                .map(i -> d.with(Map.of("takerFeePercent", String.valueOf(i.takerFeePct()),
-                        "testnet", String.valueOf(i.hasTestnet()))))
+                .map(i -> {
+                    boolean perp = ExchangeCatalog.supportsPerp(i.id());
+                    double taker = perp ? ExchangeCatalog.perp(i.id()).orElseThrow().takerFeePct() : i.takerFeePct();
+                    return d.with(Map.of("takerFeePercent", String.valueOf(taker),
+                            "testnet", String.valueOf(i.hasTestnet()),
+                            "market", perp ? "perp" : "spot"));
+                })
                 .orElse(d);
         Map<String, String> mode = envMode(exchangeId);
         if (mode.isEmpty()) return p;
@@ -251,9 +256,16 @@ public final class BotController {
         }
     }
 
-    /** testnet=true возможен, только если у биржи есть тестовая сеть или задан свой restUrl. */
+    /**
+     * testnet=true возможен, только если у биржи есть тестовая сеть или задан свой restUrl;
+     * market=perp — только у бирж с фьючерсами, market=spot — только у бирж со спотом.
+     */
     private static void validate(String exchangeId, TradingParams p) {
         ExchangeInfo info = ExchangeCatalog.find(exchangeId).orElseThrow();
+        if (p.isPerp() && !ExchangeCatalog.supportsPerp(exchangeId))
+            throw new IllegalArgumentException("У биржи " + exchangeId + " в боте нет фьючерсов: задайте market=spot");
+        if (!p.isPerp() && !ExchangeCatalog.supportsSpot(exchangeId))
+            throw new IllegalArgumentException("Биржа " + exchangeId + " в боте торгует только фьючерсами: задайте market=perp");
         if (p.testnet() && !info.hasTestnet() && p.restUrl().isBlank())
             throw new IllegalArgumentException("У биржи " + exchangeId + " нет тестовой сети: задайте testnet=false"
                     + (exchangeId.equals("uniswapv2") ? " или restUrl тестовой сети (RPC Sepolia и т.п.)" : ""));
@@ -346,6 +358,12 @@ public final class BotController {
     /** Работающие шлюзы бирж. */
     public Map<String, ExchangeGateway> active() { return Map.copyOf(active); }
 
+    /** Funding-арбитраж между биржами (работает, пока запущен бот). */
+    private volatile com.hft.perp.FundingArbitrage fundingArb;
+
+    /** Funding-арбитраж; null — бот не запущен. */
+    public com.hft.perp.FundingArbitrage fundingArb() { return fundingArb; }
+
     /** Подключить все выбранные биржи с их текущими параметрами. */
     public synchronized void start() throws Exception {
         if (running.get()) throw new IllegalStateException("Бот уже запущен");
@@ -353,6 +371,7 @@ public final class BotController {
             throw new IllegalStateException("Не выбрано ни одной биржи. Сначала POST /control/select?exchange=binance&symbols=BTCUSDT");
         }
         active.clear();
+        com.hft.perp.PerpAccount.setPollSec(global.fundingPollSec());
         for (var entry : selection.entrySet()) {
             String id = entry.getKey();
             TradingSettings ts = settings.get(id);
@@ -370,12 +389,18 @@ public final class BotController {
             }
         }
         running.set(true);
+        fundingArb = new com.hft.perp.FundingArbitrage(() -> global, () -> List.copyOf(active.values()),
+                id -> { TradingSettings ts = settings.get(id); return ts != null && ts.get().tradingEnabled(); });
+        fundingArb.start();
         log.info("Бот запущен. Активные биржи: {}", active.keySet());
     }
 
     /** Отключить все биржи; выбор и параметры сохраняются. */
     public synchronized void stop() {
         if (!running.get()) return;
+        com.hft.perp.FundingArbitrage fa = fundingArb;
+        fundingArb = null;
+        if (fa != null) fa.stop();                           // пары закрываются, пока биржи ещё подключены
         for (ExchangeGateway gw : active.values()) {
             try { gw.stop(); } catch (Exception e) { log.error("Ошибка остановки {}", gw.id(), e); }
         }
@@ -421,8 +446,9 @@ public final class BotController {
     /** Подключение биржи: адреса из параметров или каталога (с учётом testnet), символы из выбора. */
     static ExchangeConfig buildExchangeConfig(String id, List<String> symbols, TradingParams p) {
         ExchangeInfo info = ExchangeCatalog.find(id).orElseThrow();
-        String rest = p.restUrl().isBlank() ? info.restUrl(p.testnet()) : p.restUrl();
-        String catalogWs = info.wsUrl(p.testnet());
+        var perp = p.isPerp() ? ExchangeCatalog.perp(id) : java.util.Optional.<ExchangeCatalog.PerpVenue>empty();
+        String rest = !p.restUrl().isBlank() ? p.restUrl() : perp.map(v -> v.restUrl(p.testnet())).orElse(info.restUrl(p.testnet()));
+        String catalogWs = perp.map(v -> v.wsUrl(p.testnet())).orElse(info.wsUrl(p.testnet()));
         String ws = p.wsUrl().isBlank() ? (catalogWs == null ? "" : catalogWs) : p.wsUrl();
         return new ExchangeConfig(id, p.testnet(), rest, ws, p.recvWindowMs(), List.copyOf(symbols), p.bookDepth(), p.priceWindow(), p);
     }

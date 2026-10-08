@@ -42,7 +42,7 @@ public abstract class SignedCexClient implements ExchangeOrderApi {
 
     /** Параметры одного ордера, уже округлённые и проверенные. */
     protected record Order(String symbol, Side side, Type type, TimeInForce tif,
-                           double qty, double price, boolean qtyIsQuote, String clientId) {}
+                           double qty, double price, boolean qtyIsQuote, String clientId, boolean reduceOnly) {}
 
     /** Биржа (для логов, бюджета лимитов и весов). */
     protected final String exchangeId;
@@ -170,13 +170,23 @@ public abstract class SignedCexClient implements ExchangeOrderApi {
     @Override public OrderResult sellMarket(String s, double q) throws Exception { return place(s, Side.SELL, Type.MARKET, null, q, 0, false); }
     @Override public OrderResult buyMarketForQuote(String s, double quote) throws Exception { return place(s, Side.BUY, Type.MARKET, null, quote, 0, true); }
 
+    /** Закрывающий рыночный ордер: у перпов — reduceOnly, у спота — обычный. */
+    @Override public OrderResult reduceMarket(String s, Side side, double q) throws Exception {
+        return place(s, side, Type.MARKET, null, q, 0, false, isPerp());
+    }
+
     private OrderResult place(String symbol, Side side, Type type, TimeInForce tif,
                               double qty, double price, boolean qtyIsQuote) throws Exception {
+        return place(symbol, side, type, tif, qty, price, qtyIsQuote, false);
+    }
+
+    private OrderResult place(String symbol, Side side, Type type, TimeInForce tif,
+                              double qty, double price, boolean qtyIsQuote, boolean reduceOnly) throws Exception {
         credentials.require();
         String sym = symbol.toUpperCase();
         double q = qtyIsQuote ? qty : filters.roundQuantity(sym, qty);
         double p = type == Type.LIMIT ? filters.roundPrice(sym, price) : 0;
-        if (!qtyIsQuote) {
+        if (!qtyIsQuote && !reduceOnly) {                  // закрытие остатка позиции проходит и ниже минимальной суммы
             String err = filters.validate(sym, q, p);
             if (err != null) throw new IllegalArgumentException("Ордер не прошёл проверку: " + err);
         }
@@ -184,7 +194,7 @@ public abstract class SignedCexClient implements ExchangeOrderApi {
         String clientId = "hft" + clientSeq.incrementAndGet();
 
         long t0 = System.nanoTime();
-        OrderResult r = placeRaw(new Order(sym, side, type, effTif, q, p, qtyIsQuote, clientId));
+        OrderResult r = placeRaw(new Order(sym, side, type, effTif, q, p, qtyIsQuote, clientId, reduceOnly));
 
         boolean immediate = type == Type.MARKET || effTif == TimeInForce.IOC || effTif == TimeInForce.FOK;
         if (immediate && r.orderId() != 0) r = awaitTerminal(r, effTif);
