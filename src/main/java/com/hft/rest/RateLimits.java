@@ -130,6 +130,12 @@ public final class RateLimits {
             case "/api/v3/ticker/bookTicker" -> symbol ? 2 : 4;
             case "/api/v3/klines" -> 2;
             case "/api/v3/myTrades" -> 20;
+            // USDⓈ-M фьючерсы (свой лимит 2400 веса в минуту, считаем в том же бюджете — консервативно)
+            case "/fapi/v1/exchangeInfo" -> 1;
+            case "/fapi/v1/depth" -> limitParam(q, 100) <= 50 ? 2 : limitParam(q, 100) <= 100 ? 5 : 10;
+            case "/fapi/v1/premiumIndex" -> symbol ? 1 : 10;
+            case "/fapi/v2/balance", "/fapi/v2/positionRisk" -> 5;
+            case "/fapi/v1/openOrders" -> symbol ? 1 : 40;
             default -> 1;
         };
     }

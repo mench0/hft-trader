@@ -38,6 +38,15 @@ public final class ExchangeSupport {
         return false;
     }
 
+    /** Комиссии мейкера и тейкера, %: для фьючерсов — из фьючерсного раздела каталога. */
+    public static double[] fees(ExchangeInfo info, ExchangeConfig config) {
+        if (config.params().isPerp()) {
+            var v = com.hft.exchange.catalog.ExchangeCatalog.perp(info.id());
+            if (v.isPresent()) return new double[]{v.get().makerFeePct(), v.get().takerFeePct()};
+        }
+        return new double[]{info.makerFeePct(), info.takerFeePct()};
+    }
+
     /** Правила торговли для бумажного режима (в LIVE правила только настоящие). */
     public static void putDefaultFilter(SymbolFilters filters, String symbol) {
         filters.put(symbol, new SymbolFilters.Filter(0, 1e12, 1e-6, 0, 1e12, 1e-8, 5.0));

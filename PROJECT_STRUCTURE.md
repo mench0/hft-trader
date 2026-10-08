@@ -18,7 +18,8 @@ hft-trader/
 │   │   ├── ExchangeGateway.java      # общий контракт биржи
 │   │   ├── ExchangeFactory.java      # id биржи -> реализация
 │   │   ├── catalog/                  # ExchangeCatalog/ExchangeInfo: список бирж, комиссии, лимиты, статус адаптера
-│   │   ├── binance/, bybit/          # нативные адаптеры (свой WS-фид на Netty + REST)
+│   │   ├── binance/, bybit/          # нативные адаптеры (свой WS-фид на Netty + REST);
+│   │   │                             # BinanceFuturesClient — USDⓈ-M (fapi, ws-fapi, listenKey)
 │   │   ├── okx/, gate/, mexc/, kucoin/, aster/, hyperliquid/, uniswap/
 │   │   │                             # REST-клиенты на общем скелете SignedCexClient
 │   │   └── generic/                  # SignedCexExchange, фиды стакана:
@@ -29,10 +30,13 @@ hft-trader/
 │   ├── engine/                       # TickPipeline (Disruptor), MarketDataHandler, OrderService, OrderExecutor,
 │   │                                 # стратегии: MeanReversion, StatArb, TriangularArb (StrategySet)
 │   ├── risk/RiskManager.java         # проверки перед ордером, дневной лимит, kill switch
-│   ├── paper/PaperOrderApi.java      # бумажное исполнение против живого стакана
+│   ├── paper/PaperOrderApi.java      # бумажное исполнение против живого стакана (спот и перпы)
+│   ├── perp/                         # фьючерсы: PerpAccount (позиции, плечо, опрос funding),
+│   │                                 # FundingSource (ставки по REST бирж), FundingArbitrage (межбиржевая стратегия)
 │   ├── discovery/                    # подбор тикеров под стратегии: MarketSources (сводки 24ч бирж),
 │   │                                 # профили стратегий, бэктест возврата к среднему
-│   ├── store/                        # MarketDataStore, OrderBook (StampedLock), PriceWindow, BalanceStore, SymbolFilters
+│   ├── store/                        # MarketDataStore, OrderBook (StampedLock), PriceWindow, BalanceStore, SymbolFilters,
+│   │                                 # PositionStore (позиции перпов), FundingStore (ставки funding)
 │   ├── metrics/                      # Latency (HdrHistogram), PrometheusExporter (/metrics)
 │   ├── net/AbstractWsFeed.java       # общий Netty WS-клиент для Binance/Bybit
 │   ├── crypto/                       # Keccak, Hex, EvmCrypto/Web3jCrypto (Hyperliquid, Uniswap)
@@ -53,11 +57,13 @@ hft-trader/
 
 | Биржа | Реализация | Режим по умолчанию |
 |---|---|---|
-| Binance, Bybit | BinanceExchange, BybitExchange | LIVE при ключах и `live=true` |
+| Binance (спот), Bybit (спот и linear) | BinanceExchange, BybitExchange | LIVE при ключах и `live=true` |
+| Binance (фьючерсы USDⓈ-M) | SignedCexExchange + BinanceFuturesClient | LIVE при ключах и `live=true`, не проверен |
 | OKX, Gate, MEXC, KuCoin, Aster | SignedCexExchange + свой RestClient | PAPER, LIVE не проверен |
 | Hyperliquid, Uniswap V2 | SignedCexExchange + HyperliquidRestClient / UniswapV2Client | PAPER, LIVE не проверен |
 
 Полный список с комиссиями и заметками — `GET /exchanges/catalog` или вкладка «Биржи» в админке.
+Рынок биржи — параметр `market`: `perp` (Binance, Bybit, OKX, Hyperliquid) или `spot` (все, кроме Hyperliquid).
 
 ## Как добавить биржу
 

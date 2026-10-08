@@ -63,4 +63,7 @@ public interface ExchangeGateway {
 
     /** Периодическая пересинхронизация балансов с биржей — вызывается планировщиком из Main. */
     void syncBalances();
+
+    /** Фьючерсный счёт (позиции, funding); null — биржа торгует спотом. */
+    default com.hft.perp.PerpAccount perp() { return null; }
 }

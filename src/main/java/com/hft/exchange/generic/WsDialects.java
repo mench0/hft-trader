@@ -33,13 +33,25 @@ public final class WsDialects {
 
     /** WS-диалект биржи с её параметрами (для Uniswap — пулы из uniPools). */
     public static Optional<WsDialect> forExchange(String id, com.hft.config.ExchangeConfig cfg) {
+        if (cfg.params().isPerp()) {
+            switch (id) {
+                case "binance": return Optional.of(binanceFutures());
+                case "okx": return Optional.of(new Okx(true, cfg.restUrl()));
+                default: break;                              // Hyperliquid — те же сообщения; Bybit — свой фид
+            }
+        }
         return id.equals("uniswapv2") ? Optional.of(new Uniswap(cfg.params().uniPools())) : forExchange(id);
+    }
+
+    /** Binance USDⓈ-M: формат Aster/Binance (b/a), адрес fstream. */
+    public static WsDialect binanceFutures() {
+        return new Aster("Binance futures", "wss://fstream.binance.com/stream", "wss://fstream.binancefuture.com/stream");
     }
 
     /** WS-диалект биржи без её параметров (для Uniswap пулы пусты); пусто — у биржи нет WS-стакана. */
     public static Optional<WsDialect> forExchange(String id) {
         return switch (id) {
-            case "okx" -> Optional.of(new Okx());
+            case "okx" -> Optional.of(new Okx(false, ""));
             case "gate" -> Optional.of(new Gate());
             case "hyperliquid" -> Optional.of(new Hyperliquid());
             case "uniswapv2" -> Optional.of(new Uniswap(""));
@@ -76,16 +88,24 @@ public final class WsDialects {
 
     // ───────────────────────── OKX ─────────────────────────
 
-    /** OKX: канал books (снимок + изменения), пинг «ping». */
+    /** OKX: канал books (снимок + изменения), пинг «ping». swap=true — перпы: инструмент -SWAP, объёмы в контрактах. */
     static final class Okx implements WsDialect {
+        /** Перпы (объёмы стакана — в контрактах, пересчитываются в базовую валюту). */
+        private final boolean swap;
+        /** REST для справочника контрактов. */
+        private final String restUrl;
+        Okx(boolean swap, String restUrl) { this.swap = swap; this.restUrl = restUrl.isBlank() ? "https://www.okx.com" : restUrl; }
         /** Адрес по умолчанию (основная или тестовая сеть). */
         public String defaultUrl(boolean testnet) {
             return testnet ? "wss://wspap.okx.com:8443/ws/v5/public" : "wss://ws.okx.com:8443/ws/v5/public";
         }
         /** Имя символа на бирже. */
-        public String venueSymbol(String s) { return base(s) + "-" + quote(s); }
-        /** Сообщения подписки на стаканы символов. */
-        public List<String> subscribe(List<String> v, int d) { return op("subscribe", v); }
+        public String venueSymbol(String s) { return swap ? com.hft.exchange.okx.OkxContracts.instId(s) : base(s) + "-" + quote(s); }
+        /** Сообщения подписки на стаканы символов (для перпов сначала — размеры контрактов). */
+        public List<String> subscribe(List<String> v, int d) {
+            if (swap) for (String inst : v) com.hft.exchange.okx.OkxContracts.ctVal(restUrl, inst);
+            return op("subscribe", v);
+        }
         /** Сообщения подписки на стаканы символов. */
         public List<String> unsubscribe(List<String> v, int d) { return op("unsubscribe", v); }
         /** Сообщения подписки/отписки пачками. */
@@ -153,6 +173,11 @@ public final class WsDialects {
                 return null;
             }
             if (!books || !hasData || out.venue == null) throw new IllegalStateException("OKX: неожиданное сообщение " + abbreviate(c, len));
+            if (swap) {                                              // контракты -> базовая валюта
+                double ct = com.hft.exchange.okx.OkxContracts.ctValOrOne(out.venue);
+                for (int i = 0; i < out.bn; i++) out.bq[i] *= ct;
+                for (int i = 0; i < out.an; i++) out.aq[i] *= ct;
+            }
             out.snapshot = snap;
             if (out.tsMs == 0) out.tsMs = System.currentTimeMillis();
             return null;
@@ -522,11 +547,14 @@ public final class WsDialects {
     static final class Aster implements WsDialect {
         /** Номера сообщений подписки. */
         private final java.util.concurrent.atomic.AtomicLong ids = new java.util.concurrent.atomic.AtomicLong();
+        /** Имя для ошибок и адреса основной и тестовой сети. */
+        private final String name, mainUrl, testUrl;
+
+        Aster() { this("Aster", "wss://sstream.asterdex.com/stream", "wss://sstream.asterdex-testnet.com/stream"); }
+        Aster(String name, String mainUrl, String testUrl) { this.name = name; this.mainUrl = mainUrl; this.testUrl = testUrl; }
 
         /** Адрес по умолчанию (основная или тестовая сеть). */
-        public String defaultUrl(boolean testnet) {
-            return testnet ? "wss://sstream.asterdex-testnet.com/stream" : "wss://sstream.asterdex.com/stream";
-        }
+        public String defaultUrl(boolean testnet) { return testnet ? testUrl : mainUrl; }
         /** Имя символа на бирже. */
         public String venueSymbol(String s) { return s.toLowerCase(java.util.Locale.ROOT); }
         /** Сообщения подписки на стаканы символов. */
@@ -564,7 +592,7 @@ public final class WsDialects {
                             out.venue = out.resolve(t, off, at);
                         }
                         case "data" -> {
-                            if (p.currentToken() != JsonToken.START_OBJECT) throw new IllegalStateException("Aster: data не объект");
+                            if (p.currentToken() != JsonToken.START_OBJECT) throw new IllegalStateException(name + ": data не объект");
                             while (p.nextToken() == JsonToken.FIELD_NAME) {
                                 String g = p.currentName();
                                 p.nextToken();
@@ -580,13 +608,13 @@ public final class WsDialects {
                     }
                 }
             }
-            if (errMsg != null) throw new IllegalStateException("Aster WS error: " + errMsg);
+            if (errMsg != null) throw new IllegalStateException(name + " WS error: " + errMsg);
             if (!book) {
                 out.reset();
                 if (reply) return null;                              // ответ на SUBSCRIBE
-                throw new IllegalStateException("Aster: неожиданное сообщение " + abbreviate(c, len));
+                throw new IllegalStateException(name + ": неожиданное сообщение " + abbreviate(c, len));
             }
-            if (out.venue == null) throw new IllegalStateException("Aster: стакан без stream " + abbreviate(c, len));
+            if (out.venue == null) throw new IllegalStateException(name + ": стакан без stream " + abbreviate(c, len));
             out.snapshot = true;
             if (out.tsMs == 0) out.tsMs = System.currentTimeMillis();
             return null;

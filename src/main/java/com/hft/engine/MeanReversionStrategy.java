@@ -53,8 +53,8 @@ public final class MeanReversionStrategy extends Strategy {
     /** Открытые позиции: символ -> детали входа. */
     private final Map<String, Position> positions = new ConcurrentHashMap<>();
 
-    /** Открытая позиция: цена входа, объём, время открытия. */
-    private record Position(double entryPrice, double quantity, long openedAtMs) {}
+    /** Открытая позиция: цена входа, объём, время открытия, направление (шорт — только на перпах). */
+    private record Position(double entryPrice, double quantity, long openedAtMs, boolean isLong) {}
 
     /** Отправка ордеров вне потока конвейера. */
     private final OrderExecutor executor;
@@ -97,21 +97,25 @@ public final class MeanReversionStrategy extends Strategy {
 
         TradingParams p = settings.get();
         if (pos == null) {
-            checkEntry(symbol, z, book, p);
+            checkEntry(symbol, z, book, window, p);
         } else {
             checkExit(symbol, z, tick.price(), pos, p);
         }
     }
 
-    /** Вход в лонг: перепроданность по z, перевес бидов, узкий спред, свежий стакан и данные в реальном времени. */
-    private void checkEntry(String symbol, double z, OrderBook book, TradingParams p) {
-        // Ищем только перепроданность — лонг от низа
-        if (z > -p.entryZ()) return;
+    /**
+     * Вход: лонг при перепроданности (z ≤ −entryZ, перевес бидов), на перпах ещё и шорт при перекупленности
+     * (z ≥ entryZ, перевес асков). Плюс узкий спред, свежий стакан и данные в реальном времени.
+     */
+    private void checkEntry(String symbol, double z, OrderBook book, PriceWindow window, TradingParams p) {
+        boolean isLong = z <= -p.entryZ();
+        boolean isShort = !isLong && orders.isPerp() && z >= p.entryZ();   // шорт — только на фьючерсах
+        if (!isLong && !isShort) return;
         if (book.ageMs() > p.maxBookAgeMs() || !realtime.getAsBoolean()) return;   // старые данные — не входим
 
-        // Стакан должен подтверждать: покупателей больше
+        // Стакан должен подтверждать направление: для лонга покупателей больше, для шорта — продавцов
         double imbalance = book.imbalance(p.imbalanceLevels());
-        if (imbalance < p.minImbalance()) return;
+        if (isLong ? imbalance < p.minImbalance() : -imbalance < p.minImbalance()) return;
 
         // Спред не должен быть аномально широким — признак низкой ликвидности
         if (!book.readTop(top)) return;                  // bid/ask из одного снимка
@@ -119,28 +123,35 @@ public final class MeanReversionStrategy extends Strategy {
         double spread = (top[2] - top[0]) / mid * 100.0;
         if (spread > p.maxSpreadPercent()) return;
 
-        double price = top[2];
+        double price = isLong ? top[2] : top[0];
         double qty = p.orderQuote() / price;
 
-        log.info("Сигнал входа {}: z={} imbalance={} spread={}%",
+        // Ожидаемый ход до выхода: от |z| до exitZ сигм. Он должен окупать комиссии входа и выхода
+        // (2 × takerFeePercent), спред, который платим при входе по рынку, и фиксированные издержки
+        double expectedPct = (Math.abs(z) - p.exitZ()) * window.stdDev() / price * 100.0;
+        double costPct = orders.roundTripCostPercent(p.orderQuote()) + spread;
+        if (!(expectedPct > costPct)) return;
+
+        log.info("Сигнал входа {} {}: z={} imbalance={} spread={}%", isLong ? "в лонг" : "в шорт",
                 symbol, String.format("%.2f", z),
                 String.format("%.2f", imbalance), String.format("%.3f", spread));
 
         executor.submit(symbol, () -> {
-            OrderResult result = orders.buyMarket(symbol, qty);
+            OrderResult result = isLong ? orders.buyMarket(symbol, qty) : orders.sellMarket(symbol, qty);
             if (result.executedQty() > 0) {
                 positions.put(symbol, new Position(
-                        result.avgPrice(), result.executedQty(), System.currentTimeMillis()));
-                log.info("Позиция открыта: {} {} @ {}", result.executedQty(), symbol, result.avgPrice());
+                        result.avgPrice(), result.executedQty(), System.currentTimeMillis(), isLong));
+                log.info("Позиция {} открыта: {} {} @ {}", isLong ? "лонг" : "шорт", result.executedQty(), symbol, result.avgPrice());
             }
         });
     }
 
     /** Выход: z вернулся, стоп-лосс или таймаут. */
     private void checkExit(String symbol, double z, double currentPrice, Position pos, TradingParams p) {
-        double pnlPercent = (currentPrice - pos.entryPrice()) / pos.entryPrice() * 100.0;
+        double dir = pos.isLong() ? 1 : -1;
+        double pnlPercent = dir * (currentPrice - pos.entryPrice()) / pos.entryPrice() * 100.0;
 
-        boolean takeProfit = z >= -p.exitZ();
+        boolean takeProfit = pos.isLong() ? z >= -p.exitZ() : z <= p.exitZ();
         boolean stopLoss = pnlPercent <= -p.stopLossPercent();
         // Страховка от зависших позиций: закрыть по таймауту в любом случае
         boolean timeout = System.currentTimeMillis() - pos.openedAtMs() > p.positionTimeoutMs();
@@ -154,16 +165,18 @@ public final class MeanReversionStrategy extends Strategy {
         executor.submit(symbol, () -> closePosition(symbol, pos));
     }
 
-    /** Продать позицию; результат после комиссий — в дневной PnL риск-менеджера. */
+    /** Закрыть позицию (лонг — продажей, шорт — покупкой; на перпах — reduceOnly); результат после комиссий — в дневной PnL. */
     private void closePosition(String symbol, Position pos) {
-        OrderResult result = orders.sellMarket(symbol, pos.quantity());
+        OrderResult result = orders.reduceMarket(symbol, pos.isLong() ? com.hft.model.OrderEnums.Side.SELL : com.hft.model.OrderEnums.Side.BUY, pos.quantity());
         if (result.executedQty() <= 0) return;
         double left = pos.quantity() - result.executedQty();
-        if (left > pos.quantity() * 1e-6) positions.put(symbol, new Position(pos.entryPrice(), left, pos.openedAtMs()));
+        if (left > pos.quantity() * 1e-6) positions.put(symbol, new Position(pos.entryPrice(), left, pos.openedAtMs(), pos.isLong()));
         else positions.remove(symbol);
         // комиссия тейкера на обеих ногах — в риск идёт чистый результат, по нему считается дневной лимит убытка
-        double fee = settings.get().takerFeePercent() / 100.0 * (result.avgPrice() + pos.entryPrice()) * result.executedQty();
-        double realized = (result.avgPrice() - pos.entryPrice()) * result.executedQty() - fee;
+        // в бумаге комиссия уже в цене исполнения — не вычитаем второй раз
+        // комиссии входа и выхода (в бумаге — уже в ценах) и фиксированные издержки двух сделок
+        double fee = orders.costOf(pos.entryPrice() * result.executedQty()) + orders.costOf(result.avgPrice() * result.executedQty());
+        double realized = (pos.isLong() ? 1 : -1) * (result.avgPrice() - pos.entryPrice()) * result.executedQty() - fee;
         orders.risk().recordPnl(realized);
         log.info("Позиция закрыта: {} {} @ {}, результат {} USDT",
                 result.executedQty(), symbol, result.avgPrice(), String.format("%.4f", realized));

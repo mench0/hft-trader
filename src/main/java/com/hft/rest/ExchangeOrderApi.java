@@ -1,7 +1,9 @@
 package com.hft.rest;
 
 import com.hft.model.OrderEnums.TimeInForce;
+import com.hft.model.OrderEnums.Side;
 import com.hft.model.OrderResult;
+import com.hft.store.PositionStore;
 
 /**
  * Минимальный набор методов, которым пользуется {@link com.hft.engine.OrderService}.
@@ -40,4 +42,23 @@ public interface ExchangeOrderApi {
 
     /** Отменить все открытые ордера по символу; возвращает число отменённых. */
     int cancelAll(String symbol) throws Exception;
+
+    // ---------------- бессрочные контракты (перпы); у спотовых клиентов — значения по умолчанию
+
+    /** Клиент торгует перпами (позиции, плечо, funding), а не спотом. */
+    default boolean isPerp() { return false; }
+
+    /**
+     * Рыночный ордер, который может только уменьшить позицию (reduceOnly) — закрытие лонга (SELL)
+     * или шорта (BUY). На споте — обычный рыночный ордер.
+     */
+    default OrderResult reduceMarket(String symbol, Side side, double qty) throws Exception {
+        return side == Side.BUY ? buyMarket(symbol, qty) : sellMarket(symbol, qty);
+    }
+
+    /** Установить плечо символа (перпы). */
+    default void setLeverage(String symbol, int leverage) throws Exception {}
+
+    /** Загрузить открытые позиции с биржи (перпы). */
+    default void loadPositions(PositionStore store) throws Exception {}
 }

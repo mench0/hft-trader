@@ -70,6 +70,44 @@ public final class ExchangeCatalog {
                 "", 0, 0.30, 0.30, "USDC", "-", "Концентрированная ликвидность, не реализовано."));
     }
 
+    /**
+     * Фьючерсный рынок биржи (бессрочные USDT-контракты): свои адреса и комиссии.
+     *
+     * @param restUrl REST основной сети
+     * @param wsUrl WebSocket стакана основной сети
+     * @param testnetRestUrl REST тестовой сети (null — нет)
+     * @param testnetWsUrl WebSocket тестовой сети
+     * @param makerFeePct комиссия мейкера, %
+     * @param takerFeePct комиссия тейкера, %
+     */
+    public record PerpVenue(String restUrl, String wsUrl, String testnetRestUrl, String testnetWsUrl,
+                            double makerFeePct, double takerFeePct) {
+        /** REST с учётом testnet. */
+        public String restUrl(boolean testnet) { return testnet && testnetRestUrl != null ? testnetRestUrl : restUrl; }
+        /** WebSocket с учётом testnet. */
+        public String wsUrl(boolean testnet) { return testnet && testnetRestUrl != null ? testnetWsUrl : wsUrl; }
+    }
+
+    /** Биржи с фьючерсами. */
+    private static final Map<String, PerpVenue> PERP = Map.of(
+            "binance", new PerpVenue("https://fapi.binance.com", "wss://fstream.binance.com/stream",
+                    "https://testnet.binancefuture.com", "wss://fstream.binancefuture.com/stream", 0.02, 0.05),
+            "bybit", new PerpVenue("https://api.bybit.com", "wss://stream.bybit.com/v5/public/linear",
+                    "https://api-testnet.bybit.com", "wss://stream-testnet.bybit.com/v5/public/linear", 0.02, 0.055),
+            "okx", new PerpVenue("https://www.okx.com", "wss://ws.okx.com:8443/ws/v5/public",
+                    "https://www.okx.com", "wss://wspap.okx.com:8443/ws/v5/public", 0.02, 0.05),
+            "hyperliquid", new PerpVenue("https://api.hyperliquid.xyz", "wss://api.hyperliquid.xyz/ws",
+                    "https://api.hyperliquid-testnet.xyz", "wss://api.hyperliquid-testnet.xyz/ws", 0.015, 0.045));
+
+    /** Фьючерсный рынок биржи, если он есть. */
+    public static Optional<PerpVenue> perp(String id) { return Optional.ofNullable(PERP.get(id)); }
+
+    /** У биржи есть фьючерсы (market=perp). */
+    public static boolean supportsPerp(String id) { return PERP.containsKey(id); }
+
+    /** У биржи есть спот (market=spot); Hyperliquid в боте — только перпы. */
+    public static boolean supportsSpot(String id) { return !"hyperliquid".equals(id); }
+
     /** Все биржи каталога. */
     public static List<ExchangeInfo> all() { return List.copyOf(ALL.values()); }
 
