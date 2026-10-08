@@ -131,38 +131,20 @@ public class WsFeedCheck {
       r.feed().stop();
     }
 
-    // ───── dYdX: subscribed + batch + удаление уровня
-    try (var srv = new MiniWsServer()) {
-      var r = rig("dydx", srv.url(), List.of("BTCUSD"), 30000, 50);
-      srv.onText = (c, t) -> { if (t.contains("v4_orderbook")) {
-        c.text("{\"type\":\"subscribed\",\"connection_id\":\"x\",\"message_id\":1,\"channel\":\"v4_orderbook\",\"id\":\"BTC-USD\",\"contents\":{\"bids\":[{\"price\":\"99\",\"size\":\"1\"},{\"price\":\"98\",\"size\":\"2\"}],\"asks\":[{\"price\":\"101\",\"size\":\"1\"},{\"price\":\"102\",\"size\":\"2\"}]}}");
-      }};
-      srv.onOpen = c -> c.text("{\"type\":\"connected\",\"connection_id\":\"x\",\"message_id\":0}");
-      r.feed().start();
-      var b = r.market().book("BTCUSD");
-      ck("dydx snapshot", await(() -> near(b.bestBid(), 99) && near(b.bestAsk(), 101), 5000));
-      srv.conns.get(0).text("{\"type\":\"channel_batch_data\",\"connection_id\":\"x\",\"message_id\":2,\"id\":\"BTC-USD\",\"channel\":\"v4_orderbook\",\"version\":\"1.0.0\",\"contents\":[{\"bids\":[[\"99\",\"0\"]]},{\"asks\":[[\"100.5\",\"3\"]]},{\"bids\":[[\"99.2\",\"1\"]]}]}");
-      ck("dydx batch applied", await(() -> near(b.bestBid(), 99.2) && near(b.bestAsk(), 100.5) && near(b.bestAskQty(), 3), 5000));
-      srv.conns.get(0).text("{\"type\":\"channel_data\",\"id\":\"BTC-USD\",\"contents\":{\"bids\":[[\"99.2\",\"0\"]]}}");
-      ck("dydx level removed", await(() -> near(b.bestBid(), 98), 5000));
-      ck("dydx subscribe batched", srv.received.stream().anyMatch(t -> t.contains("\"batched\":true") && t.contains("BTC-USD")));
-      r.feed().stop();
-    }
-
     // ───── перекрещённый стакан не публикуется
     try (var srv = new MiniWsServer()) {
-      var r = rig("dydx", srv.url(), List.of("BTCUSD"), 30000, 50);
-      srv.onText = (c, t) -> { if (t.contains("v4_orderbook")) {
-        c.text("{\"type\":\"subscribed\",\"id\":\"BTC-USD\",\"contents\":{\"bids\":[{\"price\":\"99\",\"size\":\"1\"}],\"asks\":[{\"price\":\"101\",\"size\":\"1\"}]}}");
+      var r = rig("okx", srv.url(), List.of("BTCUSDT"), 30000, 50);
+      srv.onText = (c, t) -> { if (t.contains("\"subscribe\"")) {
+        c.text("{\"arg\":{\"channel\":\"books\",\"instId\":\"BTC-USDT\"},\"action\":\"snapshot\",\"data\":[{\"asks\":[[\"101\",\"1\",\"0\",\"1\"]],\"bids\":[[\"99\",\"1\",\"0\",\"1\"]],\"ts\":\"1700000000000\"}]}");
       }};
       r.feed().start();
-      var b = r.market().book("BTCUSD");
+      var b = r.market().book("BTCUSDT");
       await(() -> near(b.bestBid(), 99), 5000);
       int before = r.books().get();
-      srv.conns.get(0).text("{\"type\":\"channel_data\",\"id\":\"BTC-USD\",\"contents\":{\"bids\":[[\"102\",\"1\"]]}}");
+      srv.conns.get(0).text("{\"arg\":{\"channel\":\"books\",\"instId\":\"BTC-USDT\"},\"action\":\"update\",\"data\":[{\"asks\":[],\"bids\":[[\"102\",\"1\",\"0\",\"1\"]],\"ts\":\"1700000000100\"}]}");
       Thread.sleep(400);
       ck("crossed not published", r.books().get() == before && near(b.bestBid(), 99));
-      srv.conns.get(0).text("{\"type\":\"channel_data\",\"id\":\"BTC-USD\",\"contents\":{\"bids\":[[\"102\",\"0\"]]}}");
+      srv.conns.get(0).text("{\"arg\":{\"channel\":\"books\",\"instId\":\"BTC-USDT\"},\"action\":\"update\",\"data\":[{\"asks\":[],\"bids\":[[\"102\",\"0\",\"0\",\"0\"]],\"ts\":\"1700000000200\"}]}");
       ck("recovers after uncross", await(() -> r.books().get() > before && near(b.bestBid(), 99), 5000));
       r.feed().stop();
     }
@@ -216,10 +198,9 @@ public class WsFeedCheck {
     // ───── каталог/диалекты
     ck("mexc has ws dialect (protobuf)", WsDialects.forExchange("mexc").isPresent() && WsDialects.forExchange("mexc").get().parsesBinary());
     ck("binance no generic ws dialect", WsDialects.forExchange("binance").isEmpty());
-    for (String id : List.of("okx","gate","hyperliquid","dydx")) ck("dialect "+id, WsDialects.forExchange(id).isPresent());
+    for (String id : List.of("okx","gate","hyperliquid")) ck("dialect "+id, WsDialects.forExchange(id).isPresent());
     ck("okx venue", WsDialects.forExchange("okx").get().venueSymbol("BTCUSDT").equals("BTC-USDT"));
     ck("hl venue", WsDialects.forExchange("hyperliquid").get().venueSymbol("BTCUSDC").equals("BTC"));
-    ck("dydx venue", WsDialects.forExchange("dydx").get().venueSymbol("BTCUSD").equals("BTC-USD"));
     var okxSub = WsDialects.forExchange("okx").get().subscribe(java.util.stream.IntStream.range(0, 45).mapToObj(i -> "A" + i + "-USDT").toList(), 20);
     ck("okx chunks of 20", okxSub.size() == 3);
 

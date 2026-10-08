@@ -50,8 +50,6 @@ public class DiscoveryCheck {
         case "/hl/info" -> r = body.contains("metaAndAssetCtxs")
             ? "[{\"universe\":[{\"name\":\"BTC\",\"szDecimals\":5},{\"name\":\"SOL\",\"szDecimals\":2}]},[{\"dayNtlVlm\":\"900000000\",\"prevDayPx\":\"60000\",\"markPx\":\"60500\",\"midPx\":\"60499.5\",\"impactPxs\":[\"60499\",\"60500\"]},{\"dayNtlVlm\":\"50000000\",\"prevDayPx\":\"150\",\"markPx\":\"151\",\"midPx\":\"151\",\"impactPxs\":[\"150.99\",\"151.01\"]}]]"
             : "[{\"t\":1700000060000,\"c\":\"60010\"},{\"t\":1700000000000,\"c\":\"60000\"}]";
-        case "/dydx/v4/perpetualMarkets" -> r = "{\"markets\":{\"BTC-USD\":{\"ticker\":\"BTC-USD\",\"status\":\"ACTIVE\",\"oraclePrice\":\"60450\",\"priceChange24H\":\"450\",\"volume24H\":\"300000000\",\"trades24H\":12000},\"OLD-USD\":{\"status\":\"FINAL_SETTLEMENT\",\"oraclePrice\":\"1\",\"volume24H\":\"1\"}}}";
-        case "/dydx/v4/candles/perpetualMarkets/BTC-USD" -> r = "{\"candles\":[{\"startedAt\":\"2024-01-01T00:01:00.000Z\",\"close\":\"60010\"},{\"startedAt\":\"2024-01-01T00:00:00.000Z\",\"close\":\"60000\"}]}";
         default -> { ex.sendResponseHeaders(404, -1); ex.close(); return; }
       }
       byte[] b = r.getBytes(); ex.sendResponseHeaders(200, b.length); ex.getResponseBody().write(b); ex.close();
@@ -80,13 +78,9 @@ public class DiscoveryCheck {
     var ht = hl.tickers();
     ck("hyperliquid perps", ht.size() == 2 && ht.get(0).symbol().equals("BTCUSDC") && ht.get(0).perp() && ht.get(0).bid() == 60499 && ht.get(0).quoteVolume24h() == 9e8);
     ck("hyperliquid candles", Arrays.equals(hl.closes1m(ht.get(0), 100), new double[]{60000, 60010}));
-    var dy = MarketSources.create("dydx", u + "/dydx").get();
-    var dt = dy.tickers();
-    ck("dydx active markets only", dt.size() == 1 && dt.get(0).symbol().equals("BTCUSD") && dt.get(0).open24h() == 60000 && Double.isNaN(dt.get(0).bid()));
-    ck("dydx candles", Arrays.equals(dy.closes1m(dt.get(0), 100), new double[]{60000, 60010}));
 
     // ---- полный прогон: профили стратегий
-    var svc = new DiscoveryService(List.of(bin, okx, gate, hl, dy, MarketSources.create("bybit", u + "/nope").get()),
+    var svc = new DiscoveryService(List.of(bin, okx, gate, hl, MarketSources.create("bybit", u + "/nope").get()),
         List.of(new Profiles.MeanReversion(null, com.hft.config.GlobalParams.DEFAULTS), new Profiles.CrossExchange(com.hft.config.GlobalParams.DEFAULTS), new Profiles.SpreadCapture(com.hft.config.GlobalParams.DEFAULTS)), 15);
     Map<String, Object> res = svc.runOnce();
     JsonNode j = M.valueToTree(res);

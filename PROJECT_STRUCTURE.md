@@ -21,7 +21,7 @@ hft-trader/
 │   │   ├── binance/, bybit/          # нативные адаптеры (свой WS-фид на Netty + REST)
 │   │   ├── okx/, gate/, mexc/, kucoin/, aster/, hyperliquid/, uniswap/
 │   │   │                             # REST-клиенты на общем скелете SignedCexClient
-│   │   └── generic/                  # SignedCexExchange, PaperExchange (dYdX), фиды стакана:
+│   │   └── generic/                  # SignedCexExchange, фиды стакана:
 │   │                                 # WsBookFeed, PollingBookFeed, HybridBookFeed; диалекты
 │   │                                 # Dialects (REST) и WsDialects (WS), LocalBook, FastJson
 │   ├── rest/                         # SignedCexClient, BinanceRestClient, RateBudget/RateLimits/PacedLimiter,
@@ -56,7 +56,6 @@ hft-trader/
 | Binance, Bybit | BinanceExchange, BybitExchange | LIVE при ключах и `live=true` |
 | OKX, Gate, MEXC, KuCoin, Aster | SignedCexExchange + свой RestClient | PAPER, LIVE не проверен |
 | Hyperliquid, Uniswap V2 | SignedCexExchange + HyperliquidRestClient / UniswapV2Client | PAPER, LIVE не проверен |
-| dYdX v4 | PaperExchange | только PAPER |
 
 Полный список с комиссиями и заметками — `GET /exchanges/catalog` или вкладка «Биржи» в админке.
 

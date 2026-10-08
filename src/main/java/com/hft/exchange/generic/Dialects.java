@@ -44,7 +44,6 @@ public final class Dialects {
             case "mexc" -> new Mexc();
             case "gate" -> new Gate();
             case "hyperliquid" -> new Hyperliquid();
-            case "dydx" -> new Dydx();
             case "uniswapv2" -> new UniswapV2("");
             case "kucoin" -> new Kucoin();
             case "aster" -> new Aster();
@@ -191,20 +190,6 @@ public final class Dialects {
             if (lv == null || lv.size() != 2) throw new IllegalStateException("Hyperliquid: " + body);
             return book(levels(lv.get(0), "px", "sz", true, MAX),
                     levels(lv.get(1), "px", "sz", false, MAX), r.path("time").asLong(System.currentTimeMillis()));
-        }
-    }
-
-    /** GET /v4/orderbooks/perpetualMarket/BTC-USD -> {bids:[{price,size}], asks:[...]} */
-    static final class Dydx implements BookDialect {
-        /** Запрос стакана символа. */
-        public HttpRequest request(String b, String s, int d) {
-            return get(b + "/v4/orderbooks/perpetualMarket/" + base(s) + "-" + quote(s));
-        }
-        /** Разобрать ответ в стакан; ошибка биржи — исключение. */
-        public ParsedBook parse(String body, String s) throws Exception {
-            JsonNode r = JSON.readTree(body);
-            return book(levels(r.get("bids"), "price", "size", true, MAX),
-                    levels(r.get("asks"), "price", "size", false, MAX), System.currentTimeMillis());
         }
     }
 

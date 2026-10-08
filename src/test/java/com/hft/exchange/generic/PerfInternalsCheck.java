@@ -63,9 +63,6 @@ public class PerfInternalsCheck {
     String hl = "{\"channel\":\"l2Book\",\"data\":{\"coin\":\"BTC\",\"time\":5,\"levels\":[[{\"px\":\"99\",\"sz\":\"1.5\",\"n\":2}],[{\"px\":\"100\",\"sz\":\"2\",\"n\":1}]]}}";
     WsDialects.forExchange("hyperliquid").get().parse(hl.toCharArray(), hl.length(), b);
     ck("hyperliquid objects px/sz", b.venue == "BTC" && b.bq[0] == 1.5 && b.aq[0] == 2 && b.tsMs == 5);
-    String dy = "{\"type\":\"channel_batch_data\",\"id\":\"BTC-USD\",\"contents\":[{\"bids\":[[\"99\",\"0\"]]},{\"asks\":[[\"100.5\",\"3\"]]}]}";
-    WsDialects.forExchange("dydx").get().parse(dy.toCharArray(), dy.length(), b);
-    ck("dydx batch", !b.snapshot && b.bn == 1 && b.an == 1 && b.ap[0] == 100.5);
     boolean threw = false;
     String err = "{\"event\":\"error\",\"code\":\"60012\",\"msg\":\"Invalid request\"}";
     try { WsDialects.forExchange("okx").get().parse(err.toCharArray(), err.length(), b); } catch (IllegalStateException e) { threw = e.getMessage().contains("60012"); }

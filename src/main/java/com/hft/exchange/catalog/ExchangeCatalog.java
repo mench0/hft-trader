@@ -59,10 +59,6 @@ public final class ExchangeCatalog {
                 "https://sapi.asterdex.com", 5, 0.10, 0.10, "USDT", "BTCUSDT",
                 "Спот, API v3 в формате Binance: стакан (depth20@100ms), исполнения и баланс (listenKey) по WebSocket + REST-запас; ордера через REST (WS-ордеров нет) с подписью EIP-712 кошельком-агентом. ASTER_API_KEY = адрес основного кошелька, ASTER_API_SECRET = ключ API-кошелька (signer) без права вывода. Комиссии указаны по умолчанию, проверьте тариф.",
                 "wss://sstream.asterdex.com/stream", "https://sapi.asterdex-testnet.com", "wss://sstream.asterdex-testnet.com/stream"));
-        add(new ExchangeInfo("dydx", "dYdX v4", Kind.PERP_DEX, Adapter.PAPER_BLIND,
-                "https://indexer.dydx.trade", 5, 0.01, 0.05, "USD", "BTCUSD (рынок BTC-USD, перп)",
-                "Перпы, только paper, стакан по WebSocket (v4_orderbook) + REST-запас: ордера требуют Cosmos-транзакций (protobuf, gRPC) — не реализовано.",
-                "wss://indexer.dydx.trade/v4/ws", "https://indexer.v4testnet.dydx.exchange", "wss://indexer.v4testnet.dydx.exchange/v4/ws"));
         add(new ExchangeInfo("uniswapv2", "Uniswap V2-совместимые пулы", Kind.AMM_DEX, Adapter.LIVE_UNVERIFIED,
                 "https://ethereum-rpc.publicnode.com", 4, 0.30, 0.30, "USDC", "WETHUSDC",
                 "Стакан из событий Sync через eth_subscribe и все JSON-RPC вызовы по WebSocket ноды (HTTP — запасной). Свопы через Router02 (web3j). Нужны UNISWAPV2_ROUTER, UNISWAPV2_TOKENS, пулы UNISWAPV2_POOLS; GTC-лимиток и отмены нет. Горячий кошелёк с малой суммой, приватный RPC против сэндвичей."));

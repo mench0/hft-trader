@@ -31,7 +31,7 @@ public final class MarketSources {
 
     /** Биржи, для которых есть источник сводок. */
     public static List<String> supported() {
-        return List.of("binance", "bybit", "okx", "gate", "mexc", "kucoin", "aster", "hyperliquid", "dydx");
+        return List.of("binance", "bybit", "okx", "gate", "mexc", "kucoin", "aster", "hyperliquid");
     }
 
     /** Источник сводок биржи по адресу из каталога; пусто — источника нет. */
@@ -57,7 +57,6 @@ public final class MarketSources {
             case "okx" -> new Okx(b, http);
             case "gate" -> new Gate(b, http);
             case "hyperliquid" -> new Hyperliquid(b, http);
-            case "dydx" -> new Dydx(b, http);
             default -> null;
         });
     }
@@ -294,39 +293,4 @@ public final class MarketSources {
         }
     }
 
-    // ───────────────────────── dYdX v4 (перпы) ─────────────────────────
-
-    /** dYdX v4 indexer: /perpetualMarkets и /candles (перпы). */
-    static final class Dydx implements MarketSource {
-        /** REST-адрес биржи и HTTP-клиент с лимитами. */
-        final String base; final Http http;
-        Dydx(String base, Http http) { this.base = base; this.http = http; }
-        /** Идентификатор биржи. */
-        public String exchange() { return "dydx"; }
-        /** Суточная сводка по всем тикерам биржи. */
-        public List<TickerSnapshot> tickers() throws Exception {
-            List<TickerSnapshot> out = new ArrayList<>();
-            var it = http.get(base + "/v4/perpetualMarkets").path("markets").fields();
-            while (it.hasNext()) {
-                var e = it.next();
-                JsonNode m = e.getValue();
-                if (!"ACTIVE".equals(m.path("status").asText("ACTIVE"))) continue;
-                String[] bq = split(e.getKey());
-                if (bq == null) continue;
-                double last = d(m, "oraclePrice"), ch = d(m, "priceChange24H");      // изменение в деньгах, не в %
-                out.add(new TickerSnapshot("dydx", bq[0] + bq[1], e.getKey(), bq[0], bq[1], true, last, Double.NaN, Double.NaN,
-                        Double.NaN, Double.NaN, Double.isNaN(ch) ? Double.NaN : last - ch, d(m, "volume24H"), m.path("trades24H").asLong(-1)));
-            }
-            return out;
-        }
-        /** Минутные цены закрытия тикера (не больше limit). */
-        public double[] closes1m(TickerSnapshot t, int limit) throws Exception {
-            List<double[]> rows = new ArrayList<>();
-            for (JsonNode k : http.get(base + "/v4/candles/perpetualMarkets/" + t.venueSymbol() + "?resolution=1MIN&limit=" + Math.min(limit, 100)).path("candles")) {
-                double ts = java.time.Instant.parse(k.path("startedAt").asText()).toEpochMilli();
-                rows.add(new double[]{ts, d(k, "close")});
-            }
-            return closes(rows);
-        }
-    }
 }

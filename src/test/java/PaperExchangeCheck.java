@@ -26,8 +26,6 @@ public class PaperExchangeCheck {
     ck("gate", gate.tsMs()==123 && gate.ap()[0]==5);
     var hl = Dialects.forExchange("hyperliquid").parse("{\"coin\":\"BTC\",\"time\":5,\"levels\":[[{\"px\":\"99\",\"sz\":\"1\",\"n\":1}],[{\"px\":\"100\",\"sz\":\"2\",\"n\":1}]]}","BTCUSDC");
     ck("hl", hl.bp()[0]==99 && hl.aq()[0]==2);
-    var dy = Dialects.forExchange("dydx").parse("{\"bids\":[{\"price\":\"99\",\"size\":\"1\"}],\"asks\":[{\"price\":\"100\",\"size\":\"1\"}]}","BTCUSD");
-    ck("dydx", dy.ap()[0]==100);
     boolean threw=false; try{ Dialects.forExchange("okx").parse("{\"code\":\"51001\"}","BTCUSDT"); }catch(Exception e){threw=true;}
     ck("okx error throws", threw);
     ck("USD split", BalanceStore.baseAsset("BTCUSD").equals("BTC") && BalanceStore.quoteAsset("BTCUSDT").equals("USDT"));
