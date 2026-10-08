@@ -18,10 +18,7 @@ public enum Exchange {
     HYPERLIQUID("hyperliquid", false, true),
     KUCOIN     ("kucoin",      true,  true),
     ASTER      ("aster",       true,  true),
-    UNISWAPV2  ("uniswapv2",   true,  false),   // AMM-пулы обмена: фьючерсов не бывает
-    PANCAKESWAP("pancakeswap", true,  false),
-    RAYDIUM    ("raydium",     true,  false),
-    ORCA       ("orca",        true,  false);
+    UNISWAPV2  ("uniswapv2",   true,  false);   // AMM-пулы обмена: фьючерсов не бывает
 
     /** Строковый id: "binance", "bybit"… */
     private final String id;

@@ -221,7 +221,7 @@ public final class AdminServer {
             n.put("defaultQuote", i.defaultQuote());
             n.put("symbolHint", i.symbolHint());
             n.put("notes", i.notes());
-            n.put("selectable", i.adapter() != com.hft.exchange.catalog.ExchangeInfo.Adapter.NOT_IMPLEMENTED);
+            n.put("selectable", true);                               // в каталоге только реализованные биржи
             ArrayNode markets = n.putArray("markets");             // какие значения параметра market допустимы
             if (com.hft.exchange.catalog.ExchangeCatalog.supportsPerp(i.id())) markets.add("perp");
             if (com.hft.exchange.catalog.ExchangeCatalog.supportsSpot(i.id())) markets.add("spot");

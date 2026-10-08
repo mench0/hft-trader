@@ -84,7 +84,7 @@ public class PaperExchangeCheck {
     });
     srv.start();
     String base = "http://127.0.0.1:" + srv.getAddress().getPort();
-    var info = new ExchangeInfo("okx","OKX",ExchangeInfo.Kind.CEX_TIER1,ExchangeInfo.Adapter.PAPER_BLIND,base,10,0.08,0.1,"USDT","BTCUSDT","");
+    var info = new ExchangeInfo("okx","OKX",ExchangeInfo.Kind.CEX_TIER1,ExchangeInfo.Adapter.LIVE_UNVERIFIED,base,10,0.08,0.1,"USDT","BTCUSDT","");
     var cfg = new com.hft.config.ExchangeConfig("okx", false, base, "", 5000, List.of("BTCUSDT","ETHUSDT"), 20, 100);
     var mk = new MarketDataStore(20,100); mk.register("BTCUSDT"); mk.register("ETHUSDT");
     int[] ticks={0}, books={0};

@@ -5,8 +5,7 @@ package com.hft.exchange.catalog;
  * можно доверять нашему адаптеру.
  *
  * @param adapter  NATIVE_LIVE — полноценный адаптер (REST+WS+ордера), написан раньше;
- *                 LIVE_UNVERIFIED — REST-клиент с реальными ордерами по документации, не проверен;
- *                 PAPER_BLIND — только рыночные данные (REST-опрос) и бумажная торговля.
+ *                 LIVE_UNVERIFIED — клиент с реальными ордерами по документации, не проверен на живой бирже.
  *                 Формат ответов API взят из документации по памяти и НЕ проверен
  *                 против живой биржи: сеть песочницы закрывала хосты бирж.
  */
@@ -48,5 +47,5 @@ public record ExchangeInfo(
     public enum Kind { CEX_TIER1, CEX_TIER3, PERP_DEX, ORDERBOOK_DEX, AMM_DEX }
 
     /** Степень готовности адаптера (см. описание record'а). */
-    public enum Adapter { NATIVE_LIVE, LIVE_UNVERIFIED, PAPER_BLIND, NOT_IMPLEMENTED }
+    public enum Adapter { NATIVE_LIVE, LIVE_UNVERIFIED }
 }

@@ -18,7 +18,12 @@ import com.hft.util.Hmac;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.hft.rest.WsRpcChannel;
+import com.hft.rest.WsRpcChannel.Msg;
+
 import java.net.http.HttpRequest;
+import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -34,6 +39,9 @@ import java.util.Set;
  *   <li>Сторона ордера у MEXC задаёт и направление позиции: 1 — открыть лонг, 2 — закрыть шорт, 3 — открыть шорт,
  *       4 — закрыть лонг. Закрытие (reduceOnly) идёт сторонами 2/4, всё остальное открывает позицию.</li>
  *   <li>Маржа — кросс (openType=2), плечо уходит в каждом ордере.</li>
+ *   <li>Ордера — REST: WebSocket-ордеров у MEXC Contract нет. Результаты — по WebSocket: после входа
+ *       ({@code login}) сокет {@code wss://contract.mexc.com/edge} присылает {@code push.personal.order},
+ *       {@code push.personal.position}, {@code push.personal.asset}.</li>
  * </ul>
  *
  * ВНИМАНИЕ: MEXC ограничивает размещение фьючерсных ордеров через API (доступ выдаётся отдельно). Без него ордера
@@ -141,6 +149,7 @@ public final class MexcFuturesClient extends SignedCexClient {
     /** Открытые позиции: holdVol — контракты, positionType 1 — лонг, 2 — шорт (сумма со знаком). */
     @Override
     public void loadPositions(PositionStore store) throws Exception {
+        positionStore = store;
         Map<String, double[]> agg = new HashMap<>();                     // символ -> [объём со знаком, сумма для средней]
         for (JsonNode p : signed("GET", "/api/v1/private/position/open_positions", "", "", false)) {
             String inst = p.path("symbol").asText(), sym = symbolOf.get(inst);
@@ -198,8 +207,11 @@ public final class MexcFuturesClient extends SignedCexClient {
                 side == 1 || side == 2 ? Side.BUY : Side.SELL, status, vol, deal, d(o, "dealAvgPrice"), 0);
     }
 
+    /** Статус: итог из потока push.personal.order, иначе REST. */
     @Override
     public OrderResult orderStatus(String symbol, long orderId) throws Exception {
+        OrderResult st = streamed.get(orderId);
+        if (st != null && wsReady() && terminal(st.status())) return st;
         return parse(signed("GET", "/api/v1/private/order/get/" + venueId(orderId), "", "", false), orderId, symbol);
     }
 
@@ -213,5 +225,95 @@ public final class MexcFuturesClient extends SignedCexClient {
         signed("POST", "/api/v1/private/order/cancel_all", "", mapper.createObjectNode().put("symbol", instrument(symbol)).toString(), true);
         log.info("[mexc] фьючерсы: отменены ордера по {}", symbol);
         return 0;                                                      // число отменённых MEXC не возвращает
+    }
+
+    // ------------------------------------------------------------ WebSocket: результаты ордеров, позиции, баланс
+
+    /** Свой адрес сокета (тесты, прокси). */
+    private volatile String privateWsUrl;
+    /** Куда пишутся баланс и позиции из потока. */
+    private volatile BalanceStore balanceStore;
+    private volatile PositionStore positionStore;
+    /** Баланс хотя бы раз пришёл по WS. */
+    private volatile boolean accountSeen;
+    /** Позиции по сторонам (у MEXC лонг и шорт раздельные): символ -> [лонг, цена лонга, шорт, цена шорта]. */
+    private final Map<String, double[]> legs = new ConcurrentHashMap<>();
+
+    /** Свой адрес сокета (тесты, прокси). */
+    public void setPrivateWsUrl(String url) { this.privateWsUrl = url; }
+
+    /** Поднять приватный сокет. Без ключей или при wsTrade=false — всё по REST. */
+    @Override
+    public void startStreams(BalanceStore store) {
+        if (!credentials.isPresent() || !wsTradeAllowed() || wsChannel != null) return;
+        balanceStore = store;
+        WsRpcChannel ch = new WsRpcChannel(Exchange.MEXC.id(), new Private()).onEvent(this::onEvent);
+        wsChannel = ch;
+        ch.start();
+    }
+
+    @Override public boolean balancesStreamed() { return wsReady() && accountSeen; }
+
+    /** Событие: ордер, позиция или баланс. */
+    void onEvent(String text) throws Exception {
+        JsonNode n = mapper.readTree(text);
+        JsonNode d = n.path("data");
+        switch (n.path("channel").asText()) {
+            case "push.personal.order" -> {
+                String inst = d.path("symbol").asText(), sym = symbolOf.get(inst);
+                if (sym == null) return;
+                long id = registerId(d.path("orderId").asText());
+                streamed.put(id, parse(d, id, sym));
+            }
+            case "push.personal.position" -> {
+                PositionStore ps = positionStore;
+                String inst = d.path("symbol").asText(), sym = symbolOf.get(inst);
+                if (ps == null || sym == null) return;
+                double m = ContractSizes.get(Exchange.MEXC, baseUrl, inst);
+                double vol = d.path("state").asInt(1) == 3 ? 0 : d(d, "holdVol") * m;   // state 3 — позиция закрыта
+                double[] l = legs.computeIfAbsent(sym, k -> new double[4]);
+                synchronized (l) {
+                    if (d.path("positionType").asInt(1) == 2) { l[2] = vol; l[3] = d(d, "holdAvgPrice"); }
+                    else { l[0] = vol; l[1] = d(d, "holdAvgPrice"); }
+                    double net = l[0] - l[2];
+                    double avg = l[0] + l[2] > 0 ? (l[0] * l[1] + l[2] * l[3]) / (l[0] + l[2]) : 0;
+                    ps.set(sym, net, avg);
+                }
+            }
+            case "push.personal.asset" -> {
+                BalanceStore store = balanceStore;
+                if (store == null) return;
+                store.set(d.path("currency").asText("USDT"), d(d, "availableBalance"), d(d, "frozenBalance") + d(d, "positionMargin"));
+                store.markSynced();
+                accountSeen = true;
+            }
+            default -> { }
+        }
+    }
+
+    /** Протокол сокета: login с подписью HMAC-SHA256(apiKey + время), личные потоки приходят без подписки. */
+    private final class Private implements WsRpcChannel.Protocol {
+        @Override public String url() { return privateWsUrl != null ? privateWsUrl : "wss://contract.mexc.com/edge"; }
+        @Override public List<String> login() {
+            String ts = String.valueOf(System.currentTimeMillis());
+            ObjectNode m = mapper.createObjectNode().put("method", "login");
+            m.putObject("param").put("apiKey", credentials.apiKey()).put("reqTime", ts)
+                    .put("signature", Hmac.sha256Hex(credentials.apiSecret(), credentials.apiKey() + ts));
+            return List.of(m.toString());
+        }
+        @Override public List<String> subscriptions() { return List.of(); }
+        @Override public String ping() { return "{\"method\":\"ping\"}"; }
+        @Override public long pingIntervalMs() { return 15_000; }
+        @Override public Msg parse(String text) throws Exception {
+            JsonNode n = mapper.readTree(text);
+            String ch = n.path("channel").asText("");
+            if (ch.equals("rs.login")) {
+                if ("success".equals(n.path("data").asText())) return Msg.loginOk();
+                throw new IllegalStateException("MEXC futures login: " + n.path("data").asText());
+            }
+            if (ch.equals("rs.error")) throw new IllegalStateException("MEXC futures WS: " + n.path("data").asText());
+            if (ch.startsWith("push.personal.")) return Msg.event(text);
+            return Msg.ignore();                                          // pong и прочие служебные
+        }
     }
 }
