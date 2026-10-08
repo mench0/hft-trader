@@ -2,11 +2,11 @@ package com.hft.discovery;
 
 /**
  * Сводка по одному тикеру биржи за 24 часа. NaN — биржа это поле не отдаёт
- * (например, у dYdX в общей сводке нет bid/ask).
+ * (не у всех бирж в общей сводке есть bid/ask).
  *
- * @param symbol      наш формат: BTCUSDT, BTCUSDC (перп Hyperliquid), BTCUSD (перп dYdX)
+ * @param symbol      наш формат: BTCUSDT, BTCUSDC (перп Hyperliquid)
  * @param venueSymbol как символ называется на бирже (BTC-USDT, btc_usdt, BTC…)
- * @param perp        бессрочный фьючерс (Hyperliquid, dYdX), иначе спот
+ * @param perp        бессрочный фьючерс (Hyperliquid), иначе спот
  */
 public record TickerSnapshot(
         String exchange,

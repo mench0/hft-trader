@@ -42,7 +42,6 @@ public final class WsDialects {
             case "okx" -> Optional.of(new Okx());
             case "gate" -> Optional.of(new Gate());
             case "hyperliquid" -> Optional.of(new Hyperliquid());
-            case "dydx" -> Optional.of(new Dydx());
             case "uniswapv2" -> Optional.of(new Uniswap(""));
             case "kucoin" -> Optional.of(new Kucoin());
             case "aster" -> Optional.of(new Aster());
@@ -311,92 +310,6 @@ public final class WsDialects {
                     return null;
                 }
                 default -> { out.reset(); throw new IllegalStateException("Hyperliquid: неожиданное сообщение " + abbreviate(c, len)); }
-            }
-        }
-    }
-
-    // ───────────────────────── dYdX v4 (indexer) ─────────────────────────
-
-    /** dYdX v4: v4_orderbook (снимок + изменения). */
-    static final class Dydx implements WsDialect {
-        /** Адрес по умолчанию (основная или тестовая сеть). */
-        public String defaultUrl(boolean testnet) {
-            return testnet ? "wss://indexer.v4testnet.dydx.exchange/v4/ws" : "wss://indexer.dydx.trade/v4/ws";
-        }
-        /** Имя символа на бирже. */
-        public String venueSymbol(String s) { return base(s) + "-" + quote(s); }
-        /** Сообщения подписки на стаканы символов. */
-        public List<String> subscribe(List<String> v, int d) {
-            List<String> out = new ArrayList<>();
-            for (String s : v)
-                out.add(msg(objectMapper.createObjectNode().put("type", "subscribe").put("channel", "v4_orderbook")
-                        .put("id", s).put("batched", true)));
-            return out;
-        }
-        /** Сообщения подписки на стаканы символов. */
-        public List<String> unsubscribe(List<String> v, int d) {
-            List<String> out = new ArrayList<>();
-            for (String s : v)
-                out.add(msg(objectMapper.createObjectNode().put("type", "unsubscribe").put("channel", "v4_orderbook").put("id", s)));
-            return out;
-        }
-
-        /** Уровни из contents сообщения dYdX. */
-        private static void contents(JsonParser p, BookBatch out) throws Exception {
-            if (p.currentToken() != JsonToken.START_OBJECT) throw new IllegalStateException("dYdX: contents не объект");
-            while (p.nextToken() == JsonToken.FIELD_NAME) {
-                String g = p.currentName(); p.nextToken();
-                switch (g) {
-                    case "bids" -> levels(p, out, true);
-                    case "asks" -> levels(p, out, false);
-                    default -> p.skipChildren();
-                }
-            }
-        }
-
-        /** Разобрать сообщение биржи в out; служебные — пропустить, ошибки — исключение. */
-        public String parse(char[] c, int len, BookBatch out) throws Exception {
-            out.reset();
-            String type = null, message = null;
-            boolean hasContents = false;
-            try (JsonParser p = open(c, len)) {
-                while (p.nextToken() == JsonToken.FIELD_NAME) {
-                    String f = p.currentName();
-                    p.nextToken();
-                    switch (f) {
-                        case "type" -> type = p.getText();          // короткие интернированные строки Jackson не держит — это одна строка на сообщение
-                        case "message" -> message = p.getText();
-                        case "id" -> out.venue = out.resolve(p.getTextCharacters(), p.getTextOffset(), p.getTextLength());
-                        case "contents" -> {
-                            hasContents = true;
-                            if (p.currentToken() == JsonToken.START_ARRAY) {
-                                while (p.nextToken() == JsonToken.START_OBJECT) {
-                                    while (p.nextToken() == JsonToken.FIELD_NAME) {
-                                        String g = p.currentName(); p.nextToken();
-                                        switch (g) {
-                                            case "bids" -> levels(p, out, true);
-                                            case "asks" -> levels(p, out, false);
-                                            default -> p.skipChildren();
-                                        }
-                                    }
-                                }
-                            } else contents(p, out);
-                        }
-                        default -> p.skipChildren();
-                    }
-                }
-            }
-            if (type == null) throw new IllegalStateException("dYdX: нет type");
-            switch (type) {
-                case "connected", "unsubscribed" -> { out.reset(); return null; }
-                case "error" -> { out.reset(); throw new IllegalStateException("dYdX error: " + message); }
-                case "subscribed", "channel_data", "channel_batch_data" -> {
-                    if (!hasContents || out.venue == null) throw new IllegalStateException("dYdX: нет contents/id");
-                    out.snapshot = type.equals("subscribed");
-                    out.tsMs = System.currentTimeMillis();
-                    return null;
-                }
-                default -> { out.reset(); throw new IllegalStateException("dYdX: неожиданный тип " + type); }
             }
         }
     }

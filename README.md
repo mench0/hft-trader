@@ -290,7 +290,7 @@ curl localhost:8080/exchange/params/schema                 # описание в
 ```
 
 **Testnet.** Параметр `testnet` (по умолчанию `true`, если у биржи есть тестовая сеть) переключает
-REST и WebSocket на тестовые адреса: Binance, Bybit, OKX (демо-торговля), Gate, Hyperliquid, dYdX, Aster.
+REST и WebSocket на тестовые адреса: Binance, Bybit, OKX (демо-торговля), Gate, Hyperliquid, Aster.
 У KuCoin и MEXC тестовой сети нет — для них `testnet=true` отклоняется. Для Uniswap
 тестовая сеть задаётся адресом RPC (`restUrl`). Свои адреса — параметры `restUrl` и `wsUrl`.
 
@@ -557,11 +557,11 @@ public final class MyStrategy extends Strategy {
 
 Обе не проверялись на живой бирже (из среды разработки биржи недоступны): начинайте с PAPER и малых сумм.
 
-## Биржи из каталога (paper-режим, формат API не проверен)
+## Биржи из каталога (формат API не проверен на живых биржах)
 
 `GET /exchanges/catalog` — список: Binance, Bybit (полные адаптеры), OKX, MEXC, Gate, KuCoin, Aster,
-Hyperliquid, dYdX, Uniswap V2-пулы (PAPER_BLIND), PancakeSwap/Raydium/Orca (пока не реализованы).
-PAPER_BLIND = живой стакан через REST-опрос + бумажные ордера; реальных ордеров отправить нельзя.
+Hyperliquid, Uniswap V2-пулы (LIVE не проверен), PancakeSwap/Raydium/Orca (пока не реализованы).
+Без ключей или с `live=false` любая биржа работает в бумажном режиме на живых данных.
 Форматы ответов взяты из документации по памяти и не сверялись с живыми API — сначала прогоните
 `GET /exchanges/request-stats` и сравните стакан с сайтом биржи.
 Пулы Uniswap V2: параметр биржи `uniPools="WETHUSDC=0xPAIR:true:18:6"` (пара:base это token0:dec base:dec quote).
@@ -574,7 +574,6 @@ PAPER_BLIND = живой стакан через REST-опрос + бумажн�
 | Binance, Bybit | BinanceExchange, BybitExchange | свои клиенты + WS | LIVE (проверено раньше только чтением) |
 | OKX, MEXC, Gate, KuCoin, Aster | SignedCexExchange (общий класс, биржа задаётся клиентом в ExchangeFactory) | OkxRestClient, MexcRestClient, GateRestClient, KucoinRestClient, AsterRestClient (общий скелет SignedCexClient) | PAPER по умолчанию, LIVE не проверен |
 | Hyperliquid, Uniswap V2 | HyperliquidExchange, UniswapV2Exchange | HyperliquidRestClient (EIP-712 через web3j), UniswapV2Client (свопы через Router02) | PAPER по умолчанию, LIVE не проверен и не собирался с настоящим web3j |
-| dYdX v4 | PaperExchange | нет (нужны Cosmos-транзакции и сгенерированные protobuf-классы) | только PAPER |
 
 LIVE для OKX/MEXC/Gate/KuCoin/Aster включается двумя условиями сразу: `<ID>_API_KEY` + `<ID>_API_SECRET`
 (у OKX и KuCoin ещё `<ID>_PASSPHRASE`) и параметр биржи `live=true` в админке. Иначе биржа работает в PAPER и реальных ордеров не шлёт.
@@ -589,7 +588,7 @@ LIVE для OKX/MEXC/Gate/KuCoin/Aster включается двумя усло�
 
 ## WebSocket-стаканы для остальных бирж
 
-OKX, Gate, KuCoin, Aster, MEXC, Hyperliquid и dYdX получают стакан по WebSocket (`WsBookFeed`, WebSocket из JDK,
+OKX, Gate, KuCoin, Aster, MEXC и Hyperliquid получают стакан по WebSocket (`WsBookFeed`, WebSocket из JDK,
 без Netty). Форматы подписок и сообщений описаны в `WsDialects` и записаны **по памяти** — против живых
 серверов они не проверялись (сеть сборки закрыта). Перед реальными деньгами запустите бота в paper-режиме
 и убедитесь по `/exchanges/request-stats`, что `ws.messages` и `ws.bookUpdates` растут, а `parseErrors` = 0.
@@ -621,7 +620,6 @@ OKX, Gate, KuCoin, Aster, MEXC, Hyperliquid и dYdX получают стака�
 | Uniswap V2 | WS-RPC: `eth_subscribe` на `Sync` + первый `eth_call` | JSON-RPC по сокету ноды | чтение по сокету | `eth_call` по сокету | HTTP — запасной |
 | Aster | WS | REST (WS-ордеров нет) | WS `executionReport` (listenKey) | WS `outboundAccountPosition` | ордера |
 | MEXC | WS (protobuf) | REST (WS-ордеров нет) | WS `spot@private.orders.v3.api.pb` (listenKey, protobuf) | WS `spot@private.account.v3.api.pb` | ордера |
-| dYdX | WS | только paper (нужен Cosmos RPC) | — | — | — |
 
 Безопасность ордеров по WS (`WsRpcChannel`):
 - сокет не готов (нет соединения/логина) — запрос не отправлялся, идём в REST;
@@ -640,14 +638,14 @@ OKX, Gate, KuCoin, Aster, MEXC, Hyperliquid и dYdX получают стака�
 ## Устройство классов бирж
 
 `SignedCexExchange` (OKX, Gate, MEXC, KuCoin, Aster, Hyperliquid, Uniswap V2 — отличаются только REST-клиентом из `ExchangeFactory`)
-и `PaperExchange` (dYdX) собраны так же, как `BybitExchange`: свои `MarketDataStore`, `BalanceStore`, `SymbolFilters`,
+собран так же, как `BybitExchange`: свои `MarketDataStore`, `BalanceStore`, `SymbolFilters`,
 REST-клиент, `RiskManager`, `OrderService`, конвейер `TickPipeline` (Disruptor) и фид, явные `start()`/`stop()`.
 Общие мелочи (режим LIVE/PAPER, стартовый бумажный баланс, сборка WS+REST-фида, остановка при потере данных) — в `ExchangeSupport`.
 `start()` в LIVE: поднять WS-каналы → загрузить правила (без них старт падает) → баланс → конвейер → фид.
 
 WS-ордеров нет в документации MEXC и Aster — у них ордера по REST, а события аккаунта
 идут по приватному потоку через `listenKey` (`UserStream`: ключ по REST перед подключением, продление раз в 25 минут).
-У dYdX ордера — транзакции Cosmos, не WebSocket. KuCoin в режиме UTA торгует через `uta.order` / `uta.cancel` (`tradeType=SPOT`):
+KuCoin в режиме UTA торгует через `uta.order` / `uta.cancel` (`tradeType=SPOT`):
 для UTA-счёта задайте `KUCOIN_UTA=true` в `.env` (схема аргументов UTA сверена не полностью — проверьте на малой сумме).
 
 ## Производительность: что исправлено
@@ -686,6 +684,7 @@ WS-ордеров нет в документации MEXC и Aster — у них
 - **2026-10:** биржа LBank удалена целиком (клиент, диалекты REST/WS, источник подбора тикеров, лимиты, каталог, тесты):
   низкая ликвидность и непроверенная схема подписи. Выбор `exchange=lbank` теперь отклоняется.
 - **2026-10:** веб-админка — отдельный проект `hft-admin-panel`, бот только отдаёт API.
+- **2026-10:** биржа dYdX v4 удалена целиком (вместе с `PaperExchange`, который был нужен только ей).
 - **2026-10:** биржа BingX удалена целиком (клиент, диалекты REST/WS, источник подбора тикеров, лимиты, каталог, тесты).
 - **2026-10:** MEXC — исполнения и баланс по приватному WS-потоку (protobuf); KuCoin — режим UTA (`KUCOIN_UTA=true`).
 - **2026-10:** чтение `application.yml` убрано (и зависимость jackson-dataformat-yaml): все параметры процесса — только `.env` и окружение.

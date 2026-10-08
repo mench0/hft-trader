@@ -44,8 +44,6 @@ public class ExchangeLifecycleCheck {
       ck(d[0]+" starts paper", g.id().equals(d[0]) && g.balances().total(d[1].endsWith("USDC")?"USDC":"USDT")==1000 && g instanceof RequestStatsSource r && !r.isLive());
       g.stop();
     }
-    var dy = new PaperExchange(ExchangeCatalog.find("dydx").get(), new ExchangeConfig("dydx", false, "http://127.0.0.1:9", "ws://127.0.0.1:9/ws", 5000, List.of("BTCUSD"), 20, 100), app);
-    dy.start(); ck("dydx paper starts", dy.id().equals("dydx") && dy.balances().total("USD")==1000); dy.stop();
     var uni = ExchangeFactory.create("uniswapv2", new ExchangeConfig("uniswapv2", false, "http://127.0.0.1:9", "ws://127.0.0.1:9/ws", 5000, List.of("WETHUSDC"), 20, 100), app);
     ck("uniswap constructs in paper", uni.id().equals("uniswapv2") && uni instanceof RequestStatsSource ur && !ur.isLive());
     System.out.println("pass="+pass+" fail="+fail); System.exit(fail==0?0:1);
