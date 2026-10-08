@@ -57,7 +57,7 @@ public final class PerpAccount {
     /** Бумажный режим: funding начисляется здесь. */
     private final boolean paper;
     /** Источник ставок; null — у биржи нет публичного источника. */
-    private final FundingSource source;
+    private final FundingSource fundingSource;
     /** Опрос ставок. */
     private ScheduledExecutorService scheduler;
     /** Последняя ошибка опроса (для админки). */
@@ -81,7 +81,7 @@ public final class PerpAccount {
         this.positions = positions;
         this.api = api;
         this.paper = paper;
-        this.source = FundingSource.forExchange(id, config.restUrl());
+        this.fundingSource = FundingSource.forExchange(id, config.restUrl());
     }
 
     /** Плечо и позиции (LIVE), затем опрос funding. */
@@ -94,7 +94,7 @@ public final class PerpAccount {
             }
             syncPositions();
         }
-        if (source == null) return;
+        if (fundingSource == null) return;
         scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "funding-" + id);
             t.setDaemon(true);
@@ -119,7 +119,7 @@ public final class PerpAccount {
     /** Опросить ставки; если прошло время списания — учесть funding по открытым позициям. */
     void poll() {
         try {
-            Map<String, Funding> fresh = source.fetch(config.symbols());
+            Map<String, Funding> fresh = fundingSource.fetch(config.symbols());
             for (var e : fresh.entrySet()) onFunding(e.getKey(), e.getValue());
             lastError = "";
         } catch (Exception e) {

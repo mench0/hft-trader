@@ -33,7 +33,7 @@ public final class ExchangeFactory {
             case UNISWAPV2 -> new SignedCexExchange(id, ec, settings, UniswapV2Client::new);
             case KUCOIN -> new SignedCexExchange(id, ec, settings, KucoinRestClient::new);
             case ASTER -> new SignedCexExchange(id, ec, settings, AsterRestClient::new);
-            case null, default -> throw new IllegalArgumentException("Неизвестная или не реализованная биржа: " + id);
+            default -> throw new IllegalArgumentException("Неизвестная или не реализованная биржа: " + id);
         };
     }
 }
