@@ -39,6 +39,7 @@ public record GlobalParams(
         long fundingPollSec,
         double fundingArbMinDiffPercent,
         double fundingArbExitDiffPercent,
+        double fundingArbPaybackPeriods,
         double fundingArbOrderQuote,
         int fundingArbMaxPositions,
         double fundingArbMaxBasisPercent,
@@ -74,8 +75,10 @@ public record GlobalParams(
             flag("fundingArbEnabled", false, "Funding-арбитраж между биржами: шорт перпа там, где ставка funding выше, лонг — где ниже. "
                     + "Нужны минимум две биржи с market=perp и общими символами; торгует только на биржах с включённой торговлей"),
             num("fundingPollSec", 30, 5, 3600, "Как часто обновлять ставки funding по REST, с").needsRestart(),
-            num("fundingArbMinDiffPercent", 0.03, 0.001, 10, "Вход: разница ставок (за 8 ч) больше этого, % — должна окупать 4 комиссии тейкера"),
+            num("fundingArbMinDiffPercent", 0.03, 0.001, 10, "Вход: разница ставок (за 8 ч) больше этого, %; окупаемость комиссий проверяется отдельно (fundingArbPaybackPeriods)"),
             num("fundingArbExitDiffPercent", 0.005, -10, 10, "Выход: разница ставок (за 8 ч) упала ниже этого, %"),
+            num("fundingArbPaybackPeriods", 6, 0.5, 1000, "Вход, только если разница ставок окупает комиссии полного круга (4 сделки тейкера по takerFeePercent обеих бирж) "
+                    + "не больше чем за столько периодов по 8 ч (6 = 2 суток)"),
             num("fundingArbOrderQuote", 50, 0, 1e9, "Размер каждой ноги в котируемой валюте (без плеча)"),
             num("fundingArbMaxPositions", 3, 1, 100, "Сколько пар позиций держать одновременно"),
             num("fundingArbMaxBasisPercent", 0.15, 0, 10, "Вход только если цены на двух биржах отличаются не больше, %"),

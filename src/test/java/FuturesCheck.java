@@ -148,7 +148,7 @@ public class FuturesCheck {
     x.perp.onFunding("SOLUSDT", new Funding(0.0010, 8, t + 3_600_000, 100, t));      // 0.10% за 8 ч
     y.perp.onFunding("SOLUSDC", new Funding(0.00001, 1, t + 3_600_000, 100, t));     // 0.008% за 8 ч
     GlobalParams[] gp = { GlobalParams.DEFAULTS.with(Map.of("fundingArbEnabled", "true", "fundingArbOrderQuote", "100")) };
-    var arb = new FundingArbitrage(() -> gp[0], () -> List.of(x, y), id -> true);
+    var arb = new FundingArbitrage(() -> gp[0], () -> List.of(x, y), id -> true, id -> 0.05);
     arb.tick(t);
     ck("arb opened pair", arb.openPairs() == 1);
     ck("short on high rate", x.pos.qty("SOLUSDT") < 0 && y.pos.qty("SOLUSDC") > 0 && near(-x.pos.qty("SOLUSDT"), y.pos.qty("SOLUSDC")));
@@ -162,9 +162,22 @@ public class FuturesCheck {
     x.perp.onFunding("SOLUSDT", new Funding(0.0010, 8, t + 3_600_000, 100, t));
     arb.tick(t);
     ck("basis too wide - no entry", arb.openPairs() == 0);
-    var noTrade = new FundingArbitrage(() -> GlobalParams.DEFAULTS.with(Map.of("fundingArbEnabled", "true")), () -> List.of(x, y), id -> false);
+    var noTrade = new FundingArbitrage(() -> GlobalParams.DEFAULTS.with(Map.of("fundingArbEnabled", "true")), () -> List.of(x, y), id -> false, id -> 0.05);
     noTrade.tick(t);
     ck("trading disabled - no entry", noTrade.openPairs() == 0);
+    // комиссии: разница 0.092%/8ч, круг 4 × 1% = 4% не окупается за 6 периодов — входа нет
+    var costly = new FundingArbitrage(() -> GlobalParams.DEFAULTS.with(Map.of("fundingArbEnabled", "true", "fundingArbOrderQuote", "100")),
+        () -> List.of(x, y), id -> true, id -> 1.0);
+    costly.tick(t);
+    ck("fees not covered - no entry", costly.openPairs() == 0);
+    @SuppressWarnings("unchecked") var opp = ((List<Map<String,Object>>) costly.stats().get("opportunities")).get(0);
+    ck("round trip fee in stats", near((Double) opp.get("roundTripFeePercent"), 4.0) && Boolean.FALSE.equals(opp.get("enough")));
+    // та же разница при комиссиях 0.05%: круг 0.2% окупается за ~2.2 периода — вход есть
+    var cheap = new FundingArbitrage(() -> GlobalParams.DEFAULTS.with(Map.of("fundingArbEnabled", "true", "fundingArbOrderQuote", "100")),
+        () -> List.of(x, y), id -> true, id -> 0.05);
+    cheap.tick(t);
+    ck("fees covered - entry", cheap.openPairs() == 1);
+    cheap.stop();
     ck("exit diff < entry diff enforced", throwsIae(() -> GlobalParams.DEFAULTS.with(Map.of("fundingArbExitDiffPercent", "0.05"))));
 
     System.out.println("FuturesCheck: pass=" + pass + " fail=" + fail);

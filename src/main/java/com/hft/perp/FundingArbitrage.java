@@ -36,7 +36,8 @@ import java.util.function.Supplier;
  * <ul>
  *   <li>Ставки сравниваются приведёнными к 8 часам (у Hyperliquid период — 1 час).</li>
  *   <li>Монеты сопоставляются по базовой валюте: BTCUSDT на Binance и BTCUSDC на Hyperliquid — одна монета.</li>
- *   <li>Вход: разница ≥ {@code fundingArbMinDiffPercent}, цены на двух биржах отличаются не больше
+ *   <li>Вход: разница ≥ {@code fundingArbMinDiffPercent} и окупает комиссии полного круга (4 сделки тейкера
+ *       по takerFeePercent обеих бирж) не дольше чем за {@code fundingArbPaybackPeriods} периодов по 8 ч, цены на двух биржах отличаются не больше
  *       {@code fundingArbMaxBasisPercent}, торговля на обеих биржах разрешена, пар меньше {@code fundingArbMaxPositions}.</li>
  *   <li>Сначала шорт, затем лонг на исполненный объём; если вторая нога не исполнилась — первая закрывается.</li>
  *   <li>Выход: разница упала ниже {@code fundingArbExitDiffPercent}, истёк {@code fundingArbMaxHoldHours},
@@ -76,6 +77,8 @@ public final class FundingArbitrage {
     private final Supplier<Collection<ExchangeGateway>> gateways;
     /** Торговля на бирже включена (параметр tradingEnabled). */
     private final java.util.function.Predicate<String> tradingEnabled;
+    /** Комиссия тейкера биржи, % (параметр takerFeePercent). */
+    private final java.util.function.ToDoubleFunction<String> takerFeePercent;
     /** Открытые пары по монете. */
     private final Map<String, Pair> pairs = new ConcurrentHashMap<>();
     /** Последние найденные возможности (для админки). */
@@ -84,19 +87,22 @@ public final class FundingArbitrage {
     private ScheduledExecutorService scheduler;
     /** Счётчики. */
     private final AtomicLong opened = new AtomicLong(), closed = new AtomicLong(), failed = new AtomicLong();
-    /** Результат закрытых пар по ценам (без funding, после комиссий тейкера). */
+    /** Результат закрытых пар по ценам после комиссий всех сделок (без funding). */
     private volatile double pricePnl;
 
     /**
      * @param params настройки процесса (читаются на каждом цикле)
      * @param gateways работающие биржи
      * @param tradingEnabled включена ли торговля на бирже (по id)
+     * @param takerFeePercent комиссия тейкера биржи, % (по id)
      */
     public FundingArbitrage(Supplier<GlobalParams> params, Supplier<Collection<ExchangeGateway>> gateways,
-                            java.util.function.Predicate<String> tradingEnabled) {
+                            java.util.function.Predicate<String> tradingEnabled,
+                            java.util.function.ToDoubleFunction<String> takerFeePercent) {
         this.params = params;
         this.gateways = gateways;
         this.tradingEnabled = tradingEnabled;
+        this.takerFeePercent = takerFeePercent;
     }
 
     /** Запустить цикл (раз в 5 с). */
@@ -140,7 +146,7 @@ public final class FundingArbitrage {
         if (!g.fundingArbEnabled()) return;
         for (Opportunity o : ops) {
             if (pairs.size() >= g.fundingArbMaxPositions()) break;
-            if (pairs.containsKey(o.coin()) || o.diffPercent() < g.fundingArbMinDiffPercent()) continue;
+            if (pairs.containsKey(o.coin()) || !enough(o, g)) continue;
             if (!tradable(o.shortLeg()) || !tradable(o.longLeg())) continue;
             if (busy(o.shortLeg()) || busy(o.longLeg())) continue;
             double ms = o.shortLeg().mid(), ml = o.longLeg().mid();
@@ -212,11 +218,25 @@ public final class FundingArbitrage {
         if (l == null || l.executedQty() <= 0) {
             failed.incrementAndGet();
             log.warn("[funding-arb] {}: лонг на {} не исполнился — закрываю шорт на {}", o.coin(), o.longLeg().name(), o.shortLeg().name());
-            o.shortLeg().orders().reduceMarket(o.shortLeg().symbol(), Side.BUY, s.executedQty());
+            OrderResult u = o.shortLeg().orders().reduceMarket(o.shortLeg().symbol(), Side.BUY, s.executedQty());
+            if (u.executedQty() > 0) {                       // откат — тоже две сделки с комиссией
+                double r = (s.avgPrice() - u.avgPrice()) * u.executedQty()
+                        - fee(o.shortLeg(), s.avgPrice(), u.executedQty()) - fee(o.shortLeg(), u.avgPrice(), u.executedQty());
+                o.shortLeg().gw().risk().recordPnl(r);
+                pricePnl += r;
+            }
             return;
         }
         double extra = s.executedQty() - l.executedQty();                 // объёмы ног разошлись — лишнее закрыть
-        if (extra > 1e-12) o.shortLeg().orders().reduceMarket(o.shortLeg().symbol(), Side.BUY, extra);
+        if (extra > 1e-12) {
+            OrderResult u = o.shortLeg().orders().reduceMarket(o.shortLeg().symbol(), Side.BUY, extra);
+            if (u.executedQty() > 0) {
+                double r = (s.avgPrice() - u.avgPrice()) * u.executedQty()
+                        - fee(o.shortLeg(), s.avgPrice(), u.executedQty()) - fee(o.shortLeg(), u.avgPrice(), u.executedQty());
+                o.shortLeg().gw().risk().recordPnl(r);
+                pricePnl += r;
+            }
+        }
         pairs.put(o.coin(), new Pair(o.coin(), o.shortLeg(), o.longLeg(), l.executedQty(), s.avgPrice(), l.avgPrice(),
                 o.diffPercent(), System.currentTimeMillis()));
         opened.incrementAndGet();
@@ -228,13 +248,15 @@ public final class FundingArbitrage {
         OrderResult s = p.shortLeg().orders().reduceMarket(p.shortLeg().symbol(), Side.BUY, p.qty());
         OrderResult l = p.longLeg().orders().reduceMarket(p.longLeg().symbol(), Side.SELL, p.qty());
         double pnl = 0;
-        if (s.executedQty() > 0) {
-            double r = (p.shortEntry() - s.avgPrice()) * s.executedQty();
+        if (s.executedQty() > 0) {                       // комиссии входа и выхода этой ноги
+            double r = (p.shortEntry() - s.avgPrice()) * s.executedQty()
+                    - fee(p.shortLeg(), p.shortEntry(), s.executedQty()) - fee(p.shortLeg(), s.avgPrice(), s.executedQty());
             p.shortLeg().gw().risk().recordPnl(r);
             pnl += r;
         }
         if (l.executedQty() > 0) {
-            double r = (l.avgPrice() - p.longEntry()) * l.executedQty();
+            double r = (l.avgPrice() - p.longEntry()) * l.executedQty()
+                    - fee(p.longLeg(), p.longEntry(), l.executedQty()) - fee(p.longLeg(), l.avgPrice(), l.executedQty());
             p.longLeg().gw().risk().recordPnl(r);
             pnl += r;
         }
@@ -248,6 +270,33 @@ public final class FundingArbitrage {
             closed.incrementAndGet();
         }
         pricePnl += pnl;
+    }
+
+    /**
+     * Комиссии полного круга пары, %: вход и выход на обеих биржах — 4 сделки тейкера
+     * (2 × комиссия биржи шорта + 2 × комиссия биржи лонга).
+     */
+    double roundTripFeePercent(Venue shortLeg, Venue longLeg) {
+        return 2 * takerFeePercent.applyAsDouble(shortLeg.gw().id()) + 2 * takerFeePercent.applyAsDouble(longLeg.gw().id());
+    }
+
+    /**
+     * Хватает ли разницы ставок: она больше fundingArbMinDiffPercent и окупает комиссии полного круга
+     * не больше чем за fundingArbPaybackPeriods периодов по 8 ч.
+     */
+    boolean enough(Opportunity o, GlobalParams g) {
+        return o.diffPercent() >= g.fundingArbMinDiffPercent()
+                && o.diffPercent() * g.fundingArbPaybackPeriods() >= roundTripFeePercent(o.shortLeg(), o.longLeg());
+    }
+
+    /**
+     * Комиссия сделки для учёта результата. В бумажном режиме она уже заложена в цену исполнения
+     * (движок ухудшает цену на комиссию), поэтому 0 — иначе комиссия считалась бы дважды.
+     * На бирже цена исполнения без комиссии — считаем по takerFeePercent.
+     */
+    private double fee(Venue v, double price, double qty) {
+        boolean live = v.gw() instanceof com.hft.exchange.generic.RequestStatsSource r && r.isLive();
+        return live ? takerFeePercent.applyAsDouble(v.gw().id()) / 100 * price * qty : 0;
     }
 
     /** Торговля на бирже разрешена (kill switch не взведён, tradingEnabled=true). */
@@ -311,7 +360,10 @@ public final class FundingArbitrage {
             x.put("longPer8hPercent", o.longLeg().funding().ratePer8h() * 100);
             x.put("diffPercent", o.diffPercent());
             x.put("aprPercent", o.diffPercent() * 3 * 365);
-            x.put("enough", o.diffPercent() >= g.fundingArbMinDiffPercent());
+            double fees = roundTripFeePercent(o.shortLeg(), o.longLeg());
+            x.put("roundTripFeePercent", fees);
+            x.put("paybackPeriods", o.diffPercent() > 0 ? fees / o.diffPercent() : null);   // сколько 8-часовых периодов окупают комиссии
+            x.put("enough", enough(o, g));
             os.add(x);
         }
         m.put("opportunities", os);

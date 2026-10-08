@@ -390,7 +390,8 @@ public final class BotController {
         }
         running.set(true);
         fundingArb = new com.hft.perp.FundingArbitrage(() -> global, () -> List.copyOf(active.values()),
-                id -> { TradingSettings ts = settings.get(id); return ts != null && ts.get().tradingEnabled(); });
+                id -> { TradingSettings ts = settings.get(id); return ts != null && ts.get().tradingEnabled(); },
+                id -> { TradingSettings ts = settings.get(id); return ts != null ? ts.get().takerFeePercent() : 0.1; });
         fundingArb.start();
         log.info("Бот запущен. Активные биржи: {}", active.keySet());
     }
