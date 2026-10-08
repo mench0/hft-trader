@@ -62,7 +62,7 @@ public final class ExchangeCatalog {
                 "wss://sstream.asterdex.com/stream", "https://sapi.asterdex-testnet.com", "wss://sstream.asterdex-testnet.com/stream"));
         add(new ExchangeInfo(Exchange.UNISWAPV2.id(), "Uniswap V2-совместимые пулы", Kind.AMM_DEX, Adapter.LIVE_UNVERIFIED,
                 "https://ethereum-rpc.publicnode.com", 4, 0.30, 0.30, "USDC", "WETHUSDC",
-                "Стакан из событий Sync через eth_subscribe и все JSON-RPC вызовы по WebSocket ноды (HTTP — запасной). Свопы через Router02 (web3j). Нужны UNISWAPV2_ROUTER, UNISWAPV2_TOKENS, пулы UNISWAPV2_POOLS; GTC-лимиток и отмены нет. Горячий кошелёк с малой суммой, приватный RPC против сэндвичей."));
+                "Стакан из событий Sync через eth_subscribe и все JSON-RPC вызовы по WebSocket ноды (HTTP — запасной). Свопы через Router02 (web3j). Роутер, токены и пулы — параметры биржи uniRouter, uniTokens, uniPools; GTC-лимиток и отмены нет. Горячий кошелёк с малой суммой, приватный RPC против сэндвичей."));
     }
 
     /**
@@ -109,6 +109,11 @@ public final class ExchangeCatalog {
 
     /** Фьючерсный рынок биржи, если он есть. */
     public static Optional<PerpVenue> perp(String id) { return Exchange.find(id).map(PERP::get); }
+
+    /** Бот умеет этот рынок на бирже. */
+    public static boolean supports(String id, com.hft.exchange.Market market) {
+        return Exchange.find(id).map(e -> e.supports(market)).orElse(false);
+    }
 
     /** У биржи есть фьючерсы (market=perp). */
     public static boolean supportsPerp(String id) { return Exchange.find(id).map(Exchange::hasPerp).orElse(false); }

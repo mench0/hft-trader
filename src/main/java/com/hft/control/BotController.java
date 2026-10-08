@@ -8,6 +8,7 @@ import com.hft.config.TradingSettings;
 import com.hft.discovery.DiscoveryService;
 import com.hft.discovery.MeanReversionBacktest;
 import com.hft.exchange.Exchange;
+import com.hft.exchange.Market;
 import com.hft.exchange.ExchangeFactory;
 import com.hft.exchange.ExchangeGateway;
 import com.hft.exchange.catalog.ExchangeCatalog;
@@ -214,13 +215,14 @@ public final class BotController {
         TradingParams d = TradingParams.DEFAULTS;
         TradingParams p = ExchangeCatalog.find(exchangeId)
                 .map(i -> {
-                    boolean perp = ExchangeCatalog.supportsPerp(i.id());
+                    Market market = i.exchange().defaultMarket();
+                    boolean perp = market == Market.PERP;
                     var venue = ExchangeCatalog.perp(i.id());
                     double taker = perp ? venue.orElseThrow().takerFeePct() : i.takerFeePct();
                     boolean testnet = perp ? venue.orElseThrow().hasTestnet() : i.hasTestnet();
                     return d.with(Map.of("takerFeePercent", String.valueOf(taker),
                             "testnet", String.valueOf(testnet),
-                            "market", perp ? "perp" : "spot"));
+                            "market", market.id()));
                 })
                 .orElse(d);
         Map<String, String> mode = envMode(exchangeId);
@@ -267,10 +269,9 @@ public final class BotController {
      */
     private static void validate(String exchangeId, TradingParams p) {
         ExchangeInfo info = ExchangeCatalog.find(exchangeId).orElseThrow();
-        if (p.isPerp() && !ExchangeCatalog.supportsPerp(exchangeId))
-            throw new IllegalArgumentException("У биржи " + exchangeId + " в боте нет фьючерсов: задайте market=spot");
-        if (!p.isPerp() && !ExchangeCatalog.supportsSpot(exchangeId))
-            throw new IllegalArgumentException("Биржа " + exchangeId + " в боте торгует только фьючерсами: задайте market=perp");
+        Exchange ex = Exchange.of(exchangeId);
+        if (!ex.supports(p.market()))
+            throw new IllegalArgumentException("У биржи " + exchangeId + " в боте нет рынка " + p.market() + ": доступно " + ex.markets());
         boolean testnetExists = p.isPerp() ? ExchangeCatalog.perp(exchangeId).map(ExchangeCatalog.PerpVenue::hasTestnet).orElse(false) : info.hasTestnet();
         if (p.testnet() && !testnetExists && p.restUrl().isBlank())
             throw new IllegalArgumentException("У биржи " + exchangeId + " нет тестовой сети: задайте testnet=false"

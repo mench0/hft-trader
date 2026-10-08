@@ -17,6 +17,7 @@ hft-trader/
 │   ├── exchange/
 │   │   ├── Exchange.java             # enum всех бирж: единственное место со строковыми id ("binance"…),
 │   │   │                             # по нему выбираются клиенты, диалекты, лимиты, источники funding
+│   │   ├── Market.java               # enum рынков SPOT/PERP ("spot"/"perp"); у каждой биржи свой набор
 │   │   ├── ExchangeGateway.java      # общий контракт биржи
 │   │   ├── ExchangeFactory.java      # id биржи -> реализация
 │   │   ├── catalog/                  # ExchangeCatalog/ExchangeInfo: список бирж, комиссии, лимиты, статус адаптера
@@ -24,7 +25,7 @@ hft-trader/
 │   │   │                             # BinanceFuturesClient — USDⓈ-M (fapi, ws-fapi, listenKey);
 │   │   │                             # фьючерсы остальных: GateFuturesClient, KucoinFuturesClient, MexcFuturesClient,
 │   │   │                             # Aster — тот же AsterRestClient с /fapi/v3
-│   │   ├── okx/, gate/, mexc/, kucoin/, aster/, hyperliquid/, uniswap/
+│   │   ├── okx/, gate/, mexc/, kucoin/, aster/, hyperliquid/, uniswapv2/
 │   │   │                             # REST-клиенты на общем скелете SignedCexClient
 │   │   └── generic/                  # SignedCexExchange, ContractSizes (размер контракта перпов), фиды стакана:
 │   │                                 # WsBookFeed, PollingBookFeed, HybridBookFeed; диалекты
@@ -63,23 +64,24 @@ hft-trader/
 
 ## Поддерживаемые биржи
 
-| Биржа | Реализация | Режим по умолчанию |
-|---|---|---|
-| Binance (спот), Bybit (спот и linear) | BinanceExchange, BybitExchange | LIVE при ключах и `live=true` |
-| Binance (фьючерсы USDⓈ-M) | SignedCexExchange + BinanceFuturesClient | LIVE при ключах и `live=true`, не проверен |
-| OKX, Gate, MEXC, KuCoin, Aster | SignedCexExchange + свой RestClient | PAPER, LIVE не проверен |
-| Hyperliquid, Uniswap V2 | SignedCexExchange + HyperliquidRestClient / UniswapV2Client | PAPER, LIVE не проверен |
+| Биржа | Рынки | Реализация | Режим по умолчанию |
+|---|---|---|---|
+| Binance, Bybit | spot, perp | BinanceExchange, BybitExchange; перпы Binance — SignedCexExchange + BinanceFuturesClient | LIVE при ключах и `live=true` |
+| OKX, Gate, MEXC, KuCoin, Aster | spot, perp | SignedCexExchange + свой RestClient (фьючерсы — Gate/Kucoin/MexcFuturesClient, OKX SWAP, Aster `/fapi/v3`) | PAPER, LIVE не проверен |
+| Hyperliquid | perp | SignedCexExchange + HyperliquidRestClient | PAPER, LIVE не проверен |
+| Uniswap V2 | spot | SignedCexExchange + UniswapV2Client | PAPER, LIVE не проверен |
 
-Полный список с комиссиями и заметками — `GET /exchanges/catalog` или вкладка «Биржи» в админке.
-Рынок биржи — параметр `market`: `perp` (Binance, Bybit, OKX, Hyperliquid) или `spot` (все, кроме Hyperliquid).
+Полный список с комиссиями — `GET /exchanges/catalog` или вкладка «Биржи» в админке.
+Рынок биржи — параметр `market` (enum `Market`): по умолчанию `perp`, если он есть у биржи, иначе `spot`.
+Рынок, которого у биржи нет, отклоняется при сохранении параметров.
 
 ## Как добавить биржу
 
-1. Константа в enum `exchange/Exchange` (строковый id — ключ в админке и префикс переменных окружения).
-1. REST-клиент `exchange/<id>/<Id>RestClient extends SignedCexClient` (подпись, ордера, баланс, правила).
-2. Диалект стакана в `generic/Dialects` (REST) и, если есть WS, в `generic/WsDialects`.
-3. Строка в `ExchangeFactory`, `ExchangeCatalog`, лимиты в `rest/RateLimits`, источник сводок в `discovery/MarketSources`.
-4. Проверки в `src/test/java` (разбор ответов на фиктивном сервере `MiniWsServer`).
+1. Константа в enum `exchange/Exchange`: строковый id (ключ в админке и префикс переменных окружения) и рынки `Market`.
+2. REST-клиент `exchange/<id>/<Id>RestClient extends SignedCexClient` (подпись, ордера, баланс, правила).
+3. Диалект стакана в `generic/Dialects` (REST) и, если есть WS, в `generic/WsDialects`.
+4. Строка в `ExchangeFactory`, `ExchangeCatalog`, лимиты в `rest/RateLimits`, источник сводок в `discovery/MarketSources`.
+5. Проверки в `src/test/java` (разбор ответов на фиктивном сервере `MiniWsServer`).
 
 ## Тесты
 

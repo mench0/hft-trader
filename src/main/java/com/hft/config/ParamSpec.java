@@ -120,6 +120,9 @@ public record ParamSpec(String name, String def, double min, double max, String 
             if (s.regex() != null && !v.matches(s.regex())) throw new IllegalArgumentException(s.name() + ": недопустимое значение «" + v + "»");
             return v;
         }
+        if (t == com.hft.exchange.Market.class) {                          // перечисление рынка: spot / perp
+            return com.hft.exchange.Market.find(v).orElseThrow(() -> new IllegalArgumentException(s.name() + ": недопустимое значение «" + v + "» (spot или perp)"));
+        }
         double d;
         try { d = Double.parseDouble(v); }
         catch (NumberFormatException e) { throw new IllegalArgumentException(s.name() + ": не число: " + v); }
