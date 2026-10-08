@@ -35,18 +35,21 @@ Uniswap V2 (AMM-пулы обмена — фьючерсов не бывает):
 | Bybit linear | WS `/v5/public/linear` | **WS** `/v5/trade` (`category=linear`) | **WS** `/v5/private`: `order`, `wallet`, `position` | REST `/v5/position/set-leverage`, `/v5/position/list` | REST `/v5/market/tickers?category=linear` |
 | OKX SWAP | WS `books` по `BTC-USDT-SWAP` | **WS** `order`, `cancel-order` (`tdMode=cross`) | **WS** `orders`, `account`, `positions` | REST `/api/v5/account/set-leverage`, `/positions` | REST `/api/v5/public/funding-rate` |
 | Hyperliquid | WS `l2Book` | **WS** `post` (`r` — reduceOnly) | **WS** `orderUpdates`, `userFills` | `updateLeverage`, `clearinghouseState` | REST `metaAndAssetCtxs` |
-| Gate USDT-фьючерсы | WS `fx-ws.gateio.ws` `futures.order_book` | REST `/api/v4/futures/usdt/orders` (размер — контракты со знаком, рынок — `price 0` + `ioc`) | REST (статус ордера, `/accounts`) | REST `/positions/{contract}/leverage`, `/positions` | REST `/futures/usdt/contracts` |
-| KuCoin Futures | WS `/contractMarket/level2Depth50` (bullet-public фьючерсов) | REST `/api/v1/orders` (лоты, `leverage` в ордере, `marginMode=CROSS`) | REST (статус, `/account-overview`) | REST `/api/v2/changeCrossUserLeverage`, `/positions` | REST `/api/v1/contracts/active` |
-| MEXC Contract | WS `contract.mexc.com/edge` `sub.depth.full` | REST `/api/v1/private/order/submit` (сторона 1–4 задаёт открытие/закрытие) | REST (статус, `/account/asset`) | REST `/position/change_leverage`, `/open_positions` | REST `/contract/funding_rate/{symbol}` |
+| Gate USDT-фьючерсы | WS `fx-ws.gateio.ws` `futures.order_book` | **WS** API на сокете фьючерсов: `futures.order_place`, `futures.order_cancel`, `futures.order_cancel_cp`, `futures.order_status` (размер — контракты со знаком, рынок — `price 0` + `ioc`) | **WS** `futures.orders`, `futures.positions`, `futures.balances` | REST `/positions/{contract}/leverage`, `/positions` | REST `/futures/usdt/contracts` |
+| KuCoin Futures | WS `/contractMarket/level2Depth50` (bullet-public фьючерсов) | **WS** Pro API `wsapi.kucoin.com`: `futures.order`, `futures.cancel` (лоты, `leverage` в ордере, `marginMode=CROSS`); отмена всех — REST | **WS** (bullet-private фьючерсов): `/contractMarket/tradeOrders`, `/contract/positionAll`, `/contractAccount/wallet` | REST `/api/v2/changeCrossUserLeverage`, `/positions` | REST `/api/v1/contracts/active` |
+| MEXC Contract | WS `contract.mexc.com/edge` `sub.depth.full` | REST `/api/v1/private/order/submit` — WS-ордеров у MEXC Contract нет (сторона 1–4 задаёт открытие/закрытие) | **WS** после `login`: `push.personal.order`, `push.personal.position`, `push.personal.asset` | REST `/position/change_leverage`, `/open_positions` | REST `/contract/funding_rate/{symbol}` |
 | Aster Futures | WS `fstream.asterdex.com` (формат Binance) | REST `/fapi/v3/order` (подпись EIP-712) | **WS** listenKey: `ORDER_TRADE_UPDATE`, `ACCOUNT_UPDATE` | REST `/fapi/v3/leverage`, `/positionRisk` | REST `/fapi/v1/premiumIndex` |
 
 - Ставки funding читаются по REST раз в `fundingPollSec` (30 с): ставка меняется медленно, отдельный сокет не нужен.
 - OKX, Gate, KuCoin и MEXC считают объём в контрактах: бот пересчитывает его в монеты по размеру контракта
   (OKX `ctVal`, Gate `quanto_multiplier`, KuCoin `multiplier`, MEXC `contractSize`), справочник читается один раз.
 - KuCoin Futures называет биткоин XBT: BTCUSDT → `XBTUSDTM`.
-- У Gate, KuCoin и MEXC фьючерсные ордера идут по REST (исполнение рыночного ордера дочитывается статусом);
-  WebSocket-торговля для их фьючерсов — следующий шаг. MEXC выдаёт доступ к фьючерсным ордерам через API отдельно —
+- Ордера по WebSocket везде, где биржа это умеет: у фьючерсов Binance, Bybit, OKX, Hyperliquid, Gate и KuCoin.
+  По REST — только у MEXC Contract и Aster Futures: WebSocket-ордеров у них нет; результаты ордеров, позиции и
+  баланс у обеих приходят по WebSocket. MEXC выдаёт доступ к фьючерсным ордерам через API отдельно —
   без него ордера отклоняются, а стакан, funding и бумажный режим работают.
+- Сокет не готов — ордер уходит по REST; ушёл, а ответа нет — ордер ищется по своему id (Gate — `t-…`,
+  KuCoin — `clientOid`), вслепую не повторяется.
 - У MEXC режим позиций — раздельный (лонг и шорт отдельно): закрытие идёт reduceOnly-ордером со сторонами «закрыть
   лонг/шорт», позиции в боте складываются со знаком.
 - Режим позиций — односторонний (One-way / net), маржа — кросс. Режим хеджирования на бирже включать не нужно.

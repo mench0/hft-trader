@@ -43,11 +43,11 @@ public final class ExchangeCatalog {
                 "wss://ws.okx.com:8443/ws/v5/public", "https://www.okx.com", "wss://wspap.okx.com:8443/ws/v5/public"));
         add(new ExchangeInfo(Exchange.MEXC.id(), "MEXC", Kind.CEX_TIER3, Adapter.LIVE_UNVERIFIED,
                 "https://api.mexc.com", 5, 0.00, 0.05, "USDT", "BTCUSDT",
-                "Спот, 0% maker. Стакан, исполнения и баланс по WebSocket (protobuf; стакан — до 30 символов на соединение) + REST-запас; ордера только REST (WS-ордеров у MEXC нет). Не держите большую часть капитала. Фьючерсы (market=perp): MEXC Contract, стакан по WS, ордера REST — доступ к ним через API MEXC выдаёт отдельно.",
+                "Спот, 0% maker. Стакан, исполнения и баланс по WebSocket (protobuf; стакан — до 30 символов на соединение) + REST-запас; ордера только REST (WS-ордеров у MEXC нет). Не держите большую часть капитала. Фьючерсы (market=perp): MEXC Contract — стакан, исполнения, позиции и баланс по WS; ордера REST (WS-ордеров нет), доступ к ним через API MEXC выдаёт отдельно.",
                 "wss://wbs-api.mexc.com/ws", null, null));   // тестовой сети нет
         add(new ExchangeInfo(Exchange.GATE.id(), "Gate", Kind.CEX_TIER3, Adapter.LIVE_UNVERIFIED,
                 "https://api.gateio.ws", 5, 0.20, 0.20, "USDT", "BTCUSDT",
-                "Спот: стакан, ордера (WS API), исполнения и балансы по WebSocket, REST — запасной. Комиссия указана по умолчанию, проверьте тариф. Фьючерсы (market=perp): USDT-фьючерсы, стакан по WS, ордера REST.",
+                "Спот: стакан, ордера (WS API), исполнения и балансы по WebSocket, REST — запасной. Комиссия указана по умолчанию, проверьте тариф. Фьючерсы (market=perp): USDT-фьючерсы — стакан, ордера (WS API), исполнения, позиции и баланс по WS.",
                 "wss://api.gateio.ws/ws/v4/", "https://api-testnet.gateapi.io", "wss://ws-testnet.gate.com/v4/ws/spot"));
         add(new ExchangeInfo(Exchange.HYPERLIQUID.id(), "Hyperliquid", Kind.PERP_DEX, Adapter.LIVE_UNVERIFIED,
                 "https://api.hyperliquid.xyz", 5, 0.015, 0.045, "USDC", "BTCUSDC (монета BTC, перп)",
@@ -55,7 +55,7 @@ public final class ExchangeCatalog {
                 "wss://api.hyperliquid.xyz/ws", "https://api.hyperliquid-testnet.xyz", "wss://api.hyperliquid-testnet.xyz/ws"));
         add(new ExchangeInfo(Exchange.KUCOIN.id(), "KuCoin", Kind.CEX_TIER1, Adapter.LIVE_UNVERIFIED,
                 "https://api.kucoin.com", 10, 0.10, 0.10, "USDT", "BTCUSDT",
-                "Спот: стакан по WebSocket (level2Depth50, адрес и токен через bullet-public) + REST-запас; ордера и отмены по WS API (wsapi.kucoin.com), исполнения и балансы — приватный поток (bullet-private). Нужен KUCOIN_PASSPHRASE; для UTA-счёта — KUCOIN_UTA=true (uta.order/uta.cancel). Лимиты — пулы весов (публичный 2000/30 с, спот 4000/30 с). Фьючерсы (market=perp): KuCoin Futures (XBTUSDTM), стакан по WS, ордера REST."));
+                "Спот: стакан по WebSocket (level2Depth50, адрес и токен через bullet-public) + REST-запас; ордера и отмены по WS API (wsapi.kucoin.com), исполнения и балансы — приватный поток (bullet-private). Нужен KUCOIN_PASSPHRASE; для UTA-счёта — KUCOIN_UTA=true (uta.order/uta.cancel). Лимиты — пулы весов (публичный 2000/30 с, спот 4000/30 с). Фьючерсы (market=perp): KuCoin Futures (XBTUSDTM) — стакан, ордера (Pro WS API), исполнения, позиции и баланс по WS."));
         add(new ExchangeInfo(Exchange.ASTER.id(), "Aster", Kind.ORDERBOOK_DEX, Adapter.LIVE_UNVERIFIED,
                 "https://sapi.asterdex.com", 5, 0.10, 0.10, "USDT", "BTCUSDT",
                 "Спот, API v3 в формате Binance: стакан (depth20@100ms), исполнения и баланс (listenKey) по WebSocket + REST-запас; ордера через REST (WS-ордеров нет) с подписью EIP-712 кошельком-агентом. ASTER_API_KEY = адрес основного кошелька, ASTER_API_SECRET = ключ API-кошелька (signer) без права вывода. Комиссии указаны по умолчанию, проверьте тариф. Фьючерсы (market=perp): Aster Futures (/fapi/v3, формат Binance USDⓈ-M), исполнения и позиции по listenKey.",

@@ -352,9 +352,9 @@ curl -X POST "localhost:8080/exchange/params?exchange=bybit&maxPositionQuote=50&
 | Bybit | linear | v5 `category=linear`: стакан `/v5/public/linear`, ордера `/v5/trade`, позиции — поток `position` |
 | OKX | SWAP | инструменты `BTC-USDT-SWAP`, `tdMode=cross`, объём в контрактах (`ctVal`) пересчитывается в монеты; позиции — канал `positions` |
 | Hyperliquid | только перпы | то же, что и раньше; плечо — действие `updateLeverage`, позиции — `clearinghouseState` |
-| Gate | USDT-фьючерсы | REST `/api/v4/futures/usdt`, контракт `BTC_USDT`, объём в контрактах (`quanto_multiplier`); стакан — WS `futures.order_book` |
-| KuCoin | Futures | REST `api-futures.kucoin.com`, символ `XBTUSDTM`, объём в лотах (`multiplier`); стакан — WS `/contractMarket/level2Depth50` |
-| MEXC | Contract | REST `contract.mexc.com`, `BTC_USDT`, объём в контрактах (`contractSize`); стакан — WS `sub.depth.full`. Ордера через API MEXC выдаёт по отдельному доступу |
+| Gate | USDT-фьючерсы | контракт `BTC_USDT`, объём в контрактах (`quanto_multiplier`); ордера — WS API `futures.order_place`, исполнения/позиции/баланс — WS `futures.*`; стакан — WS `futures.order_book` |
+| KuCoin | Futures | символ `XBTUSDTM`, объём в лотах (`multiplier`); ордера — Pro WS API `futures.order`, исполнения/позиции/кошелёк — приватный WS фьючерсов; стакан — WS `/contractMarket/level2Depth50` |
+| MEXC | Contract | `BTC_USDT`, объём в контрактах (`contractSize`); ордера — REST (WS-ордеров нет), результаты/позиции/баланс — WS `push.personal.*`; стакан — WS `sub.depth.full`. Ордера через API MEXC выдаёт по отдельному доступу |
 | Aster | Futures | формат Binance USDⓈ-M: REST `/fapi/v3` (подпись EIP-712, как у спота), стакан `fstream.asterdex.com`, исполнения/позиции — listenKey |
 | Uniswap V2 | нет | AMM-пулы обмена: только `market=spot`, `market=perp` отклоняется |
 
@@ -831,6 +831,10 @@ KuCoin в режиме UTA торгует через `uta.order` / `uta.cancel` 
 Форматы публичных API записаны по памяти и проверены только на фейковом сервере; ошибка одной биржи видна в статусе и не мешает остальным.
 
 ## История изменений
+
+- **2026-10:** фьючерсы Gate и KuCoin — ордера и отмены по WebSocket (Gate WS API, KuCoin Pro WS API), исполнения,
+  позиции и баланс — из приватных WS-потоков; MEXC Contract — результаты ордеров, позиции и баланс по WS (ордера — REST,
+  WS-ордеров у биржи нет). REST везде остаётся запасным каналом.
 
 - **2026-10:** фьючерсы для всех бирж, где они бывают: добавлены Gate (USDT-фьючерсы), KuCoin Futures, MEXC Contract
   и Aster Futures — клиенты, стаканы (WS + REST), funding, позиции, плечо. В enum `Exchange` — какие рынки есть у биржи
