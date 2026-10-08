@@ -72,6 +72,24 @@ public final class OrderService {
      */
     public boolean feesInPrice() { return rest instanceof com.hft.paper.PaperOrderApi; }
 
+    /**
+     * Издержки сделки на сумму notional для учёта результата: комиссия тейкера (если её нет в цене
+     * исполнения — то есть на бирже) плюс фиксированная стоимость сделки tradeCostQuote (газ и т.п.).
+     */
+    public double costOf(double notional) {
+        var p = settings.get();
+        return (feesInPrice() ? 0 : notional * p.takerFeePercent() / 100.0) + p.tradeCostQuote();
+    }
+
+    /**
+     * Издержки полного круга (вход + выход) в процентах от суммы сделки — для порогов входа стратегий.
+     * Считается всегда, и в бумаге тоже: решение о входе должно быть одинаковым в обоих режимах.
+     */
+    public double roundTripCostPercent(double notional) {
+        var p = settings.get();
+        return 2 * p.takerFeePercent() + (notional > 0 ? 2 * p.tradeCostQuote() / notional * 100.0 : 0);
+    }
+
     /** Торгуются перпы (лонг и шорт), а не спот. */
     public boolean isPerp() { return perp; }
 
@@ -305,10 +323,20 @@ public final class OrderService {
      */
     private void applyToBalances(OrderResult r) {
         String[] assets = BalanceStore.splitSymbol(r.symbol());
-        if (perp) {                                    // перпы: меняется позиция, в баланс идёт только реализованный результат
+        // комиссия на бирже не входит в цену исполнения: списываем её сразу (по ставке тейкера — с запасом),
+        // точное значение придёт из потока биржи или сверкой; в бумаге она уже в цене
+        double feeRate = feesInPrice() ? 0 : settings.get().takerFeePercent() / 100.0;
+        double fixed = settings.get().tradeCostQuote();
+        if (fixed > 0) balances.adjust(assets[1], -fixed);   // газ и прочие фиксированные издержки
+        if (perp) {                                    // перпы: меняется позиция, в баланс идёт реализованный результат минус комиссия
             double pnl = positions.apply(r.symbol(), r.side() == Side.BUY, r.executedQty(), r.avgPrice());
-            if (pnl != 0) balances.adjust(assets[1], pnl);
+            double fee = r.executedQty() * r.avgPrice() * feeRate;
+            if (pnl != 0 || fee != 0) balances.adjust(assets[1], pnl - fee);
             return;
+        }
+        if (feeRate > 0) {                             // спот: биржа берёт комиссию с полученной валюты
+            if (r.side() == Side.BUY) balances.adjust(assets[0], -r.executedQty() * feeRate);
+            else balances.adjust(assets[1], -r.executedQty() * r.avgPrice() * feeRate);
         }
         double quoteAmount = r.executedQty() * r.avgPrice();
         if (r.side() == Side.BUY) {

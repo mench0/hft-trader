@@ -48,6 +48,7 @@ public record TradingParams(
         double maxSlippagePercent,
         double feeReservePercent,
         double takerFeePercent,
+        double tradeCostQuote,
         int maxOrdersPerMinute,
         long maxDataAgeMs,
         // ---- стратегия mean-reversion ----
@@ -130,6 +131,8 @@ public record TradingParams(
             num("maxSlippagePercent", 0.3, 0, 100, "Предел ожидаемого проскальзывания рыночного ордера по стакану, %"),
             num("feeReservePercent", 0.2, 0, 50, "Резерв под комиссию при ордере «на весь баланс», %"),
             num("takerFeePercent", 0.1, 0, 5, "Комиссия тейкера для расчёта прибыли, % (по умолчанию — из каталога биржи)"),
+            num("tradeCostQuote", 0, 0, 1e6, "Фиксированная стоимость одной сделки в котируемой валюте помимо комиссии (Uniswap — газ свопа): "
+                    + "списывается из баланса, вычитается из результата и учитывается в порогах входа стратегий"),
             num("maxOrdersPerMinute", 30, 1, 100_000, "Лимит ордеров в минуту (защита от цикла в стратегии)"),
             num("maxDataAgeMs", 5000, 50, 600_000, "Стакан старше — ордер отклоняется, мс"),
             // mean reversion

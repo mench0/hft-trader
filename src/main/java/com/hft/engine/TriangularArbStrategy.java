@@ -191,7 +191,9 @@ public final class TriangularArbStrategy extends Strategy {
         long now = System.currentTimeMillis();
         for (Cycle c : touched) {
             Quote q = evaluate(c, p.takerFeePercent(), p.triMaxBookAgeMs());
-            if (q == null || q.profitPct() < p.triMinProfitPercent()) continue;
+            // фиксированные издержки трёх сделок (газ и т.п.) — в процентах от размера круга
+            double fixedPct = p.triOrderQuote() > 0 ? 3 * p.tradeCostQuote() / p.triOrderQuote() * 100.0 : 0;
+            if (q == null || q.profitPct() - fixedPct < p.triMinProfitPercent()) continue;
             Long last = lastRun.get(c.name());
             if (last != null && now - last < p.triCooldownMs()) continue;
             double start = Math.min(p.triOrderQuote(), q.maxStart() * p.triDepthUsage());

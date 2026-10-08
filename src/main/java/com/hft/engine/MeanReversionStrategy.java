@@ -97,7 +97,7 @@ public final class MeanReversionStrategy extends Strategy {
 
         TradingParams p = settings.get();
         if (pos == null) {
-            checkEntry(symbol, z, book, p);
+            checkEntry(symbol, z, book, window, p);
         } else {
             checkExit(symbol, z, tick.price(), pos, p);
         }
@@ -107,7 +107,7 @@ public final class MeanReversionStrategy extends Strategy {
      * Вход: лонг при перепроданности (z ≤ −entryZ, перевес бидов), на перпах ещё и шорт при перекупленности
      * (z ≥ entryZ, перевес асков). Плюс узкий спред, свежий стакан и данные в реальном времени.
      */
-    private void checkEntry(String symbol, double z, OrderBook book, TradingParams p) {
+    private void checkEntry(String symbol, double z, OrderBook book, PriceWindow window, TradingParams p) {
         boolean isLong = z <= -p.entryZ();
         boolean isShort = !isLong && orders.isPerp() && z >= p.entryZ();   // шорт — только на фьючерсах
         if (!isLong && !isShort) return;
@@ -125,6 +125,12 @@ public final class MeanReversionStrategy extends Strategy {
 
         double price = isLong ? top[2] : top[0];
         double qty = p.orderQuote() / price;
+
+        // Ожидаемый ход до выхода: от |z| до exitZ сигм. Он должен окупать комиссии входа и выхода
+        // (2 × takerFeePercent), спред, который платим при входе по рынку, и фиксированные издержки
+        double expectedPct = (Math.abs(z) - p.exitZ()) * window.stdDev() / price * 100.0;
+        double costPct = orders.roundTripCostPercent(p.orderQuote()) + spread;
+        if (!(expectedPct > costPct)) return;
 
         log.info("Сигнал входа {} {}: z={} imbalance={} spread={}%", isLong ? "в лонг" : "в шорт",
                 symbol, String.format("%.2f", z),
@@ -168,8 +174,8 @@ public final class MeanReversionStrategy extends Strategy {
         else positions.remove(symbol);
         // комиссия тейкера на обеих ногах — в риск идёт чистый результат, по нему считается дневной лимит убытка
         // в бумаге комиссия уже в цене исполнения — не вычитаем второй раз
-        double fee = orders.feesInPrice() ? 0
-                : settings.get().takerFeePercent() / 100.0 * (result.avgPrice() + pos.entryPrice()) * result.executedQty();
+        // комиссии входа и выхода (в бумаге — уже в ценах) и фиксированные издержки двух сделок
+        double fee = orders.costOf(pos.entryPrice() * result.executedQty()) + orders.costOf(result.avgPrice() * result.executedQty());
         double realized = (pos.isLong() ? 1 : -1) * (result.avgPrice() - pos.entryPrice()) * result.executedQty() - fee;
         orders.risk().recordPnl(realized);
         log.info("Позиция закрыта: {} {} @ {}, результат {} USDT",

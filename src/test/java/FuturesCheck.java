@@ -181,6 +181,31 @@ public class FuturesCheck {
     cheap.stop();
     ck("exit diff < entry diff enforced", throwsIae(() -> GlobalParams.DEFAULTS.with(Map.of("fundingArbExitDiffPercent", "0.05"))));
 
+ // --- комиссии в боевом режиме: клиент отдаёт цену без комиссии, OrderService списывает её сразу
+    var lm = new MarketDataStore(20, 100); lm.register("BTCUSDT");
+    lm.book("BTCUSDT").applySnapshot(new double[]{99}, new double[]{100}, 1, new double[]{100}, new double[]{100}, 1, 1, System.currentTimeMillis());
+    com.hft.rest.ExchangeOrderApi fake = new com.hft.rest.ExchangeOrderApi() {
+      OrderResult fill(String s, Side side, double q, double px){ return new OrderResult(1, "c", s, side, "FILLED", q, q, px, 0); }
+      public OrderResult buyLimit(String s,double q,double p,com.hft.model.OrderEnums.TimeInForce t){ return fill(s,Side.BUY,q,p); }
+      public OrderResult sellLimit(String s,double q,double p,com.hft.model.OrderEnums.TimeInForce t){ return fill(s,Side.SELL,q,p); }
+      public OrderResult buyMarket(String s,double q){ return fill(s,Side.BUY,q,100); }
+      public OrderResult sellMarket(String s,double q){ return fill(s,Side.SELL,q,100); }
+      public OrderResult buyMarketForQuote(String s,double q){ return fill(s,Side.BUY,q/100,100); }
+      public void cancelOrder(String s,long id){} public int cancelAll(String s){ return 0; }
+    };
+    var lts = new TradingSettings(TradingParams.DEFAULTS.with(Map.of("tradingEnabled","true","takerFeePercent","0.1","tradeCostQuote","0.5","maxSlippagePercent","5","market","spot")));
+    var lb = new BalanceStore(); lb.set("USDT", 1000, 0);
+    var lf = new SymbolFilters(); ExchangeSupport.putDefaultFilter(lf, "BTCUSDT");
+    var los = new OrderService(fake, lm, lb, lf, new RiskManager(lts, lm, "x"), lts);
+    ck("live: fees not in price", !los.feesInPrice());
+    los.buyMarket("BTCUSDT", 0.5);
+    ck("live spot buy: fee from base, fixed cost from quote", near(lb.free("BTC"), 0.5 * 0.999) && near(lb.free("USDT"), 1000 - 50 - 0.5));
+    los.sellMarket("BTCUSDT", 0.4);
+    ck("live spot sell: fee from quote", near(lb.free("USDT"), 1000 - 50 - 0.5 + 40 * 0.999 - 0.5));
+    ck("costOf live", near(los.costOf(100), 0.1 + 0.5));
+    ck("round trip cost %", near(los.roundTripCostPercent(100), 2 * 0.1 + 2 * 0.5 / 100 * 100));
+    ck("costOf paper = fixed only", near(new OrderService(new PaperOrderApi(lm, lb, 0, 0.1), lm, lb, lf, new RiskManager(lts, lm, "x"), lts).costOf(100), 0.5));
+
     System.out.println("FuturesCheck: pass=" + pass + " fail=" + fail);
     if (fail > 0) System.exit(1);
   }

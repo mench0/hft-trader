@@ -79,6 +79,8 @@ public final class StatArbStrategy extends Strategy {
         int n, head;
         /** Последние z-score спреда, β и корреляция доходностей (читает админка). */
         volatile double z = Double.NaN, beta = Double.NaN, corr = Double.NaN;
+        /** σ спреда ln A − β·ln B (для оценки ожидаемого хода). */
+        volatile double sd = Double.NaN;
         Pair(String a, String b, int window) { this.a = a; this.b = b; la = new double[window]; lb = new double[window]; }
         /** Имя пары A/B. */
         String name() { return a + "/" + b; }
@@ -117,6 +119,7 @@ public final class StatArbStrategy extends Strategy {
             }
             double cva = saa - sra * sra / m, cvb = sbb - srb * srb / m, cab = sab - sra * srb / m;
             corr = cva > 0 && cvb > 0 ? cab / Math.sqrt(cva * cvb) : 0;
+            this.sd = sd;
             beta = bt;
             z = (la[last] - bt * lb[last] - ms) / sd;
             return true;
@@ -235,6 +238,11 @@ public final class StatArbStrategy extends Strategy {
         if (pos == null) {
             if (!realtime.getAsBoolean() || pr.corr < p.statArbMinCorrelation() || Math.abs(z) < p.statArbEntryZ()) return;
             if (Math.abs(z) >= p.statArbStopZ()) return;                  // уже за стопом — не входим
+            // ожидаемый возврат спреда (|z| − exit)·σ — доля от суммы ноги; должен окупать комиссии всех сделок:
+            // на споте одна нога (2 сделки), на перпах две (4 сделки)
+            double expectedPct = (Math.abs(z) - p.statArbExitZ()) * pr.sd * 100.0;
+            double costPct = orders.roundTripCostPercent(p.statArbOrderQuote()) * (orders.isPerp() ? 2 : 1);
+            if (!(expectedPct > costPct)) return;
             boolean longA = z < 0;
             String sym = longA ? pr.a : pr.b;
             String hedge = orders.isPerp() ? (longA ? pr.b : pr.a) : null;     // на перпах — шорт дорогой ноги
@@ -293,12 +301,12 @@ public final class StatArbStrategy extends Strategy {
 
     /** Закрыть позицию пары (лонг — продажей, шорт-хедж — покупкой, reduceOnly); результат после комиссий — в дневной PnL. */
     private void close(String pairName, Position pos) {
-        double fp = orders.feesInPrice() ? 0 : settings.get().takerFeePercent() / 100.0;   // в бумаге комиссия уже в цене
         double hedgePnl = 0;
         if (pos.hedgeSymbol() != null && pos.hedgeQty() > 0) {
             OrderResult h = orders.reduceMarket(pos.hedgeSymbol(), com.hft.model.OrderEnums.Side.BUY, pos.hedgeQty());
             if (h.executedQty() > 0) {
-                hedgePnl = (pos.hedgeEntry() - h.avgPrice()) * h.executedQty() - fp * (h.avgPrice() + pos.hedgeEntry()) * h.executedQty();
+                hedgePnl = (pos.hedgeEntry() - h.avgPrice()) * h.executedQty()
+                        - orders.costOf(pos.hedgeEntry() * h.executedQty()) - orders.costOf(h.avgPrice() * h.executedQty());
                 double hl = pos.hedgeQty() - h.executedQty();
                 pos = new Position(pos.symbol(), pos.longA(), pos.qty(), pos.entryPrice(), pos.openedAtMs(),
                         hl > pos.hedgeQty() * 1e-6 ? pos.hedgeSymbol() : null, Math.max(0, hl), pos.hedgeEntry());
@@ -316,7 +324,7 @@ public final class StatArbStrategy extends Strategy {
             if (hedgePnl != 0) { orders.risk().recordPnl(hedgePnl); totalPnl += hedgePnl; positions.put(pairName, pos); }
             return;
         }
-        double fee = fp * (r.avgPrice() + pos.entryPrice()) * r.executedQty();
+        double fee = orders.costOf(pos.entryPrice() * r.executedQty()) + orders.costOf(r.avgPrice() * r.executedQty());
         double pnl = (r.avgPrice() - pos.entryPrice()) * r.executedQty() - fee + hedgePnl;
         orders.risk().recordPnl(pnl);
         trades.incrementAndGet();
