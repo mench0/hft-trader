@@ -3,6 +3,7 @@ package com.hft.exchange.binance;
 import com.hft.config.TradingSettings;
 import com.hft.config.Credentials;
 import com.hft.config.ExchangeConfig;
+import com.hft.exchange.Exchange;
 import com.hft.exchange.generic.ExchangeSupport;
 import com.hft.exchange.catalog.ExchangeInfo;
 import com.hft.exchange.catalog.ExchangeCatalog;
@@ -89,7 +90,7 @@ public final class BinanceExchange implements ExchangeGateway, com.hft.exchange.
         log.info("[binance] режим {}", live ? "LIVE — ордера пойдут на биржу" : "PAPER (для LIVE нужны ключи и live=true)");
 
         this.dataHandler = new MarketDataHandler(market);
-        this.strategy = new StrategySet(market, orderService, "binance", settings);
+        this.strategy = new StrategySet(market, orderService, Exchange.BINANCE.id(), settings);
         this.pipeline = new TickPipeline(dataHandler, strategy.handlers());
         this.feed = new BinanceMarketDataFeed(config, market, pipeline);
 
@@ -101,7 +102,7 @@ public final class BinanceExchange implements ExchangeGateway, com.hft.exchange.
 
     /** Идентификатор биржи. */
     @Override
-    public String id() { return "binance"; }
+    public String id() { return Exchange.BINANCE.id(); }
 
     /** Загрузить правила и балансы, запустить конвейер и фид. */
     @Override

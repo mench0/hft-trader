@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.hft.config.Credentials;
 import com.hft.config.ExchangeConfig;
+import com.hft.exchange.Exchange;
 import com.hft.model.OrderEnums.Side;
 import com.hft.model.OrderEnums.Type;
 import com.hft.model.OrderResult;
@@ -69,7 +70,7 @@ public final class BinanceFuturesClient extends SignedCexClient {
      * @param filters правила символов
      */
     public BinanceFuturesClient(ExchangeConfig config, Credentials credentials, SymbolFilters filters) {
-        super("binance", config, credentials, filters);
+        super(Exchange.BINANCE.id(), config, credentials, filters);
         this.signer = credentials.isPresent() ? new Signer(credentials.apiSecret()) : null;
     }
 
@@ -272,10 +273,10 @@ public final class BinanceFuturesClient extends SignedCexClient {
                 : config.testnet() ? "wss://testnet.binancefuture.com/ws-fapi/v1" : "wss://ws-fapi.binance.com/ws-fapi/v1";
         String base = userStreamBase != null ? userStreamBase
                 : config.testnet() ? "wss://fstream.binancefuture.com/ws/" : "wss://fstream.binance.com/ws/";
-        WsRpcChannel ch = new WsRpcChannel("binance", new Trade(api));
+        WsRpcChannel ch = new WsRpcChannel(Exchange.BINANCE.id(), new Trade(api));
         wsChannel = ch;
         ch.start();
-        UserStream us = new UserStream("binance", new UserStream.Api() {
+        UserStream us = new UserStream(Exchange.BINANCE.id(), new UserStream.Api() {
             @Override public String newListenKey() throws Exception { return signedKey("POST", null); }
             @Override public void keepAlive(String key) throws Exception { signedKey("PUT", key); }
             @Override public String url(String key) { return base + key; }

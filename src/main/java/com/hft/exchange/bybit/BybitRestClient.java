@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.hft.config.Credentials;
 import com.hft.config.ExchangeConfig;
+import com.hft.exchange.Exchange;
 import com.hft.model.OrderEnums.Side;
 import com.hft.model.OrderEnums.TimeInForce;
 import com.hft.model.OrderEnums.Type;
@@ -386,8 +387,8 @@ public final class BybitRestClient implements ExchangeOrderApi {
         w.balances = store;
         w.positions = positionStore;
         ws = w;
-        privateChannel = new WsRpcChannel("bybit", w.priv).onEvent(w::onEvent);
-        tradeChannel = new WsRpcChannel("bybit", w.trade);
+        privateChannel = new WsRpcChannel(Exchange.BYBIT.id(), w.priv).onEvent(w::onEvent);
+        tradeChannel = new WsRpcChannel(Exchange.BYBIT.id(), w.trade);
         privateChannel.start();
         tradeChannel.start();
         log.info("[bybit] WebSocket: торговый {} и приватный {}", w.trade.url(), w.priv.url());
@@ -501,7 +502,7 @@ public final class BybitRestClient implements ExchangeOrderApi {
     }
 
     /** Общий бюджет запросов Bybit: X-Bapi-Limit-Status / Reset-Timestamp подтягивают счёт к счёту биржи. */
-    private final RateBudget budget = RateBudget.of("bybit");
+    private final RateBudget budget = RateBudget.of(Exchange.BYBIT.id());
 
     /** Отправить с учётом общего бюджета лимитов; retCode ≠ 0 — ExchangeException. */
     private JsonNode send(HttpRequest req) throws Exception {

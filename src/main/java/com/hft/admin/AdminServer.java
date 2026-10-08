@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.hft.config.AppConfig;
 import com.hft.control.BotController;
+import com.hft.exchange.Exchange;
 import com.hft.exchange.ExchangeGateway;
 import com.hft.metrics.PrometheusExporter;
 import com.hft.store.OrderBook;
@@ -650,7 +651,7 @@ public final class AdminServer {
     private List<String> knownEnvKeys() {
         List<String> keys = new java.util.ArrayList<>(List.of("ADMIN_TOKEN", "ADMIN_PORT", "ADMIN_ENABLED", "STATE_DB"));
         for (String id : controller.supportedExchanges()) {
-            String p = id.toUpperCase();
+            String p = Exchange.of(id).envPrefix();
             keys.add(p + "_API_KEY");
             keys.add(p + "_API_SECRET");
             keys.add(p + "_TESTNET");

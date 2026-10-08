@@ -7,6 +7,7 @@ import com.hft.config.TradingParams;
 import com.hft.config.TradingSettings;
 import com.hft.discovery.DiscoveryService;
 import com.hft.discovery.MeanReversionBacktest;
+import com.hft.exchange.Exchange;
 import com.hft.exchange.ExchangeFactory;
 import com.hft.exchange.ExchangeGateway;
 import com.hft.exchange.catalog.ExchangeCatalog;
@@ -232,7 +233,7 @@ public final class BotController {
      */
     static Map<String, String> envMode(String exchangeId) {
         Map<String, String> out = new java.util.LinkedHashMap<>();
-        String prefix = exchangeId.toUpperCase(java.util.Locale.ROOT);
+        String prefix = Exchange.of(exchangeId).envPrefix();
         for (String k : new String[]{"testnet", "live"}) {
             String v = com.hft.config.Env.get(prefix + "_" + k.toUpperCase(java.util.Locale.ROOT));
             if (v == null) continue;
@@ -270,7 +271,7 @@ public final class BotController {
             throw new IllegalArgumentException("Биржа " + exchangeId + " в боте торгует только фьючерсами: задайте market=perp");
         if (p.testnet() && !info.hasTestnet() && p.restUrl().isBlank())
             throw new IllegalArgumentException("У биржи " + exchangeId + " нет тестовой сети: задайте testnet=false"
-                    + (exchangeId.equals("uniswapv2") ? " или restUrl тестовой сети (RPC Sepolia и т.п.)" : ""));
+                    + (Exchange.UNISWAPV2.is(exchangeId) ? " или restUrl тестовой сети (RPC Sepolia и т.п.)" : ""));
     }
 
     /** Выбранные биржи (у них и только у них есть параметры). */

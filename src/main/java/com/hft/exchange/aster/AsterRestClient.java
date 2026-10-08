@@ -6,6 +6,7 @@ import com.hft.config.ExchangeConfig;
 import com.hft.crypto.EvmCrypto;
 import com.hft.crypto.Hex;
 import com.hft.crypto.Web3jCrypto;
+import com.hft.exchange.Exchange;
 import com.hft.model.OrderEnums.Side;
 import com.hft.model.OrderEnums.Type;
 import com.hft.model.OrderResult;
@@ -69,7 +70,7 @@ public final class AsterRestClient extends SignedCexClient {
      * @param crypto подпись (в тестах — своя)
      */
     public AsterRestClient(ExchangeConfig config, Credentials credentials, SymbolFilters filters, EvmCrypto crypto) {
-        super("aster", config, credentials, filters);
+        super(Exchange.ASTER.id(), config, credentials, filters);
         this.crypto = crypto;
     }
 
@@ -283,7 +284,7 @@ public final class AsterRestClient extends SignedCexClient {
         streamBalances = store;
         String base = userStreamBase != null ? userStreamBase
                 : config.testnet() ? "wss://sstream.asterdex-testnet.com/ws/" : "wss://sstream.asterdex.com/ws/";
-        UserStream us = new UserStream("aster", new UserStream.Api() {
+        UserStream us = new UserStream(Exchange.ASTER.id(), new UserStream.Api() {
             @Override public String newListenKey() throws Exception { return signed("POST", "/listenKey", params(), false).path("listenKey").asText(); }
             @Override public void keepAlive(String key) throws Exception { var p = params(); p.put("listenKey", key); signed("PUT", "/listenKey", p, false); }
             @Override public String url(String key) { return base + key; }

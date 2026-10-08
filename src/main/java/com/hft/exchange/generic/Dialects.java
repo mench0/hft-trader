@@ -2,6 +2,7 @@ package com.hft.exchange.generic;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.hft.exchange.Exchange;
 import com.hft.exchange.generic.BookDialect.ParsedBook;
 import com.hft.store.BalanceStore;
 
@@ -35,23 +36,23 @@ public final class Dialects {
     /** Диалект биржи с её параметрами (для Uniswap — пулы из uniPools). */
     public static BookDialect forExchange(String id, com.hft.config.ExchangeConfig cfg) {
         if (cfg.params().isPerp()) {
-            if (id.equals("binance")) return new Aster("/fapi/v1/depth");
-            if (id.equals("okx")) return new Okx(true, cfg.restUrl());
+            if (Exchange.BINANCE.is(id)) return new Aster("/fapi/v1/depth");
+            if (Exchange.OKX.is(id)) return new Okx(true, cfg.restUrl());
         }
-        return id.equals("uniswapv2") ? new UniswapV2(cfg.params().uniPools()) : forExchange(id);
+        return Exchange.UNISWAPV2.is(id) ? new UniswapV2(cfg.params().uniPools()) : forExchange(id);
     }
 
     /** Диалект REST-стакана биржи (без параметров: для Uniswap пулы пусты). */
     public static BookDialect forExchange(String id) {
-        return switch (id) {
-            case "okx" -> new Okx(false, "");
-            case "mexc" -> new Mexc();
-            case "gate" -> new Gate();
-            case "hyperliquid" -> new Hyperliquid();
-            case "uniswapv2" -> new UniswapV2("");
-            case "kucoin" -> new Kucoin();
-            case "aster" -> new Aster("/api/v3/depth");
-            default -> throw new IllegalArgumentException("Нет диалекта для биржи: " + id);
+        return switch (Exchange.find(id).orElse(null)) {
+            case OKX -> new Okx(false, "");
+            case MEXC -> new Mexc();
+            case GATE -> new Gate();
+            case HYPERLIQUID -> new Hyperliquid();
+            case UNISWAPV2 -> new UniswapV2("");
+            case KUCOIN -> new Kucoin();
+            case ASTER -> new Aster("/api/v3/depth");
+            case null, default -> throw new IllegalArgumentException("Нет диалекта для биржи: " + id);
         };
     }
 

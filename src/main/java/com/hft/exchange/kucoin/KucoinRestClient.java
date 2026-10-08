@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.hft.config.Credentials;
 import com.hft.config.ExchangeConfig;
+import com.hft.exchange.Exchange;
 import com.hft.model.OrderEnums.Side;
 import com.hft.model.OrderEnums.Type;
 import com.hft.model.OrderResult;
@@ -52,7 +53,7 @@ public final class KucoinRestClient extends SignedCexClient {
      * @param filters правила символов
      */
     public KucoinRestClient(ExchangeConfig config, Credentials credentials, SymbolFilters filters) {
-        super("kucoin", config, credentials, filters);
+        super(Exchange.KUCOIN.id(), config, credentials, filters);
         String p = com.hft.config.Env.get("KUCOIN_PASSPHRASE");
         if (credentials.isPresent() && (p == null || p.isBlank())) {
             throw new IllegalStateException("KuCoin требует KUCOIN_PASSPHRASE (фраза, заданная при создании API-ключа)");
@@ -196,8 +197,8 @@ public final class KucoinRestClient extends SignedCexClient {
                 credentials.apiKey(), credentials.apiSecret(), passphrase, streamed, this::registerId);
         w.balances = store;
         ws = w;
-        privateChannel = new WsRpcChannel("kucoin", w.priv).onEvent(w::onEvent);
-        wsChannel = new WsRpcChannel("kucoin", w.trade);
+        privateChannel = new WsRpcChannel(Exchange.KUCOIN.id(), w.priv).onEvent(w::onEvent);
+        wsChannel = new WsRpcChannel(Exchange.KUCOIN.id(), w.trade);
         privateChannel.start();
         wsChannel.start();
     }

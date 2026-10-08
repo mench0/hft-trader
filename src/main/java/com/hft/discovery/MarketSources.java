@@ -1,6 +1,7 @@
 package com.hft.discovery;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.hft.exchange.Exchange;
 import com.hft.exchange.catalog.ExchangeCatalog;
 import com.hft.exchange.catalog.ExchangeInfo;
 
@@ -31,15 +32,15 @@ public final class MarketSources {
 
     /** Биржи, для которых есть источник сводок. */
     public static List<String> supported() {
-        return List.of("binance", "bybit", "okx", "gate", "mexc", "kucoin", "aster", "hyperliquid");
+        return List.of(Exchange.BINANCE.id(), Exchange.BYBIT.id(), Exchange.OKX.id(), Exchange.GATE.id(), Exchange.MEXC.id(), Exchange.KUCOIN.id(), Exchange.ASTER.id(), Exchange.HYPERLIQUID.id());
     }
 
     /** Источник сводок биржи по адресу из каталога; пусто — источника нет. */
     public static Optional<MarketSource> create(String id) {
-        String base = switch (id) {
-            case "binance" -> "https://api.binance.com";
-            case "bybit" -> "https://api.bybit.com";
-            default -> ExchangeCatalog.find(id).map(ExchangeInfo::restUrl).orElse("");
+        String base = switch (Exchange.find(id).orElse(null)) {
+            case BINANCE -> "https://api.binance.com";
+            case BYBIT -> "https://api.bybit.com";
+            case null, default -> ExchangeCatalog.find(id).map(ExchangeInfo::restUrl).orElse("");
         };
         return create(id, base);
     }
@@ -49,15 +50,15 @@ public final class MarketSources {
         double rps = ExchangeCatalog.find(id).map(i -> Math.max(0.5, Math.min(2.0, i.maxRequestsPerSec() / 2))).orElse(1.0);
         Http http = new Http(id, rps);
         String b = baseUrl.replaceAll("/+$", "");
-        return Optional.ofNullable(switch (id) {
-            case "binance" -> new BinanceLike(id, b, http, "/api/v3/ticker/24hr", "/api/v3/klines");
-            case "mexc", "aster" -> new BinanceLike(id, b, http, "/api/v3/ticker/24hr", "/api/v3/klines");
-            case "kucoin" -> new Kucoin(b, http);
-            case "bybit" -> new Bybit(b, http);
-            case "okx" -> new Okx(b, http);
-            case "gate" -> new Gate(b, http);
-            case "hyperliquid" -> new Hyperliquid(b, http);
-            default -> null;
+        return Optional.ofNullable(switch (Exchange.find(id).orElse(null)) {
+            case BINANCE -> new BinanceLike(id, b, http, "/api/v3/ticker/24hr", "/api/v3/klines");
+            case MEXC, ASTER -> new BinanceLike(id, b, http, "/api/v3/ticker/24hr", "/api/v3/klines");
+            case KUCOIN -> new Kucoin(b, http);
+            case BYBIT -> new Bybit(b, http);
+            case OKX -> new Okx(b, http);
+            case GATE -> new Gate(b, http);
+            case HYPERLIQUID -> new Hyperliquid(b, http);
+            case null, default -> null;
         });
     }
 
@@ -148,14 +149,14 @@ public final class MarketSources {
         final String base; final Http http;
         Kucoin(String base, Http http) { this.base = base; this.http = http; }
         /** Идентификатор биржи. */
-        public String exchange() { return "kucoin"; }
+        public String exchange() { return Exchange.KUCOIN.id(); }
         /** Суточная сводка по всем тикерам биржи. */
         public List<TickerSnapshot> tickers() throws Exception {
             List<TickerSnapshot> out = new ArrayList<>();
             for (JsonNode t : http.get(base + "/api/v1/market/allTickers").path("data").path("ticker")) {
                 double last = d(t, "last"), ch = d(t, "changeRate");
                 double open = Double.isNaN(ch) ? Double.NaN : last / (1 + ch);
-                TickerSnapshot s = spot("kucoin", t.path("symbol").asText(), last, d(t, "buy"), d(t, "sell"),
+                TickerSnapshot s = spot(Exchange.KUCOIN.id(), t.path("symbol").asText(), last, d(t, "buy"), d(t, "sell"),
                         d(t, "high"), d(t, "low"), open, d(t, "volValue"), -1);
                 if (s != null) out.add(s);
             }
@@ -179,12 +180,12 @@ public final class MarketSources {
         final String base; final Http http;
         Bybit(String base, Http http) { this.base = base; this.http = http; }
         /** Идентификатор биржи. */
-        public String exchange() { return "bybit"; }
+        public String exchange() { return Exchange.BYBIT.id(); }
         /** Суточная сводка по всем тикерам биржи. */
         public List<TickerSnapshot> tickers() throws Exception {
             List<TickerSnapshot> out = new ArrayList<>();
             for (JsonNode t : http.get(base + "/v5/market/tickers?category=spot").path("result").path("list")) {
-                TickerSnapshot s = spot("bybit", t.path("symbol").asText(), d(t, "lastPrice"), d(t, "bid1Price"), d(t, "ask1Price"),
+                TickerSnapshot s = spot(Exchange.BYBIT.id(), t.path("symbol").asText(), d(t, "lastPrice"), d(t, "bid1Price"), d(t, "ask1Price"),
                         d(t, "highPrice24h"), d(t, "lowPrice24h"), d(t, "prevPrice24h"), d(t, "turnover24h"), -1);
                 if (s != null) out.add(s);
             }
@@ -207,12 +208,12 @@ public final class MarketSources {
         final String base; final Http http;
         Okx(String base, Http http) { this.base = base; this.http = http; }
         /** Идентификатор биржи. */
-        public String exchange() { return "okx"; }
+        public String exchange() { return Exchange.OKX.id(); }
         /** Суточная сводка по всем тикерам биржи. */
         public List<TickerSnapshot> tickers() throws Exception {
             List<TickerSnapshot> out = new ArrayList<>();
             for (JsonNode t : http.get(base + "/api/v5/market/tickers?instType=SPOT").path("data")) {
-                TickerSnapshot s = spot("okx", t.path("instId").asText(), d(t, "last"), d(t, "bidPx"), d(t, "askPx"),
+                TickerSnapshot s = spot(Exchange.OKX.id(), t.path("instId").asText(), d(t, "last"), d(t, "bidPx"), d(t, "askPx"),
                         d(t, "high24h"), d(t, "low24h"), d(t, "open24h"), d(t, "volCcy24h"), -1);
                 if (s != null) out.add(s);
             }
@@ -235,13 +236,13 @@ public final class MarketSources {
         final String base; final Http http;
         Gate(String base, Http http) { this.base = base; this.http = http; }
         /** Идентификатор биржи. */
-        public String exchange() { return "gate"; }
+        public String exchange() { return Exchange.GATE.id(); }
         /** Суточная сводка по всем тикерам биржи. */
         public List<TickerSnapshot> tickers() throws Exception {
             List<TickerSnapshot> out = new ArrayList<>();
             for (JsonNode t : http.get(base + "/api/v4/spot/tickers")) {
                 double last = d(t, "last"), ch = d(t, "change_percentage");
-                TickerSnapshot s = spot("gate", t.path("currency_pair").asText(), last, d(t, "highest_bid"), d(t, "lowest_ask"),
+                TickerSnapshot s = spot(Exchange.GATE.id(), t.path("currency_pair").asText(), last, d(t, "highest_bid"), d(t, "lowest_ask"),
                         d(t, "high_24h"), d(t, "low_24h"), Double.isNaN(ch) ? Double.NaN : last / (1 + ch / 100), d(t, "quote_volume"), -1);
                 if (s != null) out.add(s);
             }
@@ -264,7 +265,7 @@ public final class MarketSources {
         final String base; final Http http;
         Hyperliquid(String base, Http http) { this.base = base; this.http = http; }
         /** Идентификатор биржи. */
-        public String exchange() { return "hyperliquid"; }
+        public String exchange() { return Exchange.HYPERLIQUID.id(); }
         /** Суточная сводка по всем тикерам биржи. */
         public List<TickerSnapshot> tickers() throws Exception {
             JsonNode r = http.post(base + "/info", "{\"type\":\"metaAndAssetCtxs\"}");
@@ -277,7 +278,7 @@ public final class MarketSources {
                 double last = Double.isNaN(mid) ? mark : mid;
                 JsonNode imp = c.path("impactPxs");                  // цены удара на стандартный объём — оценка bid/ask
                 double bid = imp.isArray() ? d(imp, 0) : Double.NaN, ask = imp.isArray() ? d(imp, 1) : Double.NaN;
-                out.add(new TickerSnapshot("hyperliquid", coin + "USDC", coin, coin, "USDC", true, last, bid, ask,
+                out.add(new TickerSnapshot(Exchange.HYPERLIQUID.id(), coin + "USDC", coin, coin, "USDC", true, last, bid, ask,
                         Double.NaN, Double.NaN, d(c, "prevDayPx"), d(c, "dayNtlVlm"), -1));
             }
             return out;

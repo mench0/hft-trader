@@ -15,6 +15,8 @@ hft-trader/
 │   │                                 # Credentials (<ID>_API_KEY/_SECRET/_PASSPHRASE), ExchangeConfig
 │   ├── persistence/                  # SqliteStateStore, PersistedState
 │   ├── exchange/
+│   │   ├── Exchange.java             # enum всех бирж: единственное место со строковыми id ("binance"…),
+│   │   │                             # по нему выбираются клиенты, диалекты, лимиты, источники funding
 │   │   ├── ExchangeGateway.java      # общий контракт биржи
 │   │   ├── ExchangeFactory.java      # id биржи -> реализация
 │   │   ├── catalog/                  # ExchangeCatalog/ExchangeInfo: список бирж, комиссии, лимиты, статус адаптера
@@ -71,6 +73,7 @@ hft-trader/
 
 ## Как добавить биржу
 
+1. Константа в enum `exchange/Exchange` (строковый id — ключ в админке и префикс переменных окружения).
 1. REST-клиент `exchange/<id>/<Id>RestClient extends SignedCexClient` (подпись, ордера, баланс, правила).
 2. Диалект стакана в `generic/Dialects` (REST) и, если есть WS, в `generic/WsDialects`.
 3. Строка в `ExchangeFactory`, `ExchangeCatalog`, лимиты в `rest/RateLimits`, источник сводок в `discovery/MarketSources`.
