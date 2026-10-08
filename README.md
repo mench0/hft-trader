@@ -188,19 +188,22 @@ curl -X POST "localhost:8080/trading/start?exchange=binance"
 
 Отдельный проект `hft-admin-panel` (статическая страница `index.html`), в этот репозиторий не входит.
 Сборка фронтенда не нужна: откройте файл в браузере или положите на любой веб-сервер
-(`cd admin-panel && python3 -m http.server 8000`, nginx, GitHub Pages). В шапке укажите адрес API бота
+(`cd hft-admin-panel && python3 -m http.server 8000`, nginx, GitHub Pages). В шапке укажите адрес API бота
 (по умолчанию `http://localhost:8080`) и `ADMIN_TOKEN`; оба хранятся в localStorage браузера.
 Страница ходит в API через fetch — CORS у бота открыт.
 
 | Вкладка | Что делает | Эндпоинты |
 |---|---|---|
-| Обзор | поднять/остановить соединения, торговля вкл/выкл (везде или по бирже), PANIC, автостарт; состояние выбранных бирж (связь, PnL, отказы риска, kill switch) и статистика запросов | `/control/*`, `/trading/*`, `/status`, `/exchanges/request-stats` |
-| Биржи | каталог бирж с типом, адаптером, комиссиями и лимитами; выбрать биржу с символами, добавить/убрать символ, убрать биржу | `/exchanges/catalog`, `/control/select`, `/control/symbols`, `/control/deselect` |
-| Параметры | форма по схеме параметров выбранной биржи (границы, значение по умолчанию, ⟳ — нужен перезапуск); сохраняются только изменённые поля | `/exchange/params/schema`, `/exchange/params` |
-| Рынок | верх стакана, спред, дисбаланс, z-score по символам; балансы; состояние стратегий | `/market`, `/balances`, `/strategies` |
-| Ордера | ручной ордер (MARKET/LIMIT, количество, доля или весь баланс), отмена всех ордеров символа | `/order`, `/cancel-all` |
-| Подбор | результат подбора тикеров по стратегиям, статус источников бирж, пересчёт, «в выбор» одной кнопкой | `/discovery`, `/discovery/refresh` |
-| Настройки | настройки процесса по схеме | `/settings` |
+| Обзор | поднять/остановить соединения, торговля вкл/выкл, PANIC, автостарт; по каждой бирже — рынок (spot/perp, плечо), LIVE/PAPER, testnet, состояние сокета ордеров, PnL, отказы, kill switch | `/control/*`, `/trading/*`, `/status`, `/exchanges/request-stats` |
+| Биржи | каталог с доступными рынками (`markets`) и комиссиями; выбор биржи сразу с рынком и плечом, добавить/убрать символ | `/exchanges/catalog`, `/control/select`, `/control/symbols`, `/control/deselect` |
+| Параметры | параметры выбранной биржи по группам, поиск, подсветка изменённых; ⟳ — нужен перезапуск | `/exchange/params/schema`, `/exchange/params` |
+| Стратегии | стратегии биржи и межбиржевые (funding-арбитраж, ценовой арбитраж перпов, cash-and-carry): включение, позиции, возможности | `/strategies`, `/funding`, `/settings` |
+| Позиции | позиции по фьючерсам, закрыть одну или все (reduceOnly), ставки funding | `/positions`, `/positions/close`, `/funding` |
+| Рынок | стаканы, z-score, балансы выбранной биржи | `/market`, `/balances` |
+| Ордера | ручной ордер (на перпах SELL — шорт), закрыть позицию, отменить ордера | `/order`, `/cancel-all` |
+| Подбор | подбор тикеров по стратегиям, «в выбор» одной кнопкой | `/discovery`, `/discovery/refresh` |
+| Настройки | настройки процесса по группам | `/settings` |
+| Окружение | файл `.env`: ключи (секреты не показываются), `<БИРЖА>_TESTNET`, `<БИРЖА>_LIVE`, токен и порт | `/env` |
 
 Опасные действия (включение торговли, PANIC, ручной ордер, остановка) спрашивают подтверждение.
 Данные обновляются каждые 3 с (флажок «автообновление»); вкладки с формами сами не перерисовываются.
@@ -310,7 +313,7 @@ curl -X POST "localhost:8080/exchange/params?exchange=bybit&maxPositionQuote=50&
 
 | Параметр | По умолчанию | Что это |
 |---|---|---|
-| `market` | `perp` у Binance, Bybit, OKX, Hyperliquid; `spot` у остальных | рынок: `perp` — бессрочные фьючерсы, `spot` — спот (после перезапуска биржи), см. [Фьючерсы](#фьючерсы-perp-и-funding-арбитраж) |
+| `market` | `perp` у всех бирж с фьючерсами, `spot` у Uniswap V2 | рынок (enum `Market`): `perp` — бессрочные фьючерсы, `spot` — спот; рынок, которого у биржи нет, отклоняется (после перезапуска биржи), см. [Фьючерсы](#фьючерсы-perp-и-funding-арбитраж) |
 | `leverage` | 2 | плечо на фьючерсах, выставляется на бирже при старте |
 | `tradingEnabled` | false | торговля на бирже разрешена (также `/trading/start`/`stop`) |
 | `maxPositionQuote` | 100 | максимальный размер ордера в котируемой валюте; на фьючерсах — ещё и предел стоимости позиции |
@@ -358,7 +361,7 @@ curl -X POST "localhost:8080/exchange/params?exchange=bybit&maxPositionQuote=50&
 | Aster | Futures | формат Binance USDⓈ-M: REST `/fapi/v3` (подпись EIP-712, как у спота), стакан `fstream.asterdex.com`, исполнения/позиции — listenKey |
 | Uniswap V2 | нет | AMM-пулы обмена: только `market=spot`, `market=perp` отклоняется |
 
-Какие рынки есть у биржи, записано в enum `Exchange` (`hasSpot()`, `hasPerp()`) и отдаётся в `GET /exchanges/catalog` (`markets`).
+Рынок — enum `Market` (`SPOT`, `PERP`; в JSON и SQLite — строки `spot`/`perp`). Какие рынки есть у биржи, записано в enum `Exchange` (`markets()`, `supports(Market)`, `defaultMarket()`) и отдаётся в `GET /exchanges/catalog` (`markets`).
 
 Новая биржа с фьючерсами получает `market=perp`, комиссию тейкера по фьючерсному тарифу и плечо `leverage=2`.
 
@@ -632,48 +635,14 @@ scrape_configs:
 
 
 
-1. Реализовать REST-клиент под её API, `implements ExchangeOrderApi`
-2. Реализовать WS-фид, `extends AbstractWsFeed` (общий Netty-код уже есть —
-   нужно только описать URL подписки и разбор сообщений)
-3. Собрать оба в классе `XxxExchange implements ExchangeGateway`, по образцу
-   `BinanceExchange`/`BybitExchange` (клиенту на `SignedCexClient` отдельный класс
-   не нужен — хватает `SignedCexExchange`)
-4. Добавить `case` в `ExchangeFactory.create()`
-5. Добавить биржу в `BotController.SUPPORTED_EXCHANGES`
+1. Константа в enum `Exchange`: строковый id и рынки (`Market.SPOT`, `Market.PERP`)
+2. REST-клиент на `SignedCexClient` (подпись, ордера, баланс, правила); для перпов — отдельный клиент фьючерсов
+3. Диалект стакана в `generic/Dialects` и `generic/WsDialects`; ордера по WS — через `WsRpcChannel`, если биржа умеет
+4. Ветка в `ExchangeFactory`, описание в `ExchangeCatalog`, лимиты в `rest/RateLimits`
+5. Проверка на поддельном сервере в `src/test/java`
 
-Дальше она сама появится в `/control/exchanges` и станет доступна через API
-и панель без изменений в остальном коде.
-
-## Своя стратегия
-
-Наследуйтесь от `Strategy` и добавьте в конвейер в `Main`:
-
-```java
-public final class MyStrategy extends Strategy {
-
-    public MyStrategy(MarketDataStore market, OrderService orders) {
-        super("моя-стратегия", market, orders);
-    }
-
-    @Override
-    protected void onTick(Tick tick) {
-        OrderBook book = market.book(tick.symbol());
-        PriceWindow window = market.window(tick.symbol());
-        if (book == null || !book.isReady() || !window.isWarmedUp()) return;
-
-        double z = window.currentZScore();
-        double imbalance = book.imbalance(5);
-
-        if (z < -2.0 && imbalance > 0.2) {
-            orders.buyMarket(tick.symbol(), 0.001);
-        }
-    }
-}
-```
-
-`MeanReversionStrategy` в проекте — рабочий пример на z-score с
-подтверждением по стакану, стоп-лоссом и таймаутом позиции. Параметры
-подобраны навскидку: перед реальными деньгами их нужно проверять на истории.
+При старте бот проверяет, что каждая биржа enum `Exchange` описана в каталоге; дальше она сама появится
+в `/control/exchanges`, `/exchanges/catalog` и в админке.
 
 ## Что стоит добавить дальше
 
@@ -681,9 +650,6 @@ public final class MyStrategy extends Strategy {
   Загрузите klines с Binance и прогоните `Strategy` на них
 - **Запись тиков на диск** (Chronicle Queue) — для последующего анализа
   и отладки стратегий на реальных данных
-- **userDataStream** — WebSocket с событиями по вашему аккаунту. Сейчас
-  балансы обновляются локально и сверяются раз в 5 минут; стрим даст
-  мгновенное уведомление об исполнении ордера
 
 ## Предостережения
 
@@ -698,15 +664,14 @@ public final class MyStrategy extends Strategy {
 
 ## KuCoin и Aster
 
-- **KuCoin** — спот: стакан по WebSocket (`level2Depth50`; адрес и токен выдаёт `POST /api/v1/bullet-public`
-  перед каждым подключением) + REST-запас, ордера через REST. Нужны `KUCOIN_API_KEY`, `KUCOIN_API_SECRET`,
-  `KUCOIN_PASSPHRASE`, для реальных ордеров — параметр биржи `live=true`. Тестовой сети у KuCoin нет (песочница выключена с 2023 г.).
-- **Aster** — спот, API v3 (`sapi.asterdex.com/api/v3`, формат Binance): стакан по WebSocket
-  (`depth20@100ms`) + REST-запас, ордера через REST с подписью EIP-712 кошельком-агентом.
-  `ASTER_API_KEY` — адрес основного кошелька (user), `ASTER_API_SECRET` — приватный ключ API-кошелька
-  (signer, без права вывода), для реальных ордеров — параметр `live=true`.
+- **KuCoin** — спот и фьючерсы: стакан по WebSocket (адрес и токен — `bullet-public` перед каждым подключением),
+  ордера по Pro WS API (`wsapi.kucoin.com`), исполнения и баланс — приватный поток `bullet-private`; REST — запасной.
+  Нужны `KUCOIN_API_KEY`, `KUCOIN_API_SECRET`, `KUCOIN_PASSPHRASE`, для реальных ордеров — `live=true`. Тестовой сети нет.
+- **Aster** — спот (API v3, формат Binance) и фьючерсы (`/fapi/v3`): стакан по WebSocket, ордера по REST с подписью
+  EIP-712 (WS-ордеров у Aster нет), исполнения и баланс — поток по listenKey.
+  `ASTER_API_KEY` — адрес основного кошелька, `ASTER_API_SECRET` — ключ API-кошелька без права вывода.
 
-Обе не проверялись на живой бирже (из среды разработки биржи недоступны): начинайте с PAPER и малых сумм.
+Обе не проверялись на живой бирже: начинайте с PAPER и малых сумм.
 
 ## Биржи из каталога (формат API не проверен на живых биржах)
 
