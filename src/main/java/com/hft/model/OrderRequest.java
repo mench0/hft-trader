@@ -31,6 +31,8 @@ public final class OrderRequest {
     /** Время жизни лимитного ордера; по умолчанию GTC. */
     private TimeInForce timeInForce = TimeInForce.GTC;
     private double quotePortion = 1.0;  // доля баланса при fullBalance(), 1.0 = 100%
+    /** Только уменьшение позиции (перпы): закрытие не блокируется риск-лимитами входа. */
+    private boolean reduceOnly;
 
     /** Создаётся через фабричные методы limit()/market(). */
     private OrderRequest(String symbol, Side side, Type type) {
@@ -87,6 +89,13 @@ public final class OrderRequest {
         return this;
     }
 
+    /** Ордер может только уменьшить позицию (закрытие на перпах). Только для MARKET. */
+    public OrderRequest reduceOnly() {
+        if (type != Type.MARKET) throw new IllegalArgumentException("reduceOnly поддержан только для рыночных ордеров");
+        this.reduceOnly = true;
+        return this;
+    }
+
     // ---------- TIF ----------
 
     /** Только для LIMIT. Для MARKET биржа игнорирует этот параметр. */
@@ -116,6 +125,9 @@ public final class OrderRequest {
     /** Объём не задан явно — считается от баланса. */
     public boolean isFullBalance() { return quantity < 0; }
 
+    /** Ордер только уменьшает позицию. */
+    public boolean isReduceOnly() { return reduceOnly; }
+
     /** Кратко для логов: тип, сторона, символ, объём/доля, цена. */
     @Override
     public String toString() {
@@ -123,6 +135,6 @@ public final class OrderRequest {
                 ? (quotePortion == 1.0 ? "весь баланс" : (int) (quotePortion * 100) + "% баланса")
                 : String.valueOf(quantity);
         return type + " " + side + " " + symbol + " qty=" + qty
-                + (type == Type.LIMIT ? " @ " + price + " " + timeInForce : "");
+                + (type == Type.LIMIT ? " @ " + price + " " + timeInForce : "") + (reduceOnly ? " reduceOnly" : "");
     }
 }

@@ -40,7 +40,10 @@ import java.util.function.BooleanSupplier;
  * <p>В торговлю допускаются только пары с корреляцией доходностей
  * не ниже {@code statArbMinCorrelation}.
  *
- * <p>Спот не поддерживает шорт, поэтому торгуется только дешёвая нога:
+ * <p>На фьючерсах (market=perp) позиция рыночно-нейтральная: дешёвая нога покупается,
+ * дорогая шортится на сумму × |β|. Если вторая нога не исполнилась — первая закрывается.
+ *
+ * <p>Спот не поддерживает шорт, поэтому там торгуется только дешёвая нога:
  * <ul>
  *   <li>
  *     {@code z ≤ −entry} — {@code A} дёшев относительно {@code B},
@@ -59,9 +62,7 @@ import java.util.function.BooleanSupplier;
  *   <li>истёк максимальный срок удержания {@code statArbMaxHoldMs}.</li>
  * </ul>
  *
- * <p>Полноценная рыночно-нейтральная версия, в которой одновременно
- * шортится дорогая нога, требует фьючерсов или маржи и здесь не реализована.
- * Поэтому открытая позиция дополнительно несёт риск движения рынка в целом.
+ * <p>На споте открытая позиция дополнительно несёт риск движения рынка в целом.
  */
 public final class StatArbStrategy extends Strategy {
 
@@ -78,6 +79,8 @@ public final class StatArbStrategy extends Strategy {
         int n, head;
         /** Последние z-score спреда, β и корреляция доходностей (читает админка). */
         volatile double z = Double.NaN, beta = Double.NaN, corr = Double.NaN;
+        /** σ спреда ln A − β·ln B (для оценки ожидаемого хода). */
+        volatile double sd = Double.NaN;
         Pair(String a, String b, int window) { this.a = a; this.b = b; la = new double[window]; lb = new double[window]; }
         /** Имя пары A/B. */
         String name() { return a + "/" + b; }
@@ -116,14 +119,23 @@ public final class StatArbStrategy extends Strategy {
             }
             double cva = saa - sra * sra / m, cvb = sbb - srb * srb / m, cab = sab - sra * srb / m;
             corr = cva > 0 && cvb > 0 ? cab / Math.sqrt(cva * cvb) : 0;
+            this.sd = sd;
             beta = bt;
             z = (la[last] - bt * lb[last] - ms) / sd;
             return true;
         }
     }
 
-    /** Открытая позиция по паре: какая нога куплена, сколько и почём. */
-    record Position(String symbol, boolean longA, double qty, double entryPrice, long openedAtMs) {}
+    /**
+     * Открытая позиция по паре: какая нога куплена, сколько и почём; на перпах ещё шорт второй ноги
+     * (hedgeSymbol, hedgeQty, hedgeEntry), на споте hedgeSymbol = null.
+     */
+    record Position(String symbol, boolean longA, double qty, double entryPrice, long openedAtMs,
+                    String hedgeSymbol, double hedgeQty, double hedgeEntry) {
+        Position(String symbol, boolean longA, double qty, double entryPrice, long openedAtMs) {
+            this(symbol, longA, qty, entryPrice, openedAtMs, null, 0, 0);
+        }
+    }
 
     /** Параметры биржи. */
     private final TradingSettings settings;
@@ -226,17 +238,41 @@ public final class StatArbStrategy extends Strategy {
         if (pos == null) {
             if (!realtime.getAsBoolean() || pr.corr < p.statArbMinCorrelation() || Math.abs(z) < p.statArbEntryZ()) return;
             if (Math.abs(z) >= p.statArbStopZ()) return;                  // уже за стопом — не входим
+            // ожидаемый возврат спреда (|z| − exit)·σ — доля от суммы ноги; должен окупать комиссии всех сделок:
+            // на споте одна нога (2 сделки), на перпах две (4 сделки)
+            double expectedPct = (Math.abs(z) - p.statArbExitZ()) * pr.sd * 100.0;
+            double costPct = orders.roundTripCostPercent(p.statArbOrderQuote()) * (orders.isPerp() ? 2 : 1);
+            if (!(expectedPct > costPct)) return;
             boolean longA = z < 0;
             String sym = longA ? pr.a : pr.b;
+            String hedge = orders.isPerp() ? (longA ? pr.b : pr.a) : null;     // на перпах — шорт дорогой ноги
             if (executor.isBusy(sym) || heldByOtherPair(sym)) return;
+            if (hedge != null && (executor.isBusy(hedge) || heldByOtherPair(hedge))) return;
             OrderBook b = market.book(sym);
             double ask = b == null ? Double.NaN : b.bestAsk();
             if (!(ask > 0)) return;
             double qty = p.statArbOrderQuote() / ask;
-            log.info("[{}] вход {}: z={} β={} корр={} — покупаю {}", name(), pr.name(), fmt(z), fmt(pr.beta), fmt(pr.corr), sym);
+            double hedgeBid = hedge == null ? Double.NaN : bid(hedge);
+            if (hedge != null && !(hedgeBid > 0)) return;
+            double beta = Math.min(5, Math.max(0.2, Math.abs(pr.beta)));        // защита от вырожденного β
+            double hedgeQty = hedge == null ? 0 : p.statArbOrderQuote() * beta / hedgeBid;
+            log.info("[{}] вход {}: z={} β={} корр={} — покупаю {}{}", name(), pr.name(), fmt(z), fmt(pr.beta), fmt(pr.corr), sym,
+                    hedge == null ? "" : ", шорт " + hedge);
             executor.submit(sym, () -> {
                 OrderResult r = orders.buyMarket(sym, qty);
-                if (r.executedQty() > 0) positions.put(pr.name(), new Position(sym, longA, r.executedQty(), r.avgPrice(), System.currentTimeMillis()));
+                if (r.executedQty() <= 0) return;
+                long at = System.currentTimeMillis();
+                if (hedge == null) {
+                    positions.put(pr.name(), new Position(sym, longA, r.executedQty(), r.avgPrice(), at));
+                    return;
+                }
+                OrderResult h = orders.sellMarket(hedge, hedgeQty);
+                if (h.executedQty() <= 0) {                                     // вторая нога не встала — без хеджа не держим
+                    log.warn("[{}] {}: шорт {} не исполнился — закрываю лонг {}", name(), pr.name(), hedge, sym);
+                    orders.reduceMarket(sym, com.hft.model.OrderEnums.Side.SELL, r.executedQty());
+                    return;
+                }
+                positions.put(pr.name(), new Position(sym, longA, r.executedQty(), r.avgPrice(), at, hedge, h.executedQty(), h.avgPrice()));
             });
             return;
         }
@@ -244,29 +280,59 @@ public final class StatArbStrategy extends Strategy {
         boolean stop = pos.longA() ? z <= -p.statArbStopZ() : z >= p.statArbStopZ();
         boolean timeout = now - pos.openedAtMs() > p.statArbMaxHoldMs();
         if (!reverted && !stop && !timeout || executor.isBusy(pos.symbol())) return;
+        if (pos.hedgeSymbol() != null && executor.isBusy(pos.hedgeSymbol())) return;
         String why = stop ? "стоп (спред разошёлся)" : reverted ? "спред вернулся" : "таймаут";
         log.info("[{}] выход {} ({}): z={}", name(), pr.name(), why, fmt(z));
         if (stop) stops.incrementAndGet();
         executor.submit(pos.symbol(), () -> close(pr.name(), pos));
     }
 
-    /** Символ уже куплен другой парой — не входим, чтобы не путать позиции. */
+    /** Символ уже занят другой парой — не входим, чтобы не путать позиции. */
     private boolean heldByOtherPair(String symbol) {
-        for (Position x : positions.values()) if (x.symbol().equals(symbol)) return true;
+        for (Position x : positions.values()) if (x.symbol().equals(symbol) || symbol.equals(x.hedgeSymbol())) return true;
         return false;
     }
 
-    /** Продать позицию пары; результат после комиссий — в дневной PnL. */
+    /** Лучший бид символа или NaN. */
+    private double bid(String symbol) {
+        OrderBook b = market.book(symbol);
+        return b == null ? Double.NaN : b.bestBid();
+    }
+
+    /** Закрыть позицию пары (лонг — продажей, шорт-хедж — покупкой, reduceOnly); результат после комиссий — в дневной PnL. */
     private void close(String pairName, Position pos) {
-        OrderResult r = orders.sellMarket(pos.symbol(), pos.qty());
-        if (r.executedQty() <= 0) return;
-        double fee = settings.get().takerFeePercent() / 100.0 * (r.avgPrice() + pos.entryPrice()) * r.executedQty();
-        double pnl = (r.avgPrice() - pos.entryPrice()) * r.executedQty() - fee;
+        double hedgePnl = 0;
+        if (pos.hedgeSymbol() != null && pos.hedgeQty() > 0) {
+            OrderResult h = orders.reduceMarket(pos.hedgeSymbol(), com.hft.model.OrderEnums.Side.BUY, pos.hedgeQty());
+            if (h.executedQty() > 0) {
+                hedgePnl = (pos.hedgeEntry() - h.avgPrice()) * h.executedQty()
+                        - orders.costOf(pos.hedgeEntry() * h.executedQty()) - orders.costOf(h.avgPrice() * h.executedQty());
+                double hl = pos.hedgeQty() - h.executedQty();
+                pos = new Position(pos.symbol(), pos.longA(), pos.qty(), pos.entryPrice(), pos.openedAtMs(),
+                        hl > pos.hedgeQty() * 1e-6 ? pos.hedgeSymbol() : null, Math.max(0, hl), pos.hedgeEntry());
+            }
+        }
+        if (pos.qty() <= 0) {                                       // лонг уже закрыт раньше, оставался только хедж
+            orders.risk().recordPnl(hedgePnl);
+            totalPnl += hedgePnl;
+            if (pos.hedgeSymbol() == null) { positions.remove(pairName); trades.incrementAndGet(); }
+            else positions.put(pairName, pos);
+            return;
+        }
+        OrderResult r = orders.reduceMarket(pos.symbol(), com.hft.model.OrderEnums.Side.SELL, pos.qty());
+        if (r.executedQty() <= 0) {
+            if (hedgePnl != 0) { orders.risk().recordPnl(hedgePnl); totalPnl += hedgePnl; positions.put(pairName, pos); }
+            return;
+        }
+        double fee = orders.costOf(pos.entryPrice() * r.executedQty()) + orders.costOf(r.avgPrice() * r.executedQty());
+        double pnl = (r.avgPrice() - pos.entryPrice()) * r.executedQty() - fee + hedgePnl;
         orders.risk().recordPnl(pnl);
         trades.incrementAndGet();
         totalPnl += pnl;
         double left = pos.qty() - r.executedQty();
-        if (left > pos.qty() * 1e-6) positions.put(pairName, new Position(pos.symbol(), pos.longA(), left, pos.entryPrice(), pos.openedAtMs()));
+        if (left > pos.qty() * 1e-6 || pos.hedgeSymbol() != null)
+            positions.put(pairName, new Position(pos.symbol(), pos.longA(), Math.max(0, left), pos.entryPrice(), pos.openedAtMs(),
+                    pos.hedgeSymbol(), pos.hedgeQty(), pos.hedgeEntry()));
         else positions.remove(pairName);
         log.info("[{}] {} закрыта: {} {} @ {}, результат {}", name(), pairName, r.executedQty(), pos.symbol(), r.avgPrice(), String.format("%.4f", pnl));
     }
@@ -295,7 +361,8 @@ public final class StatArbStrategy extends Strategy {
             x.put("z", Double.isNaN(pr.z) ? null : pr.z);
             x.put("beta", Double.isNaN(pr.beta) ? null : pr.beta);
             x.put("correlation", Double.isNaN(pr.corr) ? null : pr.corr);
-            x.put("position", positions.containsKey(pr.name()) ? positions.get(pr.name()).symbol() : null);
+            Position pp = positions.get(pr.name());
+            x.put("position", pp == null ? null : pp.hedgeSymbol() == null ? pp.symbol() : pp.symbol() + " лонг / " + pp.hedgeSymbol() + " шорт");
             ps.add(x);
         }
         m.put("pairs", ps);

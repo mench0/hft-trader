@@ -24,6 +24,23 @@
 Что идёт по REST у всех бирж, независимо от WebSocket: загрузка правил торговли (шаги цены и объёма)
 на старте, начальный баланс и его сверка раз в `balanceSyncMs` (по умолчанию 5 минут).
 
+## Фьючерсы (market=perp)
+
+Параметр биржи `market`: `perp` — бессрочные USDT-фьючерсы, `spot` — спот. Фьючерсы есть у четырёх бирж:
+
+| Биржа | Стакан | Ордера и отмены | Исполнения, баланс, позиции | Плечо, сверка позиций | Funding |
+|---|---|---|---|---|---|
+| Binance USDⓈ-M | WS `fstream` `<symbol>@depth20@100ms` | **WS** `ws-fapi` (`order.place`, `order.cancel`, `order.status`); отмена всех — REST | **WS** listenKey: `ORDER_TRADE_UPDATE`, `ACCOUNT_UPDATE` | REST `/fapi/v1/leverage`, `/fapi/v2/positionRisk` | REST `/fapi/v1/premiumIndex` |
+| Bybit linear | WS `/v5/public/linear` | **WS** `/v5/trade` (`category=linear`) | **WS** `/v5/private`: `order`, `wallet`, `position` | REST `/v5/position/set-leverage`, `/v5/position/list` | REST `/v5/market/tickers?category=linear` |
+| OKX SWAP | WS `books` по `BTC-USDT-SWAP` | **WS** `order`, `cancel-order` (`tdMode=cross`) | **WS** `orders`, `account`, `positions` | REST `/api/v5/account/set-leverage`, `/positions` | REST `/api/v5/public/funding-rate` |
+| Hyperliquid | WS `l2Book` | **WS** `post` (`r` — reduceOnly) | **WS** `orderUpdates`, `userFills` | `updateLeverage`, `clearinghouseState` | REST `metaAndAssetCtxs` |
+
+- Ставки funding читаются по REST раз в `fundingPollSec` (30 с): ставка меняется медленно, отдельный сокет не нужен.
+- OKX считает объём в контрактах: бот пересчитывает его в монеты по `ctVal` (BTC-USDT-SWAP — 0.01 BTC за контракт).
+- Режим позиций — односторонний (One-way / net), маржа — кросс. Режим хеджирования на бирже включать не нужно.
+- Ключи те же, что для спота; у ключа должно быть право торговли фьючерсами (у Binance — «Enable Futures»).
+- Testnet фьючерсов: Binance — `testnet.binancefuture.com`, Bybit — `api-testnet.bybit.com`, OKX — демо-торговля, Hyperliquid — testnet.
+
 ## По биржам
 
 ### Binance — спот
@@ -100,6 +117,7 @@
 
 - **Отключить WebSocket-торговлю** для биржи: параметр биржи `wsTrade=false` в админке — ордера и приватные
   данные пойдут по REST. Стакан всё равно идёт по WebSocket.
+- **Спот или фьючерсы:** параметр биржи `market` (`perp`/`spot`), плечо — `leverage`; биржи без фьючерсов принимают только `spot`.
 - **Реальные ордера** уходят только при двух условиях: ключи в `.env` (или окружении) и параметр биржи `live=true`.
   Иначе — бумажный режим на живых данных.
 - **Если сокет со стаканом молчит** дольше порога, включается REST-опрос стакана; новые позиции на нём не

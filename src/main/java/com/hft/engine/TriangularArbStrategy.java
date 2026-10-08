@@ -184,14 +184,16 @@ public final class TriangularArbStrategy extends Strategy {
     @Override
     protected void onTick(Tick tick) {
         TradingParams p = settings.get();
-        if (!p.triangularEnabled()) return;
+        if (!p.triangularEnabled() || orders.isPerp()) return;   // круг через три валюты — только на споте
         ensureBuilt(p.triHomeAsset());
         List<Cycle> touched = bySymbol.get(tick.symbol());
         if (touched == null || executor.isBusy("tri") || !realtime.getAsBoolean()) return;
         long now = System.currentTimeMillis();
         for (Cycle c : touched) {
             Quote q = evaluate(c, p.takerFeePercent(), p.triMaxBookAgeMs());
-            if (q == null || q.profitPct() < p.triMinProfitPercent()) continue;
+            // фиксированные издержки трёх сделок (газ и т.п.) — в процентах от размера круга
+            double fixedPct = p.triOrderQuote() > 0 ? 3 * p.tradeCostQuote() / p.triOrderQuote() * 100.0 : 0;
+            if (q == null || q.profitPct() - fixedPct < p.triMinProfitPercent()) continue;
             Long last = lastRun.get(c.name());
             if (last != null && now - last < p.triCooldownMs()) continue;
             double start = Math.min(p.triOrderQuote(), q.maxStart() * p.triDepthUsage());
@@ -209,7 +211,7 @@ public final class TriangularArbStrategy extends Strategy {
 
     /** Исполнить круг тремя рыночными ордерами; результат после комиссий — в дневной PnL. */
     private void run(Cycle c, double start, TradingParams p) {
-        double f = 1 - p.takerFeePercent() / 100.0;
+        double f = orders.feesInPrice() ? 1 : 1 - p.takerFeePercent() / 100.0;   // для оценки «сколько пришло»; в бумаге комиссия уже в цене
         double amount = start;
         for (int i = 0; i < 3; i++) {
             Leg l = c.legs()[i];
@@ -263,7 +265,8 @@ public final class TriangularArbStrategy extends Strategy {
         Map<String, Object> m = new LinkedHashMap<>();
         // до первого тика треугольники ещё не построены — показываем, какие будут
         List<Cycle> cs = builtFor != null ? cycles : buildCycles(market.symbols(), settings.get().triHomeAsset());
-        m.put("enabled", settings.get().triangularEnabled());
+        m.put("enabled", settings.get().triangularEnabled() && !orders.isPerp());
+        if (orders.isPerp()) m.put("note", "только для market=spot");
         m.put("triangles", cs.stream().map(Cycle::name).toList());
         m.put("opportunities", opportunities.get());
         m.put("executed", executed.get());

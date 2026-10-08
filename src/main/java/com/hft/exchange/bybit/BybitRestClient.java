@@ -76,6 +76,10 @@ public final class BybitRestClient implements ExchangeOrderApi {
     private volatile String tradeWsUrl, privateWsUrl;
     /** WS не помог — запрос ушёл по REST. */
     private final AtomicLong wsFallbacks = new AtomicLong();
+    /** Категория Bybit v5: spot или linear (бессрочные USDT-контракты, market=perp). */
+    private final String category;
+    /** Куда пишутся позиции из приватного потока. */
+    private volatile com.hft.store.PositionStore positionStore;
 
     /**
      * @param config подключение и параметры биржи
@@ -88,6 +92,7 @@ public final class BybitRestClient implements ExchangeOrderApi {
         this.credentials = credentials;
         this.recvWindow = config.recvWindowMs();
         this.filters = filters;
+        this.category = config.params().isPerp() ? "linear" : "spot";
         this.signer = credentials.isPresent() ? new Signer(credentials.apiSecret()) : null;
         this.http = HttpClient.newBuilder()
                 .version(HttpClient.Version.HTTP_2)
@@ -95,17 +100,21 @@ public final class BybitRestClient implements ExchangeOrderApi {
                 .build();
     }
 
+    /** Перпы (category=linear). */
+    @Override
+    public boolean isPerp() { return category.equals("linear"); }
+
     // ======================= ПУБЛИЧНЫЕ =======================
 
     /** Последняя цена символа (для оценки рыночного ордера). */
     public double price(String symbol) throws Exception {
-        JsonNode json = getPublic("/v5/market/tickers?category=spot&symbol=" + symbol.toUpperCase());
+        JsonNode json = getPublic("/v5/market/tickers?category=" + category + "&symbol=" + symbol.toUpperCase());
         return json.get("result").get("list").get(0).get("lastPrice").asDouble();
     }
 
     /** Загрузка торговых правил (шаг цены/объёма, минимальная сумма). */
     public void loadFilters(Iterable<String> symbols) throws Exception {
-        JsonNode root = getPublic("/v5/market/instruments-info?category=spot");
+        JsonNode root = getPublic("/v5/market/instruments-info?category=" + category + "&limit=1000");
         JsonNode list = root.path("result").path("list");
         int loaded = 0;
 
@@ -122,9 +131,10 @@ public final class BybitRestClient implements ExchangeOrderApi {
 
             double minQty = lotSizeFilter.path("minOrderQty").asDouble(0);
             double maxQty = lotSizeFilter.path("maxOrderQty").asDouble(Double.MAX_VALUE);
-            double stepSize = lotSizeFilter.path("basePrecision").asDouble(0);
+            // спот: шаг — basePrecision, минимум — minOrderAmt; перпы: qtyStep и minNotionalValue
+            double stepSize = isPerp() ? lotSizeFilter.path("qtyStep").asDouble(0) : lotSizeFilter.path("basePrecision").asDouble(0);
             double tickSize = priceFilter.path("tickSize").asDouble(0);
-            double minNotional = lotSizeFilter.path("minOrderAmt").asDouble(0);
+            double minNotional = isPerp() ? lotSizeFilter.path("minNotionalValue").asDouble(0) : lotSizeFilter.path("minOrderAmt").asDouble(0);
 
             filters.put(symbol, new SymbolFilters.Filter(
                     minQty, maxQty, stepSize, 0, 0, tickSize, minNotional));
@@ -143,8 +153,8 @@ public final class BybitRestClient implements ExchangeOrderApi {
         int count = 0;
         for (JsonNode account : list) {
             for (JsonNode coin : account.path("coin")) {
-                double locked = coin.path("locked").asDouble(0);
-                double free = Math.max(0, coin.path("walletBalance").asDouble(0) - locked);   // walletBalance включает заблокированное
+                double[] fl = BybitWs.freeLocked(coin, category);   // walletBalance включает заблокированное
+                double free = fl[0], locked = fl[1];
                 if (free > 0 || locked > 0) {
                     store.set(coin.get("coin").asText(), free, locked);
                     count++;
@@ -186,13 +196,25 @@ public final class BybitRestClient implements ExchangeOrderApi {
         return placeOrder(symbol, Side.SELL, Type.MARKET, qty, 0, null, false);
     }
 
+    /** Закрытие позиции: на перпах — reduceOnly. */
+    @Override
+    public OrderResult reduceMarket(String symbol, Side side, double qty) throws Exception {
+        return placeOrder(symbol, side, Type.MARKET, qty, 0, null, false, isPerp());
+    }
+
     private OrderResult placeOrder(String symbol, Side side, Type type, double qty, double price,
                                    TimeInForce tif, boolean qtyIsQuote) throws Exception {
+        return placeOrder(symbol, side, type, qty, price, tif, qtyIsQuote, false);
+    }
+
+    private OrderResult placeOrder(String symbol, Side side, Type type, double qty, double price,
+                                   TimeInForce tif, boolean qtyIsQuote, boolean reduceOnly) throws Exception {
+        if (qtyIsQuote && isPerp()) throw new IllegalArgumentException("Bybit linear: ордер на сумму не поддерживается — задайте объём");
         credentials.require();
         String sym = symbol.toUpperCase();
 
         double roundedQty = qtyIsQuote ? qty : filters.roundQuantity(sym, qty);
-        if (!qtyIsQuote) {
+        if (!qtyIsQuote && !reduceOnly) {
             String err = filters.validate(sym, roundedQty, type == Type.LIMIT ? price : 0);
             if (err != null) throw new IllegalArgumentException("Ордер не прошёл проверку: " + err);
         }
@@ -200,14 +222,15 @@ public final class BybitRestClient implements ExchangeOrderApi {
         String clientOrderId = "hft" + clientOrderSeq.incrementAndGet();
 
         ObjectNode body = mapper.createObjectNode()
-                .put("category", "spot")
+                .put("category", category)
                 .put("symbol", sym)
                 .put("side", side == Side.BUY ? "Buy" : "Sell")
                 .put("orderType", type == Type.LIMIT ? "Limit" : "Market")
                 .put("qty", Numbers.plain(roundedQty, filters.quantityScale(sym)))
                 .put("orderLinkId", clientOrderId);
         // рыночная покупка на споте по умолчанию считается в котируемой валюте — единицу указываем явно
-        if (type == Type.MARKET) body.put("marketUnit", qtyIsQuote ? "quoteCoin" : "baseCoin");
+        if (type == Type.MARKET && !isPerp()) body.put("marketUnit", qtyIsQuote ? "quoteCoin" : "baseCoin");
+        if (reduceOnly) body.put("reduceOnly", true);
         if (type == Type.LIMIT) {
             double roundedPrice = filters.roundPrice(sym, price);
             body.put("price", Numbers.plain(roundedPrice, filters.priceScale(sym)));
@@ -260,7 +283,7 @@ public final class BybitRestClient implements ExchangeOrderApi {
     /** Отменить ордер. */
     public void cancelOrder(String symbol, long orderId) throws Exception {
         credentials.require();
-        ObjectNode body = mapper.createObjectNode().put("category", "spot")
+        ObjectNode body = mapper.createObjectNode().put("category", category)
                 .put("symbol", symbol.toUpperCase()).put("orderId", Long.toString(orderId));
         JsonNode r = null;
         try { r = wsCall("order.cancel", body); }
@@ -272,7 +295,7 @@ public final class BybitRestClient implements ExchangeOrderApi {
     /** Отменить все открытые ордера символа; возвращает их число. */
     public int cancelAll(String symbol) throws Exception {
         credentials.require();
-        String body = String.format("{\"category\":\"spot\",\"symbol\":\"%s\"}", symbol.toUpperCase());
+        String body = String.format("{\"category\":\"%s\",\"symbol\":\"%s\"}", category, symbol.toUpperCase());
         JsonNode json = postSigned("/v5/order/cancel-all", body);
         JsonNode list = json.path("result").path("list");
         int count = list.isArray() ? list.size() : 0;
@@ -288,12 +311,12 @@ public final class BybitRestClient implements ExchangeOrderApi {
             OrderResult st = w.streamed.get(orderId);
             if (st != null && !"NEW".equals(st.status()) && !"PARTIALLY_FILLED".equals(st.status())) return st;
         }
-        return fromRealtime(symbol, orderId, "category=spot&symbol=" + symbol.toUpperCase() + "&orderId=" + orderId);
+        return fromRealtime(symbol, orderId, "category=" + category + "&symbol=" + symbol.toUpperCase() + "&orderId=" + orderId);
     }
 
     /** Статус ордера по нашему orderLinkId (после обрыва WS). */
     private OrderResult statusByLinkId(String symbol, String linkId) throws Exception {
-        return fromRealtime(symbol, 0, "category=spot&symbol=" + symbol + "&orderLinkId=" + linkId);
+        return fromRealtime(symbol, 0, "category=" + category + "&symbol=" + symbol + "&orderLinkId=" + linkId);
     }
 
     /** Ордер из /v5/order/realtime. */
@@ -316,6 +339,39 @@ public final class BybitRestClient implements ExchangeOrderApi {
     /** Статус Bybit в наш (NEW, PARTIALLY_FILLED, FILLED, CANCELED, REJECTED). */
     private static String mapBybitStatus(String bybitStatus) { return BybitWs.status(bybitStatus); }
 
+    // ======================= ПЕРПЫ =======================
+
+    /** Плечо символа (обе стороны); «не изменилось» (110043) — не ошибка. */
+    @Override
+    public void setLeverage(String symbol, int leverage) throws Exception {
+        if (!isPerp()) return;
+        credentials.require();
+        String body = mapper.createObjectNode().put("category", "linear").put("symbol", symbol.toUpperCase())
+                .put("buyLeverage", Integer.toString(leverage)).put("sellLeverage", Integer.toString(leverage)).toString();
+        try { postSigned("/v5/position/set-leverage", body); }
+        catch (ExchangeException e) { if (e.getMessage() == null || !e.getMessage().contains("110043")) throw e; }
+        log.info("[bybit] плечо {}x для {}", leverage, symbol);
+    }
+
+    /** Открытые позиции USDT-перпов; позиции приходят и по WS (поток position). */
+    @Override
+    public void loadPositions(com.hft.store.PositionStore store) throws Exception {
+        if (!isPerp()) return;
+        credentials.require();
+        positionStore = store;
+        BybitWs w = ws;
+        if (w != null) w.positions = store;
+        JsonNode list = getSigned("/v5/position/list", "category=linear&settleCoin=USDT").path("result").path("list");
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (JsonNode p : list) {
+            double size = p.path("size").asDouble(0);
+            String sym = p.path("symbol").asText();
+            store.set(sym, "Sell".equals(p.path("side").asText()) ? -size : size, p.path("avgPrice").asDouble(0));
+            if (size != 0) seen.add(sym);
+        }
+        for (String s : store.snapshot().keySet()) if (!seen.contains(s)) store.set(s, 0, 0);   // закрыта на бирже
+    }
+
     // ======================= WebSocket =======================
 
     /** Свои адреса сокетов (тесты, прокси). */
@@ -326,8 +382,9 @@ public final class BybitRestClient implements ExchangeOrderApi {
         if (!credentials.isPresent() || !config.params().wsTrade() || tradeChannel != null) return;
         String host = config.testnet() ? "wss://stream-testnet.bybit.com" : "wss://stream.bybit.com";
         BybitWs w = new BybitWs(tradeWsUrl != null ? tradeWsUrl : host + "/v5/trade",
-                privateWsUrl != null ? privateWsUrl : host + "/v5/private", credentials.apiKey(), signer, recvWindow);
+                privateWsUrl != null ? privateWsUrl : host + "/v5/private", credentials.apiKey(), signer, recvWindow, category);
         w.balances = store;
+        w.positions = positionStore;
         ws = w;
         privateChannel = new WsRpcChannel("bybit", w.priv).onEvent(w::onEvent);
         tradeChannel = new WsRpcChannel("bybit", w.trade);

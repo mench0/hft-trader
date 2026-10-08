@@ -271,7 +271,7 @@ public final class HyperliquidRestClient extends SignedCexClient {
         order.put("b", buy);
         order.put("p", formatPrice(px, sd));
         order.put("s", szStr);
-        order.put("r", false);
+        order.put("r", o.reduceOnly());
         order.put("t", Map.of("limit", Map.of("tif", tif)));
         List<Object> orders = new ArrayList<>();
         orders.add(order);
@@ -523,6 +523,40 @@ public final class HyperliquidRestClient extends SignedCexClient {
         }
         if (loaded == 0) throw new IllegalStateException("Hyperliquid: монеты не найдены для " + symbols);
         log.info("[hyperliquid] правила загружены для {} символов", loaded);
+    }
+
+    /** Hyperliquid — только перпы. */
+    @Override
+    public boolean isPerp() { return true; }
+
+    /** Плечо монеты (кросс-маржа): действие updateLeverage. */
+    @Override
+    public void setLeverage(String symbol, int leverage) throws Exception {
+        Map<String, Object> action = new LinkedHashMap<>();
+        action.put("type", "updateLeverage");
+        action.put("asset", asset(symbol));
+        action.put("isCross", true);
+        action.put("leverage", leverage);
+        exchange(action);
+        log.info("[hyperliquid] плечо {}x для {}", leverage, symbol);
+    }
+
+    /** Открытые позиции из clearinghouseState (assetPositions[].position: coin, szi, entryPx). */
+    @Override
+    public void loadPositions(com.hft.store.PositionStore store) throws Exception {
+        JsonNode r = infoOf("clearinghouseState", "user", account);
+        Map<String, String> byCoin = new java.util.HashMap<>();
+        for (String s : config.symbols()) byCoin.put(coin(s), s.toUpperCase());
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (JsonNode ap : r.path("assetPositions")) {
+            JsonNode p = ap.path("position");
+            String sym = byCoin.get(p.path("coin").asText());
+            double szi = d(p, "szi");
+            if (sym == null || szi == 0) continue;
+            store.set(sym, szi, d(p, "entryPx"));
+            seen.add(sym);
+        }
+        for (String s : store.snapshot().keySet()) if (!seen.contains(s)) store.set(s, 0, 0);
     }
 
     /** Загрузить балансы. */

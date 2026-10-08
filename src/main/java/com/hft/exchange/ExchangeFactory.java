@@ -22,7 +22,9 @@ public final class ExchangeFactory {
     /** Шлюз биржи по id; неизвестная биржа без адаптера — IllegalArgumentException. */
     public static ExchangeGateway create(String id, ExchangeConfig ec, TradingSettings settings) {
         return switch (id) {
-            case "binance" -> new BinanceExchange(ec, settings);
+            case "binance" -> ec.params().isPerp()
+                    ? new SignedCexExchange(id, ec, settings, com.hft.exchange.binance.BinanceFuturesClient::new)   // USDⓈ-M
+                    : new BinanceExchange(ec, settings);
             case "bybit" -> new BybitExchange(ec, settings);
             case "okx" -> new SignedCexExchange(id, ec, settings, OkxRestClient::new);
             case "mexc" -> new SignedCexExchange(id, ec, settings, MexcRestClient::new);

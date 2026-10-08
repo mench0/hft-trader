@@ -8,6 +8,7 @@ import com.hft.model.OrderResult;
 import com.hft.rest.WsRpcChannel;
 import com.hft.rest.WsRpcChannel.Msg;
 import com.hft.store.BalanceStore;
+import com.hft.store.PositionStore;
 import com.hft.util.BoundedMap;
 import com.hft.util.Signer;
 
@@ -40,6 +41,10 @@ final class BybitWs {
     volatile BalanceStore balances;
     /** Баланс хотя бы раз пришёл по WS. */
     volatile boolean walletSeen;
+    /** Куда пишутся позиции из потока position (только linear). */
+    volatile PositionStore positions;
+    /** Категория Bybit: spot или linear (перпы USDT). */
+    final String category;
 
     /** Торговый и приватный протоколы. */
     final Trade trade;
@@ -50,6 +55,12 @@ final class BybitWs {
      * @param privateUrl адрес /v5/private
      */
     BybitWs(String tradeUrl, String privateUrl, String apiKey, Signer signer, int recvWindow) {
+        this(tradeUrl, privateUrl, apiKey, signer, recvWindow, "spot");
+    }
+
+    /** @param category spot или linear */
+    BybitWs(String tradeUrl, String privateUrl, String apiKey, Signer signer, int recvWindow, String category) {
+        this.category = category;
         this.apiKey = apiKey;
         this.signer = signer;
         this.recvWindow = recvWindow;
@@ -120,7 +131,8 @@ final class BybitWs {
         @Override public List<String> login() { return List.of(auth()); }
         @Override public List<String> subscriptions() {
             ObjectNode m = mapper.createObjectNode().put("req_id", "sub" + seq.incrementAndGet()).put("op", "subscribe");
-            m.putArray("args").add("order").add("wallet");
+            var args = m.putArray("args").add("order").add("wallet");
+            if (category.equals("linear")) args.add("position");
             return List.of(m.toString());
         }
         @Override public String ping() { return "{\"op\":\"ping\"}"; }
@@ -144,7 +156,7 @@ final class BybitWs {
         switch (n.path("topic").asText()) {
             case "order" -> {
                 for (JsonNode o : n.path("data")) {
-                    if (!"spot".equals(o.path("category").asText("spot"))) continue;
+                    if (!category.equals(o.path("category").asText(category))) continue;
                     long id = o.path("orderId").asLong();
                     streamed.put(id, new OrderResult(id, o.path("orderLinkId").asText(""), o.path("symbol").asText(),
                             "Buy".equals(o.path("side").asText()) ? Side.BUY : Side.SELL, status(o.path("orderStatus").asText()),
@@ -156,14 +168,35 @@ final class BybitWs {
                 if (store == null) return;
                 for (JsonNode acc : n.path("data"))
                     for (JsonNode c : acc.path("coin")) {
-                        double total = c.path("walletBalance").asDouble(0), locked = c.path("locked").asDouble(0);
-                        store.set(c.path("coin").asText(), Math.max(0, total - locked), locked);
+                        double[] fl = freeLocked(c, category);
+                        store.set(c.path("coin").asText(), fl[0], fl[1]);
                     }
                 store.markSynced();
                 walletSeen = true;
             }
+            case "position" -> {
+                PositionStore ps = positions;
+                if (ps == null) return;
+                for (JsonNode p : n.path("data")) {
+                    if (!"linear".equals(p.path("category").asText("linear"))) continue;
+                    double size = p.path("size").asDouble(0);
+                    ps.set(p.path("symbol").asText(), "Sell".equals(p.path("side").asText()) ? -size : size, p.path("entryPrice").asDouble(0));
+                }
+            }
             default -> { }
         }
+    }
+
+    /**
+     * Свободно и занято по монете кошелька. Спот: занято = locked (в ордерах).
+     * Перпы: занято = начальная маржа позиций и ордеров (totalPositionIM + totalOrderIM).
+     */
+    static double[] freeLocked(JsonNode c, String category) {
+        double total = c.path("walletBalance").asDouble(0);
+        double locked = category.equals("linear")
+                ? c.path("totalPositionIM").asDouble(0) + c.path("totalOrderIM").asDouble(0)
+                : c.path("locked").asDouble(0);
+        return new double[]{Math.max(0, total - locked), locked};
     }
 
     /** Статус Bybit в наш. */

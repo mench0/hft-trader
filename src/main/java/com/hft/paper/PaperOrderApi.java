@@ -7,6 +7,7 @@ import com.hft.rest.ExchangeOrderApi;
 import com.hft.store.BalanceStore;
 import com.hft.store.MarketDataStore;
 import com.hft.store.OrderBook;
+import com.hft.store.PositionStore;
 
 import java.util.Iterator;
 import java.util.Map;
@@ -26,6 +27,11 @@ import java.util.concurrent.atomic.AtomicLong;
  *
  * Баланс при мгновенных исполнениях корректирует OrderService (по результату),
  * поэтому здесь баланс меняется только для отложенных заполнений GTC.
+ *
+ * Режим перпов ({@link #perp(PositionStore)}): те же правила исполнения, но сделка меняет позицию
+ * (лонг/шорт), в баланс котируемой валюты идёт только реализованный результат; reduceOnly-ордер
+ * не больше открытой позиции. Funding начисляет {@link com.hft.perp.PerpAccount} по реальным ставкам биржи.
+ * Ликвидация не моделируется — держите плечо низким.
  */
 public final class PaperOrderApi implements ExchangeOrderApi {
 
@@ -44,6 +50,8 @@ public final class PaperOrderApi implements ExchangeOrderApi {
     private final AtomicLong ids = new AtomicLong(1_000_000);
     /** Висящие лимитные ордера. */
     private final Map<Long, Resting> resting = new ConcurrentHashMap<>();
+    /** Позиции в режиме перпов; null — спот. */
+    private volatile PositionStore positions;
 
     /**
      * @param market стаканы биржи
@@ -70,7 +78,25 @@ public final class PaperOrderApi implements ExchangeOrderApi {
         return l;
     }
 
+    /** Включить режим перпов: исполнения меняют позиции. */
+    public PaperOrderApi perp(PositionStore positions) { this.positions = positions; return this; }
+
     // ------------------------------------------------------------ ExchangeOrderApi
+
+    @Override public boolean isPerp() { return positions != null; }
+
+    /** Закрытие: не больше открытой позиции нужного знака. */
+    @Override
+    public OrderResult reduceMarket(String symbol, Side side, double qty) {
+        PositionStore ps = positions;
+        if (ps != null) {
+            double pos = ps.qty(symbol);
+            double max = side == Side.SELL ? Math.max(0, pos) : Math.max(0, -pos);
+            if (max <= 1e-12) return result(0, symbol, side, "REJECTED", qty, 0, 0, System.nanoTime());
+            qty = Math.min(qty, max);
+        }
+        return takeFromBook(symbol, side, qty, Double.NaN, false, "MARKET");
+    }
 
     @Override public OrderResult buyLimit(String s, double q, double p, TimeInForce t) { return limit(s, Side.BUY, q, p, t); }
     @Override public OrderResult sellLimit(String s, double q, double p, TimeInForce t) { return limit(s, Side.SELL, q, p, t); }
@@ -186,6 +212,13 @@ public final class PaperOrderApi implements ExchangeOrderApi {
             boolean crossed = r.side() == Side.BUY ? top[2] < r.price() : top[0] > r.price();
             if (!crossed) continue;
             if (resting.remove(r.id()) == null) continue;
+            PositionStore ps = positions;
+            if (ps != null) {                              // перп: позиция и реализованный результат
+                double px = r.side() == Side.BUY ? r.price() * (1 + makerFee) : r.price() * (1 - makerFee);
+                double pnl = ps.apply(symbol, r.side() == Side.BUY, r.qtyLeft(), px);
+                if (pnl != 0) balances.adjust(BalanceStore.quoteAsset(symbol), pnl);
+                continue;
+            }
             String base = BalanceStore.baseAsset(symbol), quote = BalanceStore.quoteAsset(symbol);
             double quoteAmount = r.qtyLeft() * r.price();
             if (r.side() == Side.BUY) {
