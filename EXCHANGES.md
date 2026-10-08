@@ -15,7 +15,6 @@
 | Gate | WS | **WS** | **WS** | **WS** | есть |
 | KuCoin | WS | **WS** | **WS** | **WS** | нет |
 | Hyperliquid | WS | **WS** | **WS** | **WS** | есть |
-| Uniswap V2 | WS (сокет ноды) | **WS** (сокет ноды) | **WS** | **WS** | через `restUrl` |
 | MEXC | WS (protobuf) | REST | **WS** (protobuf) | **WS** (protobuf) | нет |
 | Aster | WS | REST | **WS** | **WS** | есть |
 
