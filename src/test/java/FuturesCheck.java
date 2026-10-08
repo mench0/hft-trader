@@ -114,7 +114,7 @@ public class FuturesCheck {
     ck("okx rate", near(ok.get("BTCUSDT").rate(), -0.0002) && near(ok.get("BTCUSDT").intervalHours(), 8));
     var hl = FundingSource.forExchange("hyperliquid", base).fetch(List.of("BTCUSDC"));
     ck("hyperliquid rate", near(hl.get("BTCUSDC").rate(), 0.00002) && hl.get("BTCUSDC").intervalHours() == 1);
-    ck("no source for gate", FundingSource.forExchange("gate", base) == null);
+    ck("no source for uniswap", FundingSource.forExchange("uniswapv2", base) == null);
     srv.stop(0);
 
     // --- диалекты фьючерсов
@@ -132,14 +132,64 @@ public class FuturesCheck {
     ck("binance futures rest path", Dialects.forExchange("binance", new ExchangeConfig("binance", false, "", "", 5000, List.of("BTCUSDT"), 20, 100, PERP))
         .request("https://fapi.binance.com", "BTCUSDT", 20).uri().getPath().equals("/fapi/v1/depth"));
 
+    // --- фьючерсы Gate, KuCoin, MEXC: стакан в контрактах -> монеты
+    com.hft.exchange.generic.ContractSizes.put(com.hft.exchange.Exchange.GATE, "BTC_USDT", 0.0001);
+    com.hft.exchange.generic.ContractSizes.put(com.hft.exchange.Exchange.KUCOIN, "XBTUSDTM", 0.001);
+    com.hft.exchange.generic.ContractSizes.put(com.hft.exchange.Exchange.MEXC, "BTC_USDT", 0.0001);
+    var gws = WsDialects.forExchange("gate", new ExchangeConfig("gate", false, "", "", 5000, List.of("BTCUSDT"), 20, 100, PERP)).orElseThrow();
+    ck("gate futures venue", gws.venueSymbol("BTCUSDT").equals("BTC_USDT"));
+    ck("kucoin futures venue XBT", WsDialects.forExchange("kucoin", new ExchangeConfig("kucoin", false, "", "", 5000, List.of("BTCUSDT"), 20, 100, PERP)).orElseThrow().venueSymbol("BTCUSDT").equals("XBTUSDTM"));
+    var mws = WsDialects.forExchange("mexc", new ExchangeConfig("mexc", false, "", "", 5000, List.of("BTCUSDT"), 20, 100, PERP)).orElseThrow();
+    ck("mexc futures ping json", mws.pingMessage().contains("ping") && !mws.parsesBinary());
+    var grest = Dialects.forExchange("gate", new ExchangeConfig("gate", false, "", "", 5000, List.of("BTCUSDT"), 20, 100, PERP))
+        .parse("{\"current\":1700000000.5,\"asks\":[{\"p\":\"60010\",\"s\":200}],\"bids\":[{\"p\":\"60000\",\"s\":100}]}", "BTCUSDT");
+    ck("gate futures rest contracts -> coins", near(grest.aq()[0], 0.02) && near(grest.bq()[0], 0.01));
+    var krest = Dialects.forExchange("kucoin", new ExchangeConfig("kucoin", false, "", "", 5000, List.of("BTCUSDT"), 20, 100, PERP))
+        .parse("{\"code\":\"200000\",\"data\":{\"bids\":[[\"60000\",10]],\"asks\":[[\"60010\",30]],\"ts\":1700000000000000000}}", "BTCUSDT");
+    ck("kucoin futures rest lots -> coins", near(krest.bq()[0], 0.01) && near(krest.aq()[0], 0.03));
+    var mrest = Dialects.forExchange("mexc", new ExchangeConfig("mexc", false, "", "", 5000, List.of("BTCUSDT"), 20, 100, PERP))
+        .parse("{\"success\":true,\"data\":{\"bids\":[[60000,100,1]],\"asks\":[[60010,300,2]],\"timestamp\":1}}", "BTCUSDT");
+    ck("mexc futures rest contracts -> coins", near(mrest.bq()[0], 0.01) && near(mrest.aq()[0], 0.03));
+    HttpServer fsrv = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    long nx = System.currentTimeMillis() + 3_600_000;
+    Map<String, String> fb = Map.of(
+        "/api/v4/futures/usdt/contracts", "[{\"name\":\"BTC_USDT\",\"funding_rate\":\"0.0002\",\"funding_interval\":28800,\"funding_next_apply\":" + nx / 1000 + ",\"mark_price\":\"60000\"}]",
+        "/api/v1/contracts/active", "{\"code\":\"200000\",\"data\":[{\"symbol\":\"XBTUSDTM\",\"fundingFeeRate\":0.0001,\"fundingRateGranularity\":28800000,\"nextFundingRateDateTime\":" + nx + ",\"markPrice\":60000}]}",
+        "/api/v1/contract/funding_rate/BTC_USDT", "{\"success\":true,\"code\":0,\"data\":{\"fundingRate\":0.0003,\"nextSettleTime\":" + nx + ",\"collectCycle\":8}}",
+        "/fapi/v1/premiumIndex", "[{\"symbol\":\"BTCUSDT\",\"markPrice\":\"60000\",\"lastFundingRate\":\"0.0004\",\"nextFundingTime\":" + nx + "}]");
+    fsrv.createContext("/", ex -> { byte[] b = fb.getOrDefault(ex.getRequestURI().getPath(), "[]").getBytes(); ex.sendResponseHeaders(200, b.length); ex.getResponseBody().write(b); ex.close(); });
+    fsrv.start();
+    String fbase = "http://127.0.0.1:" + fsrv.getAddress().getPort();
+    ck("gate funding", near(FundingSource.forExchange("gate", fbase).fetch(List.of("BTCUSDT")).get("BTCUSDT").rate(), 0.0002));
+    var kfund = FundingSource.forExchange("kucoin", fbase).fetch(List.of("BTCUSDT")).get("BTCUSDT");
+    ck("kucoin funding", kfund != null && near(kfund.rate(), 0.0001) && kfund.nextFundingMs() == nx);
+    ck("mexc funding", near(FundingSource.forExchange("mexc", fbase).fetch(List.of("BTCUSDT")).get("BTCUSDT").rate(), 0.0003));
+    ck("aster funding (binance format)", near(FundingSource.forExchange("aster", fbase).fetch(List.of("BTCUSDT")).get("BTCUSDT").rate(), 0.0004));
+    fsrv.stop(0);
+
+    // --- фабрика: шлюз фьючерсов для каждой биржи с перпами (бумажный режим, без старта)
+    for (var e : com.hft.exchange.Exchange.values()) {
+      if (!e.hasPerp()) continue;
+      var tp = com.hft.control.BotController.defaultsFor(e.id());
+      var gw = com.hft.exchange.ExchangeFactory.create(e.id(), new ExchangeConfig(e.id(), false, "http://127.0.0.1:1", "", 5000,
+          List.of(e == com.hft.exchange.Exchange.HYPERLIQUID ? "BTCUSDC" : "BTCUSDT"), 20, 100, tp), new TradingSettings(tp));
+      ck("factory perp " + e, gw.perp() != null && gw.orders().isPerp());
+    }
+
     // --- параметр market: значения по умолчанию и проверки
     ck("binance default perp", com.hft.control.BotController.defaultsFor("binance").isPerp());
-    ck("gate default spot", !com.hft.control.BotController.defaultsFor("gate").isPerp());
+    ck("gate default perp", com.hft.control.BotController.defaultsFor("gate").isPerp());
+    ck("uniswap default spot", !com.hft.control.BotController.defaultsFor("uniswapv2").isPerp());
+    ck("kucoin perp: no testnet by default", !com.hft.control.BotController.defaultsFor("kucoin").testnet());
     ck("hyperliquid default perp", com.hft.control.BotController.defaultsFor("hyperliquid").isPerp());
     ck("perp taker fee from catalog", near(com.hft.control.BotController.defaultsFor("bybit").takerFeePercent(), 0.055));
     var validate = com.hft.control.BotController.class.getDeclaredMethod("validate", String.class, TradingParams.class);
     validate.setAccessible(true);
-    ck("gate perp rejected", throwsIae(() -> validate.invoke(null, "gate", TradingParams.DEFAULTS.with(Map.of("market", "perp", "testnet", "false")))));
+    ck("uniswap perp rejected", throwsIae(() -> validate.invoke(null, "uniswapv2", TradingParams.DEFAULTS.with(Map.of("market", "perp", "testnet", "false")))));
+    ck("mexc perp testnet rejected", throwsIae(() -> validate.invoke(null, "mexc", TradingParams.DEFAULTS.with(Map.of("market", "perp", "testnet", "true")))));
+    ck("gate perp ok", !throwsIae(() -> validate.invoke(null, "gate", TradingParams.DEFAULTS.with(Map.of("market", "perp", "testnet", "false")))));
+    for (var e : com.hft.exchange.Exchange.values())
+      ck("catalog perp " + e, com.hft.exchange.catalog.ExchangeCatalog.supportsPerp(e.id()) == e.hasPerp());
     ck("hyperliquid spot rejected", throwsIae(() -> validate.invoke(null, "hyperliquid", TradingParams.DEFAULTS)));
     ck("bybit spot ok", !throwsIae(() -> validate.invoke(null, "bybit", TradingParams.DEFAULTS.with(Map.of("market", "spot")))));
     ck("market lowercased", TradingParams.DEFAULTS.with(Map.of("market", "PERP")).market().equals("perp"));

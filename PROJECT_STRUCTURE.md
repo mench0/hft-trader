@@ -21,10 +21,12 @@ hft-trader/
 │   │   ├── ExchangeFactory.java      # id биржи -> реализация
 │   │   ├── catalog/                  # ExchangeCatalog/ExchangeInfo: список бирж, комиссии, лимиты, статус адаптера
 │   │   ├── binance/, bybit/          # нативные адаптеры (свой WS-фид на Netty + REST);
-│   │   │                             # BinanceFuturesClient — USDⓈ-M (fapi, ws-fapi, listenKey)
+│   │   │                             # BinanceFuturesClient — USDⓈ-M (fapi, ws-fapi, listenKey);
+│   │   │                             # фьючерсы остальных: GateFuturesClient, KucoinFuturesClient, MexcFuturesClient,
+│   │   │                             # Aster — тот же AsterRestClient с /fapi/v3
 │   │   ├── okx/, gate/, mexc/, kucoin/, aster/, hyperliquid/, uniswap/
 │   │   │                             # REST-клиенты на общем скелете SignedCexClient
-│   │   └── generic/                  # SignedCexExchange, фиды стакана:
+│   │   └── generic/                  # SignedCexExchange, ContractSizes (размер контракта перпов), фиды стакана:
 │   │                                 # WsBookFeed, PollingBookFeed, HybridBookFeed; диалекты
 │   │                                 # Dialects (REST) и WsDialects (WS), LocalBook, FastJson
 │   ├── rest/                         # SignedCexClient, BinanceRestClient, RateBudget/RateLimits/PacedLimiter,

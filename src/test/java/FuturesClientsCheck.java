@@ -2,6 +2,10 @@ import com.hft.config.*;
 import com.hft.exchange.binance.BinanceFuturesClient;
 import com.hft.exchange.bybit.BybitRestClient;
 import com.hft.exchange.okx.OkxRestClient;
+import com.hft.exchange.gate.GateFuturesClient;
+import com.hft.exchange.kucoin.KucoinFuturesClient;
+import com.hft.exchange.mexc.MexcFuturesClient;
+import com.hft.exchange.aster.AsterRestClient;
 import com.hft.model.OrderEnums.Side;
 import com.hft.model.OrderResult;
 import com.hft.store.*;
@@ -116,6 +120,82 @@ public class FuturesClientsCheck {
     ck("okx positions in coins", near(op.qty("BTCUSDT"), -0.25));
     okx.setLeverage("BTCUSDT", 3);
     ck("okx leverage", last("POST", "/api/v5/account/set-leverage").body().contains("\"lever\":\"3\""));
+
+    // ---------- Gate USDT-фьючерсы: объём в контрактах со знаком
+    seen.clear();
+    routes.put("GET /api/v4/futures/usdt/contracts", "[{\"name\":\"BTC_USDT\",\"quanto_multiplier\":\"0.0001\",\"order_size_min\":1,\"order_size_max\":1000000,\"order_price_round\":\"0.1\"}]");
+    routes.put("POST /api/v4/futures/usdt/orders", "{\"id\":321,\"contract\":\"BTC_USDT\",\"size\":-100,\"left\":0,\"status\":\"finished\",\"finish_as\":\"filled\",\"fill_price\":\"60000\",\"text\":\"t-x\"}");
+    routes.put("GET /api/v4/futures/usdt/accounts", "{\"total\":\"1000\",\"available\":\"700\",\"currency\":\"USDT\"}");
+    routes.put("GET /api/v4/futures/usdt/positions", "[{\"contract\":\"BTC_USDT\",\"size\":-100,\"entry_price\":\"60000\"}]");
+    routes.put("POST /api/v4/futures/usdt/positions/BTC_USDT/leverage", "{}");
+    SymbolFilters gf = new SymbolFilters();
+    var gate = new GateFuturesClient(cfg("gate", url), CR, gf);
+    gate.loadFilters(List.of("BTCUSDT"));
+    ck("gate step = contract", near(gf.roundQuantity("BTCUSDT", 0.01005), 0.01));
+    OrderResult gr = gate.sellMarket("BTCUSDT", 0.01);
+    String gb = last("POST", "/futures/usdt/orders").body();
+    ck("gate order contracts signed", gb.contains("\"size\":-100") && gb.contains("\"tif\":\"ioc\"") && gb.contains("\"price\":\"0\""));
+    ck("gate fill in coins", gr.isFilled() && near(gr.executedQty(), 0.01) && near(gr.avgPrice(), 60000));
+    gate.reduceMarket("BTCUSDT", Side.BUY, 0.01);
+    ck("gate reduce_only", last("POST", "/futures/usdt/orders").body().contains("\"reduce_only\":true"));
+    BalanceStore gbal = new BalanceStore(); gate.loadBalances(gbal);
+    ck("gate balance", near(gbal.free("USDT"), 700) && near(gbal.locked("USDT"), 300));
+    PositionStore gp = new PositionStore(); gate.loadPositions(gp);
+    ck("gate positions in coins", near(gp.qty("BTCUSDT"), -0.01));
+    gate.setLeverage("BTCUSDT", 3);
+    ck("gate leverage", last("POST", "/positions/BTC_USDT/leverage").uri().contains("leverage=3"));
+
+    // ---------- KuCoin Futures: XBTUSDTM, лоты
+    seen.clear();
+    routes.put("GET /api/v1/contracts/active", "{\"code\":\"200000\",\"data\":[{\"symbol\":\"XBTUSDTM\",\"multiplier\":0.001,\"lotSize\":1,\"tickSize\":0.1,\"maxOrderQty\":1000000}]}");
+    routes.put("POST /api/v1/orders", "{\"code\":\"200000\",\"data\":{\"orderId\":\"kf1\"}}");
+    routes.put("GET /api/v1/orders/kf1", "{\"code\":\"200000\",\"data\":{\"isActive\":false,\"size\":20,\"filledSize\":20,\"filledValue\":\"1200\",\"side\":\"buy\",\"clientOid\":\"x\"}}");
+    routes.put("GET /api/v1/account-overview", "{\"code\":\"200000\",\"data\":{\"accountEquity\":1000,\"availableBalance\":900}}");
+    routes.put("GET /api/v1/positions", "{\"code\":\"200000\",\"data\":[{\"symbol\":\"XBTUSDTM\",\"currentQty\":20,\"avgEntryPrice\":60000}]}");
+    routes.put("POST /api/v2/changeCrossUserLeverage", "{\"code\":\"200000\",\"data\":true}");
+    SymbolFilters kf = new SymbolFilters();
+    var kc = new KucoinFuturesClient(new ExchangeConfig("kucoin", false, url, "", 5000, List.of("BTCUSDT"), 20, 100, PERP), CR, kf);
+    kc.loadFilters(List.of("BTCUSDT"));
+    OrderResult kr = kc.buyMarket("BTCUSDT", 0.02);
+    String kb = last("POST", "/api/v1/orders").body();
+    ck("kucoin futures order", kb.contains("\"symbol\":\"XBTUSDTM\"") && kb.contains("\"size\":20") && kb.contains("\"leverage\":2") && kb.contains("\"marginMode\":\"CROSS\""));
+    ck("kucoin futures fill", kr.isFilled() && near(kr.executedQty(), 0.02) && near(kr.avgPrice(), 60000));
+    PositionStore kp = new PositionStore(); kc.loadPositions(kp);
+    ck("kucoin futures positions", near(kp.qty("BTCUSDT"), 0.02));
+    BalanceStore kbal = new BalanceStore(); kc.loadBalances(kbal);
+    ck("kucoin futures balance", near(kbal.free("USDT"), 900));
+
+    // ---------- MEXC Contract: сторона = направление позиции
+    seen.clear();
+    routes.put("GET /api/v1/contract/detail", "{\"success\":true,\"code\":0,\"data\":[{\"symbol\":\"BTC_USDT\",\"contractSize\":0.0001,\"minVol\":1,\"maxVol\":1000000,\"volUnit\":1,\"priceUnit\":0.1}]}");
+    routes.put("POST /api/v1/private/order/submit", "{\"success\":true,\"code\":0,\"data\":\"m77\"}");
+    routes.put("GET /api/v1/private/order/get/m77", "{\"success\":true,\"code\":0,\"data\":{\"state\":3,\"vol\":100,\"dealVol\":100,\"dealAvgPrice\":60000,\"side\":3}}");
+    routes.put("GET /api/v1/private/position/open_positions", "{\"success\":true,\"code\":0,\"data\":[{\"symbol\":\"BTC_USDT\",\"positionType\":2,\"holdVol\":100,\"holdAvgPrice\":60000}]}");
+    SymbolFilters mf = new SymbolFilters();
+    var mx = new MexcFuturesClient(cfg("mexc", url), CR, mf);
+    mx.loadFilters(List.of("BTCUSDT"));
+    OrderResult mr = mx.sellMarket("BTCUSDT", 0.01);
+    String mb = last("POST", "/order/submit").body();
+    ck("mexc open short side 3, market 5", mb.contains("\"side\":3") && mb.contains("\"type\":5") && mb.contains("\"vol\":100"));
+    ck("mexc fill", mr.isFilled() && near(mr.executedQty(), 0.01));
+    mx.reduceMarket("BTCUSDT", Side.BUY, 0.01);
+    ck("mexc close short side 2", last("POST", "/order/submit").body().contains("\"side\":2"));
+    PositionStore mp = new PositionStore(); mx.loadPositions(mp);
+    ck("mexc short position", near(mp.qty("BTCUSDT"), -0.01));
+    ck("mexc signed headers", last("POST", "/order/submit") != null);
+
+    // ---------- Aster: фьючерсы через /fapi/v3
+    seen.clear();
+    routes.put("POST /fapi/v3/order", "{\"orderId\":5,\"clientOrderId\":\"c\",\"status\":\"FILLED\",\"origQty\":\"0.01\",\"executedQty\":\"0.01\",\"avgPrice\":\"60000\",\"side\":\"SELL\"}");
+    routes.put("GET /fapi/v3/positionRisk", "[{\"symbol\":\"BTCUSDT\",\"positionAmt\":\"-0.01\",\"entryPrice\":\"60000\"}]");
+    SymbolFilters af = new SymbolFilters(); af.put("BTCUSDT", new SymbolFilters.Filter(0.001, 1e9, 0.001, 0, 1e9, 0.1, 1));
+    var aster = new AsterRestClient(cfg("aster", url), new Credentials("0x00000000000000000000000000000000000000aa", "k"), af, new TC());
+    ck("aster perp", aster.isPerp());
+    aster.reduceMarket("BTCUSDT", Side.BUY, 0.01);
+    var ao = last("POST", "/fapi/v3/order");
+    ck("aster futures order path + reduceOnly", ao != null && ao.uri().contains("reduceOnly=true"));
+    PositionStore ap = new PositionStore(); aster.loadPositions(ap);
+    ck("aster positions", near(ap.qty("BTCUSDT"), -0.01));
 
     srv.stop(0);
     System.out.println("FuturesClientsCheck: pass=" + pass + " fail=" + fail);

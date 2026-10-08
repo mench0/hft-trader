@@ -352,7 +352,13 @@ curl -X POST "localhost:8080/exchange/params?exchange=bybit&maxPositionQuote=50&
 | Bybit | linear | v5 `category=linear`: стакан `/v5/public/linear`, ордера `/v5/trade`, позиции — поток `position` |
 | OKX | SWAP | инструменты `BTC-USDT-SWAP`, `tdMode=cross`, объём в контрактах (`ctVal`) пересчитывается в монеты; позиции — канал `positions` |
 | Hyperliquid | только перпы | то же, что и раньше; плечо — действие `updateLeverage`, позиции — `clearinghouseState` |
-| Gate, KuCoin, MEXC, Aster, Uniswap V2 | нет | только `market=spot`; `market=perp` отклоняется |
+| Gate | USDT-фьючерсы | REST `/api/v4/futures/usdt`, контракт `BTC_USDT`, объём в контрактах (`quanto_multiplier`); стакан — WS `futures.order_book` |
+| KuCoin | Futures | REST `api-futures.kucoin.com`, символ `XBTUSDTM`, объём в лотах (`multiplier`); стакан — WS `/contractMarket/level2Depth50` |
+| MEXC | Contract | REST `contract.mexc.com`, `BTC_USDT`, объём в контрактах (`contractSize`); стакан — WS `sub.depth.full`. Ордера через API MEXC выдаёт по отдельному доступу |
+| Aster | Futures | формат Binance USDⓈ-M: REST `/fapi/v3` (подпись EIP-712, как у спота), стакан `fstream.asterdex.com`, исполнения/позиции — listenKey |
+| Uniswap V2 | нет | AMM-пулы обмена: только `market=spot`, `market=perp` отклоняется |
+
+Какие рынки есть у биржи, записано в enum `Exchange` (`hasSpot()`, `hasPerp()`) и отдаётся в `GET /exchanges/catalog` (`markets`).
 
 Новая биржа с фьючерсами получает `market=perp`, комиссию тейкера по фьючерсному тарифу и плечо `leverage=2`.
 
@@ -825,6 +831,10 @@ KuCoin в режиме UTA торгует через `uta.order` / `uta.cancel` 
 Форматы публичных API записаны по памяти и проверены только на фейковом сервере; ошибка одной биржи видна в статусе и не мешает остальным.
 
 ## История изменений
+
+- **2026-10:** фьючерсы для всех бирж, где они бывают: добавлены Gate (USDT-фьючерсы), KuCoin Futures, MEXC Contract
+  и Aster Futures — клиенты, стаканы (WS + REST), funding, позиции, плечо. В enum `Exchange` — какие рынки есть у биржи
+  (`hasSpot`, `hasPerp`); только спот остался у Uniswap V2.
 
 - **2026-10:** биржи — enum `com.hft.exchange.Exchange`: строковые id записаны в одном месте, выбор клиента, диалектов,
   лимитов, источников funding и сводок идёт по enum (`switch` по константам вместо строк).
