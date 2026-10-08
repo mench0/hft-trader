@@ -223,8 +223,9 @@ public final class AdminServer {
             n.put("notes", i.notes());
             n.put("selectable", true);                               // в каталоге только реализованные биржи
             ArrayNode markets = n.putArray("markets");             // какие значения параметра market допустимы
-            if (com.hft.exchange.catalog.ExchangeCatalog.supportsPerp(i.id())) markets.add("perp");
-            if (com.hft.exchange.catalog.ExchangeCatalog.supportsSpot(i.id())) markets.add("spot");
+            Exchange venue = i.exchange();                           // сначала рынок по умолчанию (его выбирает админка)
+            markets.add(venue.defaultMarket().id());
+            for (com.hft.exchange.Market mk : venue.markets()) if (mk != venue.defaultMarket()) markets.add(mk.id());
             com.hft.exchange.catalog.ExchangeCatalog.perp(i.id()).ifPresent(v -> {
                 n.put("perpMakerFeePct", v.makerFeePct());
                 n.put("perpTakerFeePct", v.takerFeePct());

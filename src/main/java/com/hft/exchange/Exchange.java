@@ -1,7 +1,9 @@
 package com.hft.exchange;
 
+import java.util.EnumSet;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Все биржи, о которых знает бот. Единственное место, где записаны их строковые id
@@ -9,32 +11,40 @@ import java.util.Optional;
  * Код сравнивает и выбирает биржи по этому enum, а не по строкам.
  */
 public enum Exchange {
-    //          id             спот   перп
-    BINANCE    ("binance",     true,  true),
-    BYBIT      ("bybit",       true,  true),
-    OKX        ("okx",         true,  true),
-    MEXC       ("mexc",        true,  true),
-    GATE       ("gate",        true,  true),
-    HYPERLIQUID("hyperliquid", false, true),
-    KUCOIN     ("kucoin",      true,  true),
-    ASTER      ("aster",       true,  true),
-    UNISWAPV2  ("uniswapv2",   true,  false);   // AMM-пулы обмена: фьючерсов не бывает
+    BINANCE    ("binance",     Market.SPOT, Market.PERP),
+    BYBIT      ("bybit",       Market.SPOT, Market.PERP),
+    OKX        ("okx",         Market.SPOT, Market.PERP),
+    MEXC       ("mexc",        Market.SPOT, Market.PERP),
+    GATE       ("gate",        Market.SPOT, Market.PERP),
+    HYPERLIQUID("hyperliquid", Market.PERP),
+    KUCOIN     ("kucoin",      Market.SPOT, Market.PERP),
+    ASTER      ("aster",       Market.SPOT, Market.PERP),
+    UNISWAPV2  ("uniswapv2",   Market.SPOT);                // AMM-пулы обмена: фьючерсов не бывает
 
     /** Строковый id: "binance", "bybit"… */
     private final String id;
-    /** Какие рынки бот умеет на этой бирже: спот (market=spot) и бессрочные фьючерсы (market=perp). */
-    private final boolean spot, perp;
+    /** Какие рынки бот умеет на этой бирже. */
+    private final Set<Market> markets;
 
-    Exchange(String id, boolean spot, boolean perp) { this.id = id; this.spot = spot; this.perp = perp; }
+    Exchange(String id, Market first, Market... rest) { this.id = id; this.markets = EnumSet.of(first, rest); }
 
     /** Строковый id биржи. */
     public String id() { return id; }
 
+    /** Рынки биржи (копия). */
+    public Set<Market> markets() { return EnumSet.copyOf(markets); }
+
+    /** Бот умеет этот рынок на этой бирже. */
+    public boolean supports(Market m) { return markets.contains(m); }
+
     /** Бот торгует спотом этой биржи (market=spot). */
-    public boolean hasSpot() { return spot; }
+    public boolean hasSpot() { return supports(Market.SPOT); }
 
     /** Бот торгует бессрочными фьючерсами этой биржи (market=perp). */
-    public boolean hasPerp() { return perp; }
+    public boolean hasPerp() { return supports(Market.PERP); }
+
+    /** Рынок по умолчанию для новой биржи: перп, если есть, иначе спот. */
+    public Market defaultMarket() { return hasPerp() ? Market.PERP : Market.SPOT; }
 
     /** Префикс переменных окружения: BINANCE (BINANCE_API_KEY, BINANCE_LIVE…). */
     public String envPrefix() { return id.toUpperCase(Locale.ROOT); }

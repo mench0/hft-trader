@@ -17,6 +17,7 @@ hft-trader/
 │   ├── exchange/
 │   │   ├── Exchange.java             # enum всех бирж: единственное место со строковыми id ("binance"…),
 │   │   │                             # по нему выбираются клиенты, диалекты, лимиты, источники funding
+│   │   ├── Market.java               # enum рынков SPOT/PERP ("spot"/"perp"); у каждой биржи свой набор
 │   │   ├── ExchangeGateway.java      # общий контракт биржи
 │   │   ├── ExchangeFactory.java      # id биржи -> реализация
 │   │   ├── catalog/                  # ExchangeCatalog/ExchangeInfo: список бирж, комиссии, лимиты, статус адаптера

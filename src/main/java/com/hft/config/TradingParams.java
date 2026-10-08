@@ -27,7 +27,7 @@ public record TradingParams(
         boolean wsTrade,
         double paperStartBalance,
         // ---- рынок ----
-        String market,
+        com.hft.exchange.Market market,
         int leverage,
         // ---- работа фидов и клиента ----
         long wsStaleMs,
@@ -108,7 +108,7 @@ public record TradingParams(
             flag("wsTrade", true, "Отправлять ордера по WebSocket, где биржа это умеет (иначе REST)").needsRestart(),
             num("paperStartBalance", 1000, 0, 1e12, "Стартовый бумажный баланс в котируемой валюте каждого символа").needsRestart(),
             // рынок
-            text("market", "spot", "(spot|perp)", "Рынок: perp — бессрочные фьючерсы (USDT-M; лонг и шорт, плечо, funding), spot — спот. "
+            text("market", com.hft.exchange.Market.SPOT.id(), "(spot|perp)", "Рынок: perp — бессрочные фьючерсы (USDT-M; лонг и шорт, плечо, funding), spot — спот. "
                     + "Новая биржа с фьючерсами получает perp: Binance, Bybit, OKX, Gate, KuCoin, MEXC, Aster (оба рынка), Hyperliquid (только perp); "
                     + "Uniswap V2 — только spot (у AMM фьючерсов нет)").needsRestart(),
             num("leverage", 2, 1, 50, "Плечо для фьючерсов (выставляется на бирже при старте); на споте не используется").needsRestart(),
@@ -182,7 +182,7 @@ public record TradingParams(
 
     /** Торговля бессрочными фьючерсами (иначе спот). Не параметр — в JSON админки не выводится. */
     @com.fasterxml.jackson.annotation.JsonIgnore
-    public boolean isPerp() { return "perp".equals(market); }
+    public boolean isPerp() { return market == com.hft.exchange.Market.PERP; }
 
     /** Параметры, которые уходят в верхний регистр (тикеры, валюты). */
     private static final java.util.Set<String> UPPER = java.util.Set.of("triHomeAsset", "statArbPairs");
@@ -206,7 +206,7 @@ public record TradingParams(
         for (var e : updates.entrySet()) {
             if (!SPECS.containsKey(e.getKey())) continue;
             String v = e.getValue().trim();
-            m.put(e.getKey(), UPPER.contains(e.getKey()) ? v.toUpperCase() : e.getKey().equals("market") ? v.toLowerCase() : v);
+            m.put(e.getKey(), UPPER.contains(e.getKey()) ? v.toUpperCase() : v);
         }
         TradingParams p = ParamSpec.build(TradingParams.class, SPECS, m);
         if (p.statArbExitZ >= p.statArbEntryZ || p.statArbStopZ <= p.statArbEntryZ)

@@ -110,6 +110,11 @@ public final class ExchangeCatalog {
     /** Фьючерсный рынок биржи, если он есть. */
     public static Optional<PerpVenue> perp(String id) { return Exchange.find(id).map(PERP::get); }
 
+    /** Бот умеет этот рынок на бирже. */
+    public static boolean supports(String id, com.hft.exchange.Market market) {
+        return Exchange.find(id).map(e -> e.supports(market)).orElse(false);
+    }
+
     /** У биржи есть фьючерсы (market=perp). */
     public static boolean supportsPerp(String id) { return Exchange.find(id).map(Exchange::hasPerp).orElse(false); }
 
