@@ -100,6 +100,7 @@ public final class AdminServer {
         route("/positions", this::handlePositions);
         route("/positions/close", this::handleClosePosition);
         route("/funding", this::handleFunding);
+        route("/arbitrage", this::handleArbitrage);
 
         // Торговля поверх уже запущенных подключений
         route("/trading/start", this::handleTradingStart);
@@ -470,6 +471,20 @@ public final class AdminServer {
         }
         var fa = controller.fundingArb();
         root.set("arbitrage", fa == null ? mapper.createObjectNode().put("running", false) : mapper.valueToTree(fa.stats()));
+        var ca = controller.carry();
+        root.set("carry", ca == null ? mapper.createObjectNode().put("running", false) : mapper.valueToTree(ca.stats()));
+        send(ex, 200, root);
+    }
+
+    /** GET /arbitrage — межбиржевые стратегии на перпах: ценовой арбитраж, funding-арбитраж, cash-and-carry. */
+    private void handleArbitrage(HttpExchange ex) throws IOException {
+        ObjectNode root = mapper.createObjectNode();
+        var pa = controller.perpArb();
+        var fa = controller.fundingArb();
+        var ca = controller.carry();
+        root.set("perpPrice", pa == null ? mapper.createObjectNode().put("running", false) : mapper.valueToTree(pa.stats()));
+        root.set("funding", fa == null ? mapper.createObjectNode().put("running", false) : mapper.valueToTree(fa.stats()));
+        root.set("carry", ca == null ? mapper.createObjectNode().put("running", false) : mapper.valueToTree(ca.stats()));
         send(ex, 200, root);
     }
 

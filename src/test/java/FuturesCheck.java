@@ -33,16 +33,19 @@ public class FuturesCheck {
       market.register(symbol);
       market.book(symbol).applySnapshot(new double[]{bid}, new double[]{100}, 1, new double[]{ask}, new double[]{100}, 1, 1, System.currentTimeMillis());
       bal.set(BalanceStore.quoteAsset(symbol), 1000, 0);
-      var paper = new PaperOrderApi(market, bal, 0, 0).perp(pos);
+      boolean isPerp = ts.get().isPerp();
+      var paper = new PaperOrderApi(market, bal, 0, 0);
+      if (isPerp) paper.perp(pos);
       SymbolFilters f = new SymbolFilters(); ExchangeSupport.putDefaultFilter(f, symbol);
       risk = new RiskManager(ts, market, id);
       orders = new OrderService(paper, market, bal, f, risk, ts, pos);
-      perp = new PerpAccount(id, new ExchangeConfig(id, false, "http://x", "", 5000, List.of(symbol), 20, 100, ts.get()), market, bal, pos, paper, true);
+      perp = isPerp ? new PerpAccount(id, new ExchangeConfig(id, false, "http://x", "", 5000, List.of(symbol), 20, 100, ts.get()), market, bal, pos, paper, true) : null;
     }
     public String id(){ return id; } public void start(){} public void stop(){} public boolean isConnected(){ return true; }
     public long messageCount(){ return 0; } public List<String> symbols(){ return List.copyOf(market.symbols()); }
     public MarketDataStore marketData(){ return market; } public BalanceStore balances(){ return bal; }
     public OrderService orders(){ return orders; } public RiskManager risk(){ return risk; }
+    void book(String s, double bid, double ask) { market.book(s).applySnapshot(new double[]{bid}, new double[]{100}, 1, new double[]{ask}, new double[]{100}, 1, 2, System.currentTimeMillis()); }
     public StrategySet strategy(){ return null; } public void syncBalances(){} public PerpAccount perp(){ return perp; }
   }
 
@@ -180,6 +183,47 @@ public class FuturesCheck {
     ck("fees covered - entry", cheap.openPairs() == 1);
     cheap.stop();
     ck("exit diff < entry diff enforced", throwsIae(() -> GlobalParams.DEFAULTS.with(Map.of("fundingArbExitDiffPercent", "0.05"))));
+
+    // --- ценовой арбитраж перпов: продать там, где дороже, купить где дешевле, закрыть при схождении
+    Map<String,String> big = Map.of("tradingEnabled", "true", "maxPositionQuote", "1000");
+    Gw pa = new Gw("binance", "ETHUSDT", 101, 101.1, big);
+    Gw pb = new Gw("bybit", "ETHUSDT", 99.9, 100, big);
+    var parb = new PerpPriceArbitrage(() -> GlobalParams.DEFAULTS.with(Map.of("perpArbEnabled", "true", "perpArbOrderQuote", "100")),
+        () -> List.of(pa, pb), id -> true, id -> 0.05);
+    parb.tick(System.currentTimeMillis());
+    ck("perp arb opened", parb.openPairs() == 1 && pa.pos.qty("ETHUSDT") < 0 && pb.pos.qty("ETHUSDT") > 0
+        && near(-pa.pos.qty("ETHUSDT"), pb.pos.qty("ETHUSDT")));
+    parb.tick(System.currentTimeMillis());
+    ck("perp arb holds while spread open", parb.openPairs() == 1);
+    pa.book("ETHUSDT", 100.4, 100.5); pb.book("ETHUSDT", 100.5, 100.6);       // сошлись: аск A ≤ бид B
+    parb.tick(System.currentTimeMillis());
+    ck("perp arb closed on convergence", parb.openPairs() == 0 && pa.pos.get("ETHUSDT").isFlat() && pb.pos.get("ETHUSDT").isFlat());
+    ck("perp arb profit", (double) parb.stats().get("pnl") > 0);
+    // расхождение меньше комиссий — входа нет
+    pa.book("ETHUSDT", 100.1, 100.2); pb.book("ETHUSDT", 99.95, 100.0);
+    parb.tick(System.currentTimeMillis());
+    ck("perp arb: spread below fees - no entry", parb.openPairs() == 0);
+    parb.stop();
+
+    // --- cash-and-carry: спот-лонг на бирже со спотом + шорт перпа при положительной ставке
+    Gw sp = new Gw("gate", "ADAUSDT", 0.999, 1.0, Map.of("tradingEnabled", "true", "market", "spot", "maxPositionQuote", "1000"));
+    sp.bal.set("USDT", 1000, 0);
+    Gw pp = new Gw("bybit", "ADAUSDT", 1.0, 1.001, big);
+    long tt = System.currentTimeMillis();
+    pp.perp.onFunding("ADAUSDT", new Funding(0.0005, 8, tt + 3_600_000, 1.0, tt));   // 0.05% за 8 ч
+    GlobalParams[] cg = { GlobalParams.DEFAULTS.with(Map.of("carryEnabled", "true", "carryOrderQuote", "50")) };
+    var carry = new FundingCarry(() -> cg[0], () -> List.of(sp, pp), id -> true, id -> 0.05);
+    carry.tick(tt);
+    ck("carry opened", carry.openPositions() == 1 && sp.bal.free("ADA") > 0 && pp.pos.qty("ADAUSDT") < 0
+        && near(sp.bal.free("ADA"), -pp.pos.qty("ADAUSDT")));
+    pp.perp.onFunding("ADAUSDT", new Funding(-0.0001, 8, tt + 3_600_000, 1.0, tt));  // ставка ушла в минус
+    carry.tick(tt);
+    ck("carry closed on rate drop", carry.openPositions() == 0 && pp.pos.get("ADAUSDT").isFlat() && sp.bal.free("ADA") < 1e-6);
+    pp.perp.onFunding("ADAUSDT", new Funding(0.00002, 8, tt + 3_600_000, 1.0, tt));  // 0.002%: комиссии 0.2% не окупятся
+    var c2 = new FundingCarry(() -> GlobalParams.DEFAULTS.with(Map.of("carryEnabled", "true", "carryMinRatePercent", "0.001")), () -> List.of(sp, pp), id -> true, id -> 0.05);
+    c2.tick(tt);
+    ck("carry: fees not covered - no entry", c2.openPositions() == 0);
+    ck("carry exit < min enforced", throwsIae(() -> GlobalParams.DEFAULTS.with(Map.of("carryExitRatePercent", "0.05"))));
 
  // --- комиссии в боевом режиме: клиент отдаёт цену без комиссии, OrderService списывает её сразу
     var lm = new MarketDataStore(20, 100); lm.register("BTCUSDT");

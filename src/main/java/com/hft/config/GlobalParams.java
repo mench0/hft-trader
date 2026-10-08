@@ -44,7 +44,29 @@ public record GlobalParams(
         int fundingArbMaxPositions,
         double fundingArbMaxBasisPercent,
         double fundingArbMaxHoldHours,
-        String fundingArbSymbols
+        String fundingArbSymbols,
+        // ---- ценовой арбитраж перпов между биржами ----
+        boolean perpArbEnabled,
+        long perpArbCheckMs,
+        double perpArbMinProfitPercent,
+        double perpArbExitSpreadPercent,
+        double perpArbStopLossPercent,
+        double perpArbOrderQuote,
+        int perpArbMaxPositions,
+        double perpArbMaxHoldMinutes,
+        long perpArbMaxBookAgeMs,
+        double perpArbDepthUsage,
+        String perpArbSymbols,
+        // ---- cash-and-carry: спот + шорт перпа ----
+        boolean carryEnabled,
+        double carryMinRatePercent,
+        double carryExitRatePercent,
+        double carryPaybackPeriods,
+        double carryOrderQuote,
+        int carryMaxPositions,
+        double carryMaxBasisPercent,
+        double carryMaxHoldHours,
+        String carrySymbols
 ) {
 
     /** Описания всех параметров. */
@@ -83,7 +105,30 @@ public record GlobalParams(
             num("fundingArbMaxPositions", 3, 1, 100, "Сколько пар позиций держать одновременно"),
             num("fundingArbMaxBasisPercent", 0.15, 0, 10, "Вход только если цены на двух биржах отличаются не больше, %"),
             num("fundingArbMaxHoldHours", 72, 1, 24 * 90, "Закрыть пару позиций по таймауту, ч"),
-            text("fundingArbSymbols", "", "([A-Z0-9]+(,[A-Z0-9]+)*)?", "Символы для арбитража через запятую; пусто — все общие символы бирж с market=perp")
+            text("fundingArbSymbols", "", "([A-Z0-9]+(,[A-Z0-9]+)*)?", "Символы для арбитража через запятую; пусто — все общие символы бирж с market=perp"),
+            // ценовой арбитраж перпов
+            flag("perpArbEnabled", false, "Ценовой арбитраж перпов между биржами: продать там, где перп дороже, купить там, где дешевле, закрыть при схождении цен"),
+            num("perpArbCheckMs", 200, 50, 60_000, "Как часто сравнивать стаканы, мс").needsRestart(),
+            num("perpArbMinProfitPercent", 0.05, 0, 10, "Вход: ожидаемая прибыль после 4 комиссий тейкера обеих бирж не меньше, %"),
+            num("perpArbExitSpreadPercent", 0.0, -10, 10, "Выход: стоимость закрытия пары (аск дорогой − бид дешёвой) упала до этого, %"),
+            num("perpArbStopLossPercent", 0.5, 0.01, 50, "Стоп: расхождение цен выросло, и убыток пары по ценам больше этого, %"),
+            num("perpArbOrderQuote", 50, 0, 1e9, "Размер каждой ноги в котируемой валюте"),
+            num("perpArbMaxPositions", 3, 1, 100, "Сколько пар держать одновременно"),
+            num("perpArbMaxHoldMinutes", 60, 1, 10_080, "Закрыть пару по таймауту, мин"),
+            num("perpArbMaxBookAgeMs", 1000, 10, 60_000, "Оба стакана не старше, мс"),
+            num("perpArbDepthUsage", 0.5, 0.01, 1, "Какую долю объёма лучших уровней можно взять"),
+            text("perpArbSymbols", "", "([A-Z0-9]+(,[A-Z0-9]+)*)?", "Монеты или символы через запятую; пусто — все общие"),
+            // cash-and-carry
+            flag("carryEnabled", false, "Cash-and-carry: лонг спота на бирже с market=spot и шорт перпа той же монеты на бирже с market=perp — "
+                    + "получать положительный funding без ценового риска"),
+            num("carryMinRatePercent", 0.01, 0.0001, 10, "Вход: ставка перпа за 8 ч не меньше, %"),
+            num("carryExitRatePercent", 0.0, -10, 10, "Выход: ставка за 8 ч упала ниже, %"),
+            num("carryPaybackPeriods", 9, 0.5, 1000, "Вход, только если ставка окупает комиссии круга (2 сделки спота + 2 перпа) за столько периодов по 8 ч"),
+            num("carryOrderQuote", 50, 0, 1e9, "Сумма покупки спота (шорт перпа — на тот же объём), в котируемой валюте"),
+            num("carryMaxPositions", 3, 1, 100, "Сколько позиций держать одновременно"),
+            num("carryMaxBasisPercent", 0.3, 0, 10, "Вход, только если цены спота и перпа отличаются не больше, %"),
+            num("carryMaxHoldHours", 168, 1, 24 * 365, "Закрыть позицию по таймауту, ч"),
+            text("carrySymbols", "", "([A-Z0-9]+(,[A-Z0-9]+)*)?", "Монеты или символы через запятую; пусто — все общие для спота и перпов")
     ));
 
     /** Значения по умолчанию. */
@@ -104,11 +149,13 @@ public record GlobalParams(
         for (var e : updates.entrySet()) {
             if (!SPECS.containsKey(e.getKey())) continue;
             String v = e.getValue().trim();
-            m.put(e.getKey(), e.getKey().equals("discoveryQuotes") || e.getKey().equals("fundingArbSymbols") ? v.toUpperCase() : e.getKey().equals("discoveryExchanges") ? v.toLowerCase() : v);
+            m.put(e.getKey(), java.util.Set.of("discoveryQuotes", "fundingArbSymbols", "perpArbSymbols", "carrySymbols").contains(e.getKey()) ? v.toUpperCase() : e.getKey().equals("discoveryExchanges") ? v.toLowerCase() : v);
         }
         GlobalParams g = ParamSpec.build(GlobalParams.class, SPECS, m);
         if (g.fundingArbExitDiffPercent >= g.fundingArbMinDiffPercent)
             throw new IllegalArgumentException("нужно fundingArbExitDiffPercent < fundingArbMinDiffPercent");
+        if (g.carryExitRatePercent >= g.carryMinRatePercent)
+            throw new IllegalArgumentException("нужно carryExitRatePercent < carryMinRatePercent");
         return g;
     }
 
