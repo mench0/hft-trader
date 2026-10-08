@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.hft.exchange.Exchange;
 import com.hft.store.BalanceStore;
 
 import java.math.BigInteger;
@@ -34,13 +35,13 @@ public final class WsDialects {
     /** WS-диалект биржи с её параметрами (для Uniswap — пулы из uniPools). */
     public static Optional<WsDialect> forExchange(String id, com.hft.config.ExchangeConfig cfg) {
         if (cfg.params().isPerp()) {
-            switch (id) {
-                case "binance": return Optional.of(binanceFutures());
-                case "okx": return Optional.of(new Okx(true, cfg.restUrl()));
-                default: break;                              // Hyperliquid — те же сообщения; Bybit — свой фид
+            switch (Exchange.find(id).orElse(null)) {
+                case BINANCE: return Optional.of(binanceFutures());
+                case OKX: return Optional.of(new Okx(true, cfg.restUrl()));
+                case null, default: break;                              // Hyperliquid — те же сообщения; Bybit — свой фид
             }
         }
-        return id.equals("uniswapv2") ? Optional.of(new Uniswap(cfg.params().uniPools())) : forExchange(id);
+        return Exchange.UNISWAPV2.is(id) ? Optional.of(new Uniswap(cfg.params().uniPools())) : forExchange(id);
     }
 
     /** Binance USDⓈ-M: формат Aster/Binance (b/a), адрес fstream. */
@@ -50,15 +51,15 @@ public final class WsDialects {
 
     /** WS-диалект биржи без её параметров (для Uniswap пулы пусты); пусто — у биржи нет WS-стакана. */
     public static Optional<WsDialect> forExchange(String id) {
-        return switch (id) {
-            case "okx" -> Optional.of(new Okx(false, ""));
-            case "gate" -> Optional.of(new Gate());
-            case "hyperliquid" -> Optional.of(new Hyperliquid());
-            case "uniswapv2" -> Optional.of(new Uniswap(""));
-            case "kucoin" -> Optional.of(new Kucoin());
-            case "aster" -> Optional.of(new Aster());
-            case "mexc" -> Optional.of(new MexcWsDialect());
-            default -> Optional.empty();
+        return switch (Exchange.find(id).orElse(null)) {
+            case OKX -> Optional.of(new Okx(false, ""));
+            case GATE -> Optional.of(new Gate());
+            case HYPERLIQUID -> Optional.of(new Hyperliquid());
+            case UNISWAPV2 -> Optional.of(new Uniswap(""));
+            case KUCOIN -> Optional.of(new Kucoin());
+            case ASTER -> Optional.of(new Aster());
+            case MEXC -> Optional.of(new MexcWsDialect());
+            case null, default -> Optional.empty();
         };
     }
 
@@ -451,7 +452,7 @@ public final class WsDialects {
 
         @Override public String connectUrl(String url, String restUrl) throws Exception {
             if (!url.startsWith("kucoin:")) return url;                       // адрес задан в конфиге явно
-            com.hft.rest.RateBudget budget = com.hft.rest.RateBudget.of("kucoin");
+            com.hft.rest.RateBudget budget = com.hft.rest.RateBudget.of(Exchange.KUCOIN.id());
             budget.acquire(com.hft.rest.RateBudget.Kind.PUBLIC, 10, 60_000);
             var req = java.net.http.HttpRequest.newBuilder(java.net.URI.create(restUrl.replaceAll("/+$", "") + "/api/v1/bullet-public"))
                     .timeout(java.time.Duration.ofSeconds(10)).POST(java.net.http.HttpRequest.BodyPublishers.noBody()).build();

@@ -3,6 +3,7 @@ package com.hft.exchange.bybit;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
 import com.hft.config.ExchangeConfig;
+import com.hft.exchange.Exchange;
 import com.hft.exchange.generic.FastJson;
 import com.hft.exchange.generic.LocalBook;
 import com.hft.engine.TickPipeline;
@@ -79,7 +80,7 @@ public final class BybitMarketDataFeed extends AbstractWsFeed {
 
     /** Имя для логов и бюджета лимитов. */
     @Override
-    protected String name() { return "bybit"; }
+    protected String name() { return Exchange.BYBIT.id(); }
 
     /** Адрес WebSocket (у Binance — с подпиской на потоки в URL). */
     @Override

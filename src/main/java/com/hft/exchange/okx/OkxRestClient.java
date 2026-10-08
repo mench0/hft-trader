@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.hft.config.Credentials;
 import com.hft.config.ExchangeConfig;
+import com.hft.exchange.Exchange;
 import com.hft.model.OrderEnums.Side;
 import com.hft.model.OrderEnums.Type;
 import com.hft.model.OrderResult;
@@ -60,7 +61,7 @@ public final class OkxRestClient extends SignedCexClient {
      * @param filters правила символов
      */
     public OkxRestClient(ExchangeConfig config, Credentials credentials, SymbolFilters filters) {
-        super("okx", config, credentials, filters);
+        super(Exchange.OKX.id(), config, credentials, filters);
         String p = com.hft.config.Env.get("OKX_PASSPHRASE");
         if (credentials.isPresent() && (p == null || p.isBlank())) {
             throw new IllegalStateException("OKX требует OKX_PASSPHRASE (фраза, заданная при создании API-ключа)");
@@ -274,7 +275,7 @@ public final class OkxRestClient extends SignedCexClient {
             openKnown = false;
             log.warn("[okx] не удалось прочитать открытые ордера: {} — отмена пойдёт через REST", e.getMessage());
         }
-        WsRpcChannel ch = new WsRpcChannel("okx", new Private()).onEvent(this::onEvent);
+        WsRpcChannel ch = new WsRpcChannel(Exchange.OKX.id(), new Private()).onEvent(this::onEvent);
         wsChannel = ch;
         ch.start();
     }

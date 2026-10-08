@@ -32,6 +32,9 @@ public record ExchangeInfo(
         this(id, title, kind, adapter, restUrl, maxRequestsPerSec, makerFeePct, takerFeePct, defaultQuote, symbolHint, notes, null, null, null);
     }
 
+    /** Биржа как enum. */
+    public com.hft.exchange.Exchange exchange() { return com.hft.exchange.Exchange.of(id); }
+
     /** Есть ли у биржи тестовая сеть. */
     public boolean hasTestnet() { return testnetRestUrl != null; }
 

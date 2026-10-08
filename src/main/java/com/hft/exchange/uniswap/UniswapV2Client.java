@@ -6,6 +6,7 @@ import com.hft.config.Credentials;
 import com.hft.config.ExchangeConfig;
 import com.hft.crypto.EvmCrypto;
 import com.hft.crypto.Web3jCrypto;
+import com.hft.exchange.Exchange;
 import com.hft.model.OrderEnums.Side;
 import com.hft.model.OrderEnums.TimeInForce;
 import com.hft.model.OrderEnums.Type;
@@ -79,7 +80,7 @@ public final class UniswapV2Client extends SignedCexClient {
 
     public UniswapV2Client(ExchangeConfig config, Credentials credentials, SymbolFilters filters, EvmCrypto crypto,
                            String router, String tokenSpec, String slippagePct) {
-        super("uniswapv2", config, credentials, filters);
+        super(Exchange.UNISWAPV2.id(), config, credentials, filters);
         this.crypto = crypto;
         if (router == null || router.isBlank()) throw new IllegalStateException("Задайте параметр биржи uniRouter (адрес Router02)");
         this.router = router.toLowerCase();
@@ -116,7 +117,7 @@ public final class UniswapV2Client extends SignedCexClient {
         if (!wsTradeAllowed() || wsChannel != null) return;
         String url = wsUrlOverride != null ? wsUrlOverride
                 : (config.wsUrl() != null && !config.wsUrl().isBlank() ? config.wsUrl() : baseUrl.replaceFirst("^http", "ws"));
-        WsRpcChannel ch = new WsRpcChannel("uniswapv2", new RpcProtocol(url));
+        WsRpcChannel ch = new WsRpcChannel(Exchange.UNISWAPV2.id(), new RpcProtocol(url));
         wsChannel = ch;
         ch.start();
     }

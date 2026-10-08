@@ -2,6 +2,7 @@ package com.hft.exchange.binance;
 
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
+import com.hft.exchange.Exchange;
 import com.hft.exchange.generic.FastJson;
 import com.hft.config.ExchangeConfig;
 import com.hft.engine.TickPipeline;
@@ -65,7 +66,7 @@ public final class BinanceMarketDataFeed extends AbstractWsFeed {
 
     /** Имя для логов и бюджета лимитов. */
     @Override
-    protected String name() { return "binance"; }
+    protected String name() { return Exchange.BINANCE.id(); }
 
     /** Адрес WebSocket (у Binance — с подпиской на потоки в URL). */
     @Override

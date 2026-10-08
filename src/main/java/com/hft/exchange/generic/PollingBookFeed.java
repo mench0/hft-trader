@@ -1,6 +1,7 @@
 package com.hft.exchange.generic;
 
 import com.hft.config.ExchangeConfig;
+import com.hft.exchange.Exchange;
 import com.hft.exchange.catalog.ExchangeInfo;
 import com.hft.exchange.generic.BookDialect.ParsedBook;
 import com.hft.store.MarketDataStore;
@@ -203,7 +204,7 @@ public final class PollingBookFeed implements BookFeed {
         long t0 = System.nanoTime();
         try {
             HttpRequest req = dialect.request(cfg.restUrl().isBlank() ? info.restUrl() : cfg.restUrl(), symbol, cfg.bookDepth());
-            double weight = "hyperliquid".equals(info.id()) ? 2            // l2Book у Hyperliquid весит 2
+            double weight = Exchange.HYPERLIQUID.is(info.id()) ? 2            // l2Book у Hyperliquid весит 2
                     : RateLimits.weight(info.id(), req.method(), req.uri().getPath(), req.uri().getRawQuery());
             budget.acquire(RateBudget.Kind.PUBLIC, weight, 5_000);
             requests.incrementAndGet();

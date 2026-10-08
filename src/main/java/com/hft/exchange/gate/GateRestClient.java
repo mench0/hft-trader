@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.hft.config.Credentials;
 import com.hft.config.ExchangeConfig;
+import com.hft.exchange.Exchange;
 import com.hft.model.OrderEnums.Side;
 import com.hft.model.OrderEnums.Type;
 import com.hft.model.OrderResult;
@@ -45,7 +46,7 @@ public final class GateRestClient extends SignedCexClient {
      * @param filters правила символов
      */
     public GateRestClient(ExchangeConfig config, Credentials credentials, SymbolFilters filters) {
-        super("gate", config, credentials, filters);
+        super(Exchange.GATE.id(), config, credentials, filters);
     }
 
     /** Имя символа на бирже. */
@@ -204,7 +205,7 @@ public final class GateRestClient extends SignedCexClient {
     public void startStreams(BalanceStore store) {
         if (!credentials.isPresent() || !wsTradeAllowed() || wsChannel != null) return;
         balanceStore = store;
-        WsRpcChannel ch = new WsRpcChannel("gate", new Private()).onEvent(this::onEvent);
+        WsRpcChannel ch = new WsRpcChannel(Exchange.GATE.id(), new Private()).onEvent(this::onEvent);
         wsChannel = ch;
         ch.start();
     }

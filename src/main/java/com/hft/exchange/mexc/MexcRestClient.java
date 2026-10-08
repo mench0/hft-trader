@@ -3,6 +3,7 @@ package com.hft.exchange.mexc;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.hft.config.Credentials;
 import com.hft.config.ExchangeConfig;
+import com.hft.exchange.Exchange;
 import com.hft.model.OrderEnums.Side;
 import com.hft.model.OrderEnums.Type;
 import com.hft.model.OrderResult;
@@ -45,7 +46,7 @@ public final class MexcRestClient extends SignedCexClient {
      * @param filters правила символов
      */
     public MexcRestClient(ExchangeConfig config, Credentials credentials, SymbolFilters filters) {
-        super("mexc", config, credentials, filters);
+        super(Exchange.MEXC.id(), config, credentials, filters);
     }
 
     // ------------------------------------------------------------ HTTP
@@ -218,7 +219,7 @@ public final class MexcRestClient extends SignedCexClient {
         if (!credentials.isPresent() || !wsTradeAllowed() || userStream != null) return;
         streamBalances = store;
         String base = userStreamBase != null ? userStreamBase : "wss://wbs-api.mexc.com/ws?listenKey=";
-        UserStream us = new UserStream("mexc", new UserStream.Api() {
+        UserStream us = new UserStream(Exchange.MEXC.id(), new UserStream.Api() {
             @Override public String newListenKey() throws Exception {
                 String k = signed("POST", "/api/v3/userDataStream", params(), false).path("listenKey").asText("");
                 if (k.isEmpty()) throw new IllegalStateException("нет listenKey в ответе");

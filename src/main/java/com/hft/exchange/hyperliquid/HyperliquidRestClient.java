@@ -6,6 +6,7 @@ import com.hft.config.Credentials;
 import com.hft.config.ExchangeConfig;
 import com.hft.crypto.EvmCrypto;
 import com.hft.crypto.Web3jCrypto;
+import com.hft.exchange.Exchange;
 import com.hft.model.OrderEnums.Side;
 import com.hft.model.OrderEnums.Type;
 import com.hft.model.OrderResult;
@@ -89,7 +90,7 @@ public final class HyperliquidRestClient extends SignedCexClient {
      * @param crypto подпись (в тестах — заглушка)
      */
     public HyperliquidRestClient(ExchangeConfig config, Credentials credentials, SymbolFilters filters, EvmCrypto crypto) {
-        super("hyperliquid", config, credentials, filters);
+        super(Exchange.HYPERLIQUID.id(), config, credentials, filters);
         this.crypto = crypto;
         this.account = credentials.isPresent() ? credentials.apiKey().toLowerCase() : "";
         this.source = config.testnet() ? "b" : "a";
@@ -373,7 +374,7 @@ public final class HyperliquidRestClient extends SignedCexClient {
     @Override
     public void startStreams(BalanceStore store) {
         if (crypto == null || !wsTradeAllowed() || wsChannel != null) return;
-        WsRpcChannel ch = new WsRpcChannel("hyperliquid", new Stream()).onEvent(this::onEvent);
+        WsRpcChannel ch = new WsRpcChannel(Exchange.HYPERLIQUID.id(), new Stream()).onEvent(this::onEvent);
         wsChannel = ch;
         ch.start();
     }

@@ -3,6 +3,7 @@ package com.hft.exchange.bybit;
 import com.hft.config.TradingSettings;
 import com.hft.config.Credentials;
 import com.hft.config.ExchangeConfig;
+import com.hft.exchange.Exchange;
 import com.hft.exchange.generic.ExchangeSupport;
 import com.hft.exchange.catalog.ExchangeInfo;
 import com.hft.exchange.catalog.ExchangeCatalog;
@@ -89,11 +90,11 @@ public final class BybitExchange implements ExchangeGateway, com.hft.exchange.ge
         if (paper != null && config.params().isPerp()) paper.perp(positions);
         this.orderService = new OrderService(live ? rest : paper, market, balances, filters, risk, settings, positions);
         this.perp = config.params().isPerp()
-                ? new com.hft.perp.PerpAccount("bybit", config, market, balances, positions, live ? rest : paper, !live) : null;
+                ? new com.hft.perp.PerpAccount(Exchange.BYBIT.id(), config, market, balances, positions, live ? rest : paper, !live) : null;
         log.info("[bybit] режим {}", live ? "LIVE — ордера пойдут на биржу" : "PAPER (для LIVE нужны ключи и live=true)");
 
         this.dataHandler = new MarketDataHandler(market);
-        this.strategy = new StrategySet(market, orderService, "bybit", settings);
+        this.strategy = new StrategySet(market, orderService, Exchange.BYBIT.id(), settings);
         this.pipeline = new TickPipeline(dataHandler, strategy.handlers());
         this.feed = new BybitMarketDataFeed(config, market, pipeline);
 
@@ -105,7 +106,7 @@ public final class BybitExchange implements ExchangeGateway, com.hft.exchange.ge
 
     /** Идентификатор биржи. */
     @Override
-    public String id() { return "bybit"; }
+    public String id() { return Exchange.BYBIT.id(); }
 
     /** Загрузить правила и балансы, запустить конвейер и фид. */
     @Override

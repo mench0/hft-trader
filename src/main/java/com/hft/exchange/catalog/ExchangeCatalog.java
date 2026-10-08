@@ -1,5 +1,6 @@
 package com.hft.exchange.catalog;
 
+import com.hft.exchange.Exchange;
 import com.hft.exchange.catalog.ExchangeInfo.Adapter;
 import com.hft.exchange.catalog.ExchangeInfo.Kind;
 
@@ -28,45 +29,45 @@ public final class ExchangeCatalog {
 
     /** Список бирж: адреса, лимиты, комиссии, testnet, заметки. */
     static {
-        add(new ExchangeInfo("binance", "Binance", Kind.CEX_TIER1, Adapter.NATIVE_LIVE,
+        add(new ExchangeInfo(Exchange.BINANCE.id(), "Binance", Kind.CEX_TIER1, Adapter.NATIVE_LIVE,
                 "https://api.binance.com", 20, 0.10, 0.10, "USDT", "BTCUSDT",
                 "Полный адаптер: стакан, ордера (WebSocket API) и события аккаунта по WebSocket, REST — запасной.",
                 "wss://stream.binance.com:9443/ws", "https://testnet.binance.vision", "wss://testnet.binance.vision/ws"));
-        add(new ExchangeInfo("bybit", "Bybit", Kind.CEX_TIER1, Adapter.NATIVE_LIVE,
+        add(new ExchangeInfo(Exchange.BYBIT.id(), "Bybit", Kind.CEX_TIER1, Adapter.NATIVE_LIVE,
                 "https://api.bybit.com", 8, 0.10, 0.10, "USDT", "BTCUSDT",
                 "Полный адаптер: стакан, ордера (/v5/trade), исполнения и баланс (/v5/private) по WebSocket, REST — запасной. Блокирует IP многих дата-центров (403).",
                 "wss://stream.bybit.com/v5/public/spot", "https://api-testnet.bybit.com", "wss://stream-testnet.bybit.com/v5/public/spot"));
-        add(new ExchangeInfo("okx", "OKX", Kind.CEX_TIER1, Adapter.LIVE_UNVERIFIED,
+        add(new ExchangeInfo(Exchange.OKX.id(), "OKX", Kind.CEX_TIER1, Adapter.LIVE_UNVERIFIED,
                 "https://www.okx.com", 8, 0.08, 0.10, "USDT", "BTCUSDT",
                 "Спот: стакан, ордера, отмены, исполнения и балансы по WebSocket (публичный + приватный канал), REST — запасной. Нужен OKX_PASSPHRASE.",
                 "wss://ws.okx.com:8443/ws/v5/public", "https://www.okx.com", "wss://wspap.okx.com:8443/ws/v5/public"));
-        add(new ExchangeInfo("mexc", "MEXC", Kind.CEX_TIER3, Adapter.LIVE_UNVERIFIED,
+        add(new ExchangeInfo(Exchange.MEXC.id(), "MEXC", Kind.CEX_TIER3, Adapter.LIVE_UNVERIFIED,
                 "https://api.mexc.com", 5, 0.00, 0.05, "USDT", "BTCUSDT",
                 "Спот, 0% maker. Стакан, исполнения и баланс по WebSocket (protobuf; стакан — до 30 символов на соединение) + REST-запас; ордера только REST (WS-ордеров у MEXC нет). Не держите большую часть капитала.",
                 "wss://wbs-api.mexc.com/ws", null, null));   // тестовой сети нет
-        add(new ExchangeInfo("gate", "Gate", Kind.CEX_TIER3, Adapter.LIVE_UNVERIFIED,
+        add(new ExchangeInfo(Exchange.GATE.id(), "Gate", Kind.CEX_TIER3, Adapter.LIVE_UNVERIFIED,
                 "https://api.gateio.ws", 5, 0.20, 0.20, "USDT", "BTCUSDT",
                 "Спот: стакан, ордера (WS API), исполнения и балансы по WebSocket, REST — запасной. Комиссия указана по умолчанию, проверьте тариф.",
                 "wss://api.gateio.ws/ws/v4/", "https://api-testnet.gateapi.io", "wss://ws-testnet.gate.com/v4/ws/spot"));
-        add(new ExchangeInfo("hyperliquid", "Hyperliquid", Kind.PERP_DEX, Adapter.LIVE_UNVERIFIED,
+        add(new ExchangeInfo(Exchange.HYPERLIQUID.id(), "Hyperliquid", Kind.PERP_DEX, Adapter.LIVE_UNVERIFIED,
                 "https://api.hyperliquid.xyz", 5, 0.015, 0.045, "USDC", "BTCUSDC (монета BTC, перп)",
                 "Перпы: стакан, ордера, info-запросы (WS post) и исполнения по WebSocket, REST — запасной. Ордера подписываются agent-ключом (EIP-712) через web3j. HYPERLIQUID_API_KEY = адрес аккаунта, _SECRET = ключ agent-кошелька без права вывода. Лимит адреса: 1 действие на $1 оборота.",
                 "wss://api.hyperliquid.xyz/ws", "https://api.hyperliquid-testnet.xyz", "wss://api.hyperliquid-testnet.xyz/ws"));
-        add(new ExchangeInfo("kucoin", "KuCoin", Kind.CEX_TIER1, Adapter.LIVE_UNVERIFIED,
+        add(new ExchangeInfo(Exchange.KUCOIN.id(), "KuCoin", Kind.CEX_TIER1, Adapter.LIVE_UNVERIFIED,
                 "https://api.kucoin.com", 10, 0.10, 0.10, "USDT", "BTCUSDT",
                 "Спот: стакан по WebSocket (level2Depth50, адрес и токен через bullet-public) + REST-запас; ордера и отмены по WS API (wsapi.kucoin.com), исполнения и балансы — приватный поток (bullet-private). Нужен KUCOIN_PASSPHRASE; для UTA-счёта — KUCOIN_UTA=true (uta.order/uta.cancel). Лимиты — пулы весов (публичный 2000/30 с, спот 4000/30 с)."));
-        add(new ExchangeInfo("aster", "Aster", Kind.ORDERBOOK_DEX, Adapter.LIVE_UNVERIFIED,
+        add(new ExchangeInfo(Exchange.ASTER.id(), "Aster", Kind.ORDERBOOK_DEX, Adapter.LIVE_UNVERIFIED,
                 "https://sapi.asterdex.com", 5, 0.10, 0.10, "USDT", "BTCUSDT",
                 "Спот, API v3 в формате Binance: стакан (depth20@100ms), исполнения и баланс (listenKey) по WebSocket + REST-запас; ордера через REST (WS-ордеров нет) с подписью EIP-712 кошельком-агентом. ASTER_API_KEY = адрес основного кошелька, ASTER_API_SECRET = ключ API-кошелька (signer) без права вывода. Комиссии указаны по умолчанию, проверьте тариф.",
                 "wss://sstream.asterdex.com/stream", "https://sapi.asterdex-testnet.com", "wss://sstream.asterdex-testnet.com/stream"));
-        add(new ExchangeInfo("uniswapv2", "Uniswap V2-совместимые пулы", Kind.AMM_DEX, Adapter.LIVE_UNVERIFIED,
+        add(new ExchangeInfo(Exchange.UNISWAPV2.id(), "Uniswap V2-совместимые пулы", Kind.AMM_DEX, Adapter.LIVE_UNVERIFIED,
                 "https://ethereum-rpc.publicnode.com", 4, 0.30, 0.30, "USDC", "WETHUSDC",
                 "Стакан из событий Sync через eth_subscribe и все JSON-RPC вызовы по WebSocket ноды (HTTP — запасной). Свопы через Router02 (web3j). Нужны UNISWAPV2_ROUTER, UNISWAPV2_TOKENS, пулы UNISWAPV2_POOLS; GTC-лимиток и отмены нет. Горячий кошелёк с малой суммой, приватный RPC против сэндвичей."));
-        add(new ExchangeInfo("pancakeswap", "PancakeSwap V2", Kind.AMM_DEX, Adapter.NOT_IMPLEMENTED,
+        add(new ExchangeInfo(Exchange.PANCAKESWAP.id(), "PancakeSwap V2", Kind.AMM_DEX, Adapter.NOT_IMPLEMENTED,
                 "", 0, 0.25, 0.25, "USDT", "-", "Тот же формат, что у Uniswap V2: задайте RPC BSC и пулы."));
-        add(new ExchangeInfo("raydium", "Raydium (Solana)", Kind.AMM_DEX, Adapter.NOT_IMPLEMENTED,
+        add(new ExchangeInfo(Exchange.RAYDIUM.id(), "Raydium (Solana)", Kind.AMM_DEX, Adapter.NOT_IMPLEMENTED,
                 "", 0, 0.25, 0.25, "USDC", "-", "Нужен разбор аккаунтов пула Solana, не реализовано."));
-        add(new ExchangeInfo("orca", "Orca (Solana)", Kind.AMM_DEX, Adapter.NOT_IMPLEMENTED,
+        add(new ExchangeInfo(Exchange.ORCA.id(), "Orca (Solana)", Kind.AMM_DEX, Adapter.NOT_IMPLEMENTED,
                 "", 0, 0.30, 0.30, "USDC", "-", "Концентрированная ликвидность, не реализовано."));
     }
 
@@ -89,24 +90,24 @@ public final class ExchangeCatalog {
     }
 
     /** Биржи с фьючерсами. */
-    private static final Map<String, PerpVenue> PERP = Map.of(
-            "binance", new PerpVenue("https://fapi.binance.com", "wss://fstream.binance.com/stream",
+    private static final Map<Exchange, PerpVenue> PERP = new java.util.EnumMap<>(Map.of(
+            Exchange.BINANCE, new PerpVenue("https://fapi.binance.com", "wss://fstream.binance.com/stream",
                     "https://testnet.binancefuture.com", "wss://fstream.binancefuture.com/stream", 0.02, 0.05),
-            "bybit", new PerpVenue("https://api.bybit.com", "wss://stream.bybit.com/v5/public/linear",
+            Exchange.BYBIT, new PerpVenue("https://api.bybit.com", "wss://stream.bybit.com/v5/public/linear",
                     "https://api-testnet.bybit.com", "wss://stream-testnet.bybit.com/v5/public/linear", 0.02, 0.055),
-            "okx", new PerpVenue("https://www.okx.com", "wss://ws.okx.com:8443/ws/v5/public",
+            Exchange.OKX, new PerpVenue("https://www.okx.com", "wss://ws.okx.com:8443/ws/v5/public",
                     "https://www.okx.com", "wss://wspap.okx.com:8443/ws/v5/public", 0.02, 0.05),
-            "hyperliquid", new PerpVenue("https://api.hyperliquid.xyz", "wss://api.hyperliquid.xyz/ws",
-                    "https://api.hyperliquid-testnet.xyz", "wss://api.hyperliquid-testnet.xyz/ws", 0.015, 0.045));
+            Exchange.HYPERLIQUID, new PerpVenue("https://api.hyperliquid.xyz", "wss://api.hyperliquid.xyz/ws",
+                    "https://api.hyperliquid-testnet.xyz", "wss://api.hyperliquid-testnet.xyz/ws", 0.015, 0.045)));
 
     /** Фьючерсный рынок биржи, если он есть. */
-    public static Optional<PerpVenue> perp(String id) { return Optional.ofNullable(PERP.get(id)); }
+    public static Optional<PerpVenue> perp(String id) { return Exchange.find(id).map(PERP::get); }
 
     /** У биржи есть фьючерсы (market=perp). */
-    public static boolean supportsPerp(String id) { return PERP.containsKey(id); }
+    public static boolean supportsPerp(String id) { return Exchange.find(id).map(PERP::containsKey).orElse(false); }
 
     /** У биржи есть спот (market=spot); Hyperliquid в боте — только перпы. */
-    public static boolean supportsSpot(String id) { return !"hyperliquid".equals(id); }
+    public static boolean supportsSpot(String id) { return !Exchange.HYPERLIQUID.is(id); }
 
     /** Все биржи каталога. */
     public static List<ExchangeInfo> all() { return List.copyOf(ALL.values()); }

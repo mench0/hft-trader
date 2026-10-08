@@ -2,6 +2,7 @@ package com.hft.perp;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.hft.exchange.Exchange;
 import com.hft.rest.RateBudget;
 import com.hft.store.BalanceStore;
 import com.hft.store.FundingStore.Funding;
@@ -48,12 +49,12 @@ public abstract class FundingSource {
 
     /** Источник ставок биржи; null — у биржи нет фьючерсов. */
     public static FundingSource forExchange(String id, String baseUrl) {
-        return switch (id) {
-            case "binance" -> new Binance(baseUrl);
-            case "bybit" -> new Bybit(baseUrl);
-            case "okx" -> new Okx(baseUrl);
-            case "hyperliquid" -> new Hyperliquid(baseUrl);
-            default -> null;
+        return switch (Exchange.find(id).orElse(null)) {
+            case BINANCE -> new Binance(baseUrl);
+            case BYBIT -> new Bybit(baseUrl);
+            case OKX -> new Okx(baseUrl);
+            case HYPERLIQUID -> new Hyperliquid(baseUrl);
+            case null, default -> null;
         };
     }
 
@@ -98,7 +99,7 @@ public abstract class FundingSource {
         private volatile Map<String, Double> intervals = Map.of();
         /** Когда читались периоды. */
         private long intervalsAt;
-        Binance(String baseUrl) { super("binance", baseUrl); }
+        Binance(String baseUrl) { super(Exchange.BINANCE.id(), baseUrl); }
 
         @Override public Map<String, Funding> fetch(Collection<String> symbols) throws Exception {
             long now = System.currentTimeMillis();
@@ -123,7 +124,7 @@ public abstract class FundingSource {
 
     /** Bybit linear: GET /v5/market/tickers?category=linear (все символы). */
     static final class Bybit extends FundingSource {
-        Bybit(String baseUrl) { super("bybit", baseUrl); }
+        Bybit(String baseUrl) { super(Exchange.BYBIT.id(), baseUrl); }
 
         @Override public Map<String, Funding> fetch(Collection<String> symbols) throws Exception {
             JsonNode r = get("/v5/market/tickers?category=linear");
@@ -143,7 +144,7 @@ public abstract class FundingSource {
 
     /** OKX SWAP: GET /api/v5/public/funding-rate?instId=BTC-USDT-SWAP (по символу). */
     static final class Okx extends FundingSource {
-        Okx(String baseUrl) { super("okx", baseUrl); }
+        Okx(String baseUrl) { super(Exchange.OKX.id(), baseUrl); }
 
         @Override public Map<String, Funding> fetch(Collection<String> symbols) throws Exception {
             Map<String, Funding> out = new HashMap<>();
@@ -162,7 +163,7 @@ public abstract class FundingSource {
 
     /** Hyperliquid: POST /info {"type":"metaAndAssetCtxs"} — ставка за час, списание каждый час. */
     static final class Hyperliquid extends FundingSource {
-        Hyperliquid(String baseUrl) { super("hyperliquid", baseUrl); }
+        Hyperliquid(String baseUrl) { super(Exchange.HYPERLIQUID.id(), baseUrl); }
 
         @Override public Map<String, Funding> fetch(Collection<String> symbols) throws Exception {
             JsonNode r = post("/info", "{\"type\":\"metaAndAssetCtxs\"}");

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hft.config.Credentials;
 import com.hft.config.ExchangeConfig;
+import com.hft.exchange.Exchange;
 import com.hft.model.OrderEnums.Side;
 import com.hft.model.OrderEnums.TimeInForce;
 import com.hft.model.OrderEnums.Type;
@@ -368,7 +369,7 @@ public final class BinanceRestClient implements ExchangeOrderApi {
         String url = wsApiUrl != null ? wsApiUrl : config.testnet() ? BinanceWsApi.TESTNET : BinanceWsApi.MAINNET;
         BinanceWsApi api = new BinanceWsApi(url, credentials.apiKey(), signer, this::timestamp);
         api.balances = store;
-        WsRpcChannel ch = new WsRpcChannel("binance", api).onEvent(api::onEvent);
+        WsRpcChannel ch = new WsRpcChannel(Exchange.BINANCE.id(), api).onEvent(api::onEvent);
         ws = api;
         wsChannel = ch;
         ch.start();
@@ -484,7 +485,7 @@ public final class BinanceRestClient implements ExchangeOrderApi {
     }
 
     /** Общий бюджет запросов Binance: вес по документации, заголовки X-MBX-* подтягивают счёт к счёту биржи. */
-    private final RateBudget budget = RateBudget.of("binance");
+    private final RateBudget budget = RateBudget.of(Exchange.BINANCE.id());
 
     /** Отправить с учётом общего бюджета лимитов; ошибка HTTP — ExchangeException. */
     private JsonNode send(HttpRequest req) throws Exception {
@@ -493,7 +494,7 @@ public final class BinanceRestClient implements ExchangeOrderApi {
                 || path.equals("/api/v3/openOrders") && "DELETE".equals(req.method());
         RateBudget.Kind kind = order ? RateBudget.Kind.ORDER
                 : req.headers().firstValue("X-MBX-APIKEY").isPresent() ? RateBudget.Kind.PRIVATE : RateBudget.Kind.PUBLIC;
-        budget.acquire(kind, RateLimits.weight("binance", req.method(), path, req.uri().getRawQuery()), order ? 1000 : 3000);
+        budget.acquire(kind, RateLimits.weight(Exchange.BINANCE.id(), req.method(), path, req.uri().getRawQuery()), order ? 1000 : 3000);
         HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
         budget.onResponse(resp.statusCode(), resp.headers());
         if (resp.statusCode() >= 400) {

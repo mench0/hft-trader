@@ -21,19 +21,19 @@ public final class ExchangeFactory {
 
     /** Шлюз биржи по id; неизвестная биржа без адаптера — IllegalArgumentException. */
     public static ExchangeGateway create(String id, ExchangeConfig ec, TradingSettings settings) {
-        return switch (id) {
-            case "binance" -> ec.params().isPerp()
+        return switch (Exchange.find(id).orElse(null)) {
+            case BINANCE -> ec.params().isPerp()
                     ? new SignedCexExchange(id, ec, settings, com.hft.exchange.binance.BinanceFuturesClient::new)   // USDⓈ-M
                     : new BinanceExchange(ec, settings);
-            case "bybit" -> new BybitExchange(ec, settings);
-            case "okx" -> new SignedCexExchange(id, ec, settings, OkxRestClient::new);
-            case "mexc" -> new SignedCexExchange(id, ec, settings, MexcRestClient::new);
-            case "gate" -> new SignedCexExchange(id, ec, settings, GateRestClient::new);
-            case "hyperliquid" -> new SignedCexExchange(id, ec, settings, HyperliquidRestClient::new);
-            case "uniswapv2" -> new SignedCexExchange(id, ec, settings, UniswapV2Client::new);
-            case "kucoin" -> new SignedCexExchange(id, ec, settings, KucoinRestClient::new);
-            case "aster" -> new SignedCexExchange(id, ec, settings, AsterRestClient::new);
-            default -> throw new IllegalArgumentException("Неизвестная или не реализованная биржа: " + id);
+            case BYBIT -> new BybitExchange(ec, settings);
+            case OKX -> new SignedCexExchange(id, ec, settings, OkxRestClient::new);
+            case MEXC -> new SignedCexExchange(id, ec, settings, MexcRestClient::new);
+            case GATE -> new SignedCexExchange(id, ec, settings, GateRestClient::new);
+            case HYPERLIQUID -> new SignedCexExchange(id, ec, settings, HyperliquidRestClient::new);
+            case UNISWAPV2 -> new SignedCexExchange(id, ec, settings, UniswapV2Client::new);
+            case KUCOIN -> new SignedCexExchange(id, ec, settings, KucoinRestClient::new);
+            case ASTER -> new SignedCexExchange(id, ec, settings, AsterRestClient::new);
+            case null, default -> throw new IllegalArgumentException("Неизвестная или не реализованная биржа: " + id);
         };
     }
 }

@@ -25,8 +25,11 @@ import java.util.List;
  */
 public interface ExchangeGateway {
 
-    /** Короткое имя для логов и админки: "binance", "bybit". */
+    /** Короткое имя для логов и админки: "binance", "bybit" (строковый id из {@link Exchange}). */
     String id();
+
+    /** Биржа как enum. */
+    default Exchange exchange() { return Exchange.of(id()); }
 
     /** Запустить REST-инициализацию (синхронизация времени, фильтры, балансы) и WebSocket. */
     void start() throws Exception;
