@@ -61,6 +61,7 @@ public class FuturesCheck {
     // --- бумажный перп + OrderService: шорт, закрытие, маржа, reduceOnly при kill switch
     Gw g = new Gw("bybit", "BTCUSDT", 99, 100, Map.of("tradingEnabled", "true", "leverage", "2", "maxPositionQuote", "1000"));
     ck("perp mode", g.orders.isPerp());
+    ck("paper: fees already in price", g.orders.feesInPrice());
     OrderResult sh = g.orders.sellMarket("BTCUSDT", 2);
     ck("short filled", sh.isFilled() && near(g.pos.qty("BTCUSDT"), -2));
     ck("balance only realized", near(g.bal.free("USDT"), 1000));

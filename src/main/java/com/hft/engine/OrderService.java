@@ -65,6 +65,13 @@ public final class OrderService {
     /** Рыночные данные биржи. */
     public MarketDataStore market() { return market; }
 
+    /**
+     * Комиссия уже заложена в цену исполнения (avgPrice): так считает бумажный движок. На бирже цена
+     * исполнения без комиссии — стратегии вычитают takerFeePercent сами. Без этой проверки в бумаге
+     * комиссия попадала бы в результат дважды.
+     */
+    public boolean feesInPrice() { return rest instanceof com.hft.paper.PaperOrderApi; }
+
     /** Торгуются перпы (лонг и шорт), а не спот. */
     public boolean isPerp() { return perp; }
 

@@ -167,7 +167,9 @@ public final class MeanReversionStrategy extends Strategy {
         if (left > pos.quantity() * 1e-6) positions.put(symbol, new Position(pos.entryPrice(), left, pos.openedAtMs(), pos.isLong()));
         else positions.remove(symbol);
         // комиссия тейкера на обеих ногах — в риск идёт чистый результат, по нему считается дневной лимит убытка
-        double fee = settings.get().takerFeePercent() / 100.0 * (result.avgPrice() + pos.entryPrice()) * result.executedQty();
+        // в бумаге комиссия уже в цене исполнения — не вычитаем второй раз
+        double fee = orders.feesInPrice() ? 0
+                : settings.get().takerFeePercent() / 100.0 * (result.avgPrice() + pos.entryPrice()) * result.executedQty();
         double realized = (pos.isLong() ? 1 : -1) * (result.avgPrice() - pos.entryPrice()) * result.executedQty() - fee;
         orders.risk().recordPnl(realized);
         log.info("Позиция закрыта: {} {} @ {}, результат {} USDT",

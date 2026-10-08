@@ -293,7 +293,7 @@ public final class StatArbStrategy extends Strategy {
 
     /** Закрыть позицию пары (лонг — продажей, шорт-хедж — покупкой, reduceOnly); результат после комиссий — в дневной PnL. */
     private void close(String pairName, Position pos) {
-        double fp = settings.get().takerFeePercent() / 100.0;
+        double fp = orders.feesInPrice() ? 0 : settings.get().takerFeePercent() / 100.0;   // в бумаге комиссия уже в цене
         double hedgePnl = 0;
         if (pos.hedgeSymbol() != null && pos.hedgeQty() > 0) {
             OrderResult h = orders.reduceMarket(pos.hedgeSymbol(), com.hft.model.OrderEnums.Side.BUY, pos.hedgeQty());

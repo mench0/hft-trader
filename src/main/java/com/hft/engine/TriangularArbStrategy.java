@@ -209,7 +209,7 @@ public final class TriangularArbStrategy extends Strategy {
 
     /** Исполнить круг тремя рыночными ордерами; результат после комиссий — в дневной PnL. */
     private void run(Cycle c, double start, TradingParams p) {
-        double f = 1 - p.takerFeePercent() / 100.0;
+        double f = orders.feesInPrice() ? 1 : 1 - p.takerFeePercent() / 100.0;   // для оценки «сколько пришло»; в бумаге комиссия уже в цене
         double amount = start;
         for (int i = 0; i < 3; i++) {
             Leg l = c.legs()[i];
