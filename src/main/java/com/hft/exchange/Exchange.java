@@ -9,26 +9,35 @@ import java.util.Optional;
  * Код сравнивает и выбирает биржи по этому enum, а не по строкам.
  */
 public enum Exchange {
-    BINANCE("binance"),
-    BYBIT("bybit"),
-    OKX("okx"),
-    MEXC("mexc"),
-    GATE("gate"),
-    HYPERLIQUID("hyperliquid"),
-    KUCOIN("kucoin"),
-    ASTER("aster"),
-    UNISWAPV2("uniswapv2"),
-    PANCAKESWAP("pancakeswap"),
-    RAYDIUM("raydium"),
-    ORCA("orca");
+    //          id             спот   перп
+    BINANCE    ("binance",     true,  true),
+    BYBIT      ("bybit",       true,  true),
+    OKX        ("okx",         true,  true),
+    MEXC       ("mexc",        true,  true),
+    GATE       ("gate",        true,  true),
+    HYPERLIQUID("hyperliquid", false, true),
+    KUCOIN     ("kucoin",      true,  true),
+    ASTER      ("aster",       true,  true),
+    UNISWAPV2  ("uniswapv2",   true,  false),   // AMM-пулы обмена: фьючерсов не бывает
+    PANCAKESWAP("pancakeswap", true,  false),
+    RAYDIUM    ("raydium",     true,  false),
+    ORCA       ("orca",        true,  false);
 
     /** Строковый id: "binance", "bybit"… */
     private final String id;
+    /** Какие рынки бот умеет на этой бирже: спот (market=spot) и бессрочные фьючерсы (market=perp). */
+    private final boolean spot, perp;
 
-    Exchange(String id) { this.id = id; }
+    Exchange(String id, boolean spot, boolean perp) { this.id = id; this.spot = spot; this.perp = perp; }
 
     /** Строковый id биржи. */
     public String id() { return id; }
+
+    /** Бот торгует спотом этой биржи (market=spot). */
+    public boolean hasSpot() { return spot; }
+
+    /** Бот торгует бессрочными фьючерсами этой биржи (market=perp). */
+    public boolean hasPerp() { return perp; }
 
     /** Префикс переменных окружения: BINANCE (BINANCE_API_KEY, BINANCE_LIVE…). */
     public String envPrefix() { return id.toUpperCase(Locale.ROOT); }

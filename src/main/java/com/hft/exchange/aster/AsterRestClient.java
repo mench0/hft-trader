@@ -44,8 +44,12 @@ public final class AsterRestClient extends SignedCexClient {
 
     /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(AsterRestClient.class);
-    /** Префикс пути API v3. */
-    private static final String API = "/api/v3";
+    /** Префикс пути: /api/v3 (спот) или /fapi/v3 (фьючерсы, market=perp). */
+    private final String API;
+    /** Фьючерсы (USDT-перпы Aster, формат Binance USDⓈ-M). */
+    private final boolean perp;
+    /** Куда пишутся позиции из потока. */
+    private volatile com.hft.store.PositionStore positions;
 
     /** Подпись EIP-712 ключом агента. */
     private final EvmCrypto crypto;
@@ -72,7 +76,11 @@ public final class AsterRestClient extends SignedCexClient {
     public AsterRestClient(ExchangeConfig config, Credentials credentials, SymbolFilters filters, EvmCrypto crypto) {
         super(Exchange.ASTER.id(), config, credentials, filters);
         this.crypto = crypto;
+        this.perp = config.params().isPerp();
+        this.API = perp ? "/fapi/v3" : "/api/v3";
     }
+
+    @Override public boolean isPerp() { return perp; }
 
     // ------------------------------------------------------------ подпись
 
@@ -155,6 +163,8 @@ public final class AsterRestClient extends SignedCexClient {
         p.put("symbol", o.symbol());
         p.put("side", o.side() == Side.BUY ? "BUY" : "SELL");
         p.put("newClientOrderId", o.clientId());
+        if (o.reduceOnly()) p.put("reduceOnly", "true");
+        if (perp && o.qtyIsQuote()) throw new IllegalArgumentException("Aster futures: ордер на сумму не поддерживается — задайте объём");
         if (o.type() == Type.MARKET) {
             p.put("type", "MARKET");
             if (o.qtyIsQuote()) p.put("quoteOrderQty", plain(o.qty(), 8));
@@ -252,15 +262,51 @@ public final class AsterRestClient extends SignedCexClient {
         log.info("[aster] правила загружены для {} символов", loaded);
     }
 
-    /** Загрузить балансы. */
+    /** Загрузить балансы (фьючерсы — /balance: availableBalance свободно, остальное — маржа). */
     @Override
     public void loadBalances(BalanceStore store) throws Exception {
+        if (perp) {
+            for (JsonNode b : signed("GET", "/balance", params(), false)) {
+                double total = d(b, "balance"), free = d(b, "availableBalance");
+                if (total != 0 || free != 0) store.set(b.path("asset").asText(), free, Math.max(0, total - free));
+            }
+            store.markSynced();
+            return;
+        }
         JsonNode r = signed("GET", "/account", params(), false);
         for (JsonNode b : r.path("balances")) {
             double free = d(b, "free"), locked = d(b, "locked");
             if (free > 0 || locked > 0) store.set(b.path("asset").asText(), free, locked);
         }
         store.markSynced();
+    }
+
+    // ------------------------------------------------------------ фьючерсы: плечо и позиции
+
+    /** Плечо символа (фьючерсы). */
+    @Override
+    public void setLeverage(String symbol, int leverage) throws Exception {
+        if (!perp) return;
+        Map<String, String> p = params();
+        p.put("symbol", symbol.toUpperCase());
+        p.put("leverage", Integer.toString(leverage));
+        signed("POST", "/leverage", p, false);
+        log.info("[aster] плечо {}x для {}", leverage, symbol);
+    }
+
+    /** Открытые позиции (односторонний режим). */
+    @Override
+    public void loadPositions(com.hft.store.PositionStore store) throws Exception {
+        if (!perp) return;
+        positions = store;
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (JsonNode p : signed("GET", "/positionRisk", params(), false)) {
+            double amt = d(p, "positionAmt");
+            if (amt == 0) continue;
+            store.set(p.path("symbol").asText(), amt, d(p, "entryPrice"));
+            seen.add(p.path("symbol").asText());
+        }
+        for (String s : store.snapshot().keySet()) if (!seen.contains(s)) store.set(s, 0, 0);
     }
 
     // ------------------------------------------------------------ приватный поток (listenKey)
@@ -282,8 +328,9 @@ public final class AsterRestClient extends SignedCexClient {
     public void startStreams(BalanceStore store) {
         if (!credentials.isPresent() || !wsTradeAllowed() || userStream != null) return;
         streamBalances = store;
-        String base = userStreamBase != null ? userStreamBase
-                : config.testnet() ? "wss://sstream.asterdex-testnet.com/ws/" : "wss://sstream.asterdex.com/ws/";
+        String host = perp ? (config.testnet() ? "wss://fstream.asterdex-testnet.com" : "wss://fstream.asterdex.com")
+                : (config.testnet() ? "wss://sstream.asterdex-testnet.com" : "wss://sstream.asterdex.com");
+        String base = userStreamBase != null ? userStreamBase : host + "/ws/";
         UserStream us = new UserStream(Exchange.ASTER.id(), new UserStream.Api() {
             @Override public String newListenKey() throws Exception { return signed("POST", "/listenKey", params(), false).path("listenKey").asText(); }
             @Override public void keepAlive(String key) throws Exception { var p = params(); p.put("listenKey", key); signed("PUT", "/listenKey", p, false); }
@@ -324,6 +371,30 @@ public final class AsterRestClient extends SignedCexClient {
                 for (JsonNode b : e.path("B")) store.set(b.path("a").asText(), b.path("f").asDouble(), b.path("l").asDouble());
                 store.markSynced();
                 accountSeen = true;
+            }
+            case "ORDER_TRADE_UPDATE" -> {                     // фьючерсы: состояние ордера
+                JsonNode o = e.path("o");
+                long id = registerId(o.path("i").asText());
+                streamed.put(id, new OrderResult(id, o.path("c").asText(""), o.path("s").asText(),
+                        "SELL".equals(o.path("S").asText()) ? Side.SELL : Side.BUY, o.path("X").asText(),
+                        d(o, "q"), d(o, "z"), d(o, "ap"), 0));
+            }
+            case "ACCOUNT_UPDATE" -> {                         // фьючерсы: баланс и позиции
+                JsonNode a = e.path("a");
+                BalanceStore store = streamBalances;
+                if (store != null) {
+                    for (JsonNode b : a.path("B")) {
+                        double wallet = d(b, "wb"), cross = d(b, "cw");
+                        store.set(b.path("a").asText(), cross, Math.max(0, wallet - cross));
+                    }
+                    store.markSynced();
+                    accountSeen = true;
+                }
+                com.hft.store.PositionStore ps = positions;
+                if (ps != null) for (JsonNode p : a.path("P")) {
+                    if (!"BOTH".equals(p.path("ps").asText("BOTH"))) continue;
+                    ps.set(p.path("s").asText(), d(p, "pa"), d(p, "ep"));
+                }
             }
             default -> { }
         }

@@ -215,9 +215,11 @@ public final class BotController {
         TradingParams p = ExchangeCatalog.find(exchangeId)
                 .map(i -> {
                     boolean perp = ExchangeCatalog.supportsPerp(i.id());
-                    double taker = perp ? ExchangeCatalog.perp(i.id()).orElseThrow().takerFeePct() : i.takerFeePct();
+                    var venue = ExchangeCatalog.perp(i.id());
+                    double taker = perp ? venue.orElseThrow().takerFeePct() : i.takerFeePct();
+                    boolean testnet = perp ? venue.orElseThrow().hasTestnet() : i.hasTestnet();
                     return d.with(Map.of("takerFeePercent", String.valueOf(taker),
-                            "testnet", String.valueOf(i.hasTestnet()),
+                            "testnet", String.valueOf(testnet),
                             "market", perp ? "perp" : "spot"));
                 })
                 .orElse(d);
@@ -269,7 +271,8 @@ public final class BotController {
             throw new IllegalArgumentException("У биржи " + exchangeId + " в боте нет фьючерсов: задайте market=spot");
         if (!p.isPerp() && !ExchangeCatalog.supportsSpot(exchangeId))
             throw new IllegalArgumentException("Биржа " + exchangeId + " в боте торгует только фьючерсами: задайте market=perp");
-        if (p.testnet() && !info.hasTestnet() && p.restUrl().isBlank())
+        boolean testnetExists = p.isPerp() ? ExchangeCatalog.perp(exchangeId).map(ExchangeCatalog.PerpVenue::hasTestnet).orElse(false) : info.hasTestnet();
+        if (p.testnet() && !testnetExists && p.restUrl().isBlank())
             throw new IllegalArgumentException("У биржи " + exchangeId + " нет тестовой сети: задайте testnet=false"
                     + (Exchange.UNISWAPV2.is(exchangeId) ? " или restUrl тестовой сети (RPC Sepolia и т.п.)" : ""));
     }

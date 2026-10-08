@@ -117,8 +117,8 @@ public final class FastJson {
                     String f = p.currentName();
                     p.nextToken();
                     switch (f) {
-                        case "price", "px" -> px = num(p);
-                        case "size", "sz" -> qty = num(p);
+                        case "price", "px", "p" -> px = num(p);
+                        case "size", "sz", "s" -> qty = num(p);
                         default -> p.skipChildren();
                     }
                 }

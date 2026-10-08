@@ -38,6 +38,10 @@ public final class Dialects {
         if (cfg.params().isPerp()) {
             if (Exchange.BINANCE.is(id)) return new Aster("/fapi/v1/depth");
             if (Exchange.OKX.is(id)) return new Okx(true, cfg.restUrl());
+            if (Exchange.ASTER.is(id)) return new Aster("/fapi/v1/depth");
+            if (Exchange.GATE.is(id)) return new GateFutures(cfg.restUrl());
+            if (Exchange.KUCOIN.is(id)) return new KucoinFutures(cfg.restUrl());
+            if (Exchange.MEXC.is(id)) return new MexcFutures(cfg.restUrl());
         }
         return Exchange.UNISWAPV2.is(id) ? new UniswapV2(cfg.params().uniPools()) : forExchange(id);
     }
@@ -126,6 +130,64 @@ public final class Dialects {
                 for (int i = 0; i < asks[1].length; i++) asks[1][i] *= ct;
             }
             return book(bids, asks, d.path("ts").asLong(System.currentTimeMillis()));
+        }
+    }
+
+    /** Объёмы стакана × размер контракта (контракты -> монеты). */
+    private static ParsedBook scaled(double[][] bids, double[][] asks, long ts, double k) {
+        for (int i = 0; i < bids[1].length; i++) bids[1][i] *= k;
+        for (int i = 0; i < asks[1].length; i++) asks[1][i] *= k;
+        return book(bids, asks, ts);
+    }
+
+    /** Gate USDT-фьючерсы: GET /api/v4/futures/usdt/order_book?contract=BTC_USDT&limit=20 -> {current, asks:[{p,s}], bids}. */
+    static final class GateFutures implements BookDialect {
+        private final String restUrl;
+        GateFutures(String restUrl) { this.restUrl = restUrl; }
+        public HttpRequest request(String b, String s, int d) {
+            return get(b + "/api/v4/futures/usdt/order_book?contract=" + ContractSizes.instrument(Exchange.GATE, s) + "&limit=" + Math.min(d, 50));
+        }
+        public ParsedBook parse(String body, String s) throws Exception {
+            JsonNode r = JSON.readTree(body);
+            if (r.has("label")) throw new IllegalStateException("Gate futures: " + body);
+            double k = ContractSizes.get(Exchange.GATE, restUrl, ContractSizes.instrument(Exchange.GATE, s));
+            return scaled(levels(r.get("bids"), "p", "s", true, MAX), levels(r.get("asks"), "p", "s", false, MAX),
+                    (long) (r.path("current").asDouble(System.currentTimeMillis() / 1000.0) * 1000), k);
+        }
+    }
+
+    /** KuCoin Futures: GET /api/v1/level2/depth20?symbol=XBTUSDTM -> {code:"200000", data:{bids:[[p,лоты]], asks, ts}}. */
+    static final class KucoinFutures implements BookDialect {
+        private final String restUrl;
+        KucoinFutures(String restUrl) { this.restUrl = restUrl; }
+        public HttpRequest request(String b, String s, int d) {
+            return get(b + "/api/v1/level2/" + (d <= 20 ? "depth20" : "depth100") + "?symbol=" + ContractSizes.instrument(Exchange.KUCOIN, s));
+        }
+        public ParsedBook parse(String body, String s) throws Exception {
+            JsonNode r = JSON.readTree(body);
+            if (!"200000".equals(r.path("code").asText())) throw new IllegalStateException("KuCoin futures: " + body);
+            JsonNode d = r.get("data");
+            double k = ContractSizes.get(Exchange.KUCOIN, restUrl, ContractSizes.instrument(Exchange.KUCOIN, s));
+            long ts = d.path("ts").asLong(0) / 1_000_000;                     // ts в наносекундах
+            return scaled(levels(d.get("bids"), null, null, true, MAX), levels(d.get("asks"), null, null, false, MAX),
+                    ts > 0 ? ts : System.currentTimeMillis(), k);
+        }
+    }
+
+    /** MEXC Contract: GET /api/v1/contract/depth/BTC_USDT?limit=20 -> {success, data:{asks:[[p,контракты,n]], bids, timestamp}}. */
+    static final class MexcFutures implements BookDialect {
+        private final String restUrl;
+        MexcFutures(String restUrl) { this.restUrl = restUrl; }
+        public HttpRequest request(String b, String s, int d) {
+            return get(b + "/api/v1/contract/depth/" + ContractSizes.instrument(Exchange.MEXC, s) + "?limit=" + Math.min(d, 100));
+        }
+        public ParsedBook parse(String body, String s) throws Exception {
+            JsonNode r = JSON.readTree(body);
+            if (!r.path("success").asBoolean(false)) throw new IllegalStateException("MEXC futures: " + body);
+            JsonNode d = r.get("data");
+            double k = ContractSizes.get(Exchange.MEXC, restUrl, ContractSizes.instrument(Exchange.MEXC, s));
+            return scaled(levels(d.get("bids"), null, null, true, MAX), levels(d.get("asks"), null, null, false, MAX),
+                    d.path("timestamp").asLong(System.currentTimeMillis()), k);
         }
     }
 

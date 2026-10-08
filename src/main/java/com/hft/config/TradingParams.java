@@ -109,8 +109,8 @@ public record TradingParams(
             num("paperStartBalance", 1000, 0, 1e12, "Стартовый бумажный баланс в котируемой валюте каждого символа").needsRestart(),
             // рынок
             text("market", "spot", "(spot|perp)", "Рынок: perp — бессрочные фьючерсы (USDT-M; лонг и шорт, плечо, funding), spot — спот. "
-                    + "Новая биржа с фьючерсами (Binance, Bybit, OKX, Hyperliquid) получает perp, остальные — spot; у Hyperliquid — только perp, "
-                    + "у Gate, KuCoin, MEXC, Aster, Uniswap — только spot").needsRestart(),
+                    + "Новая биржа с фьючерсами получает perp: Binance, Bybit, OKX, Gate, KuCoin, MEXC, Aster (оба рынка), Hyperliquid (только perp); "
+                    + "Uniswap V2 — только spot (у AMM фьючерсов нет)").needsRestart(),
             num("leverage", 2, 1, 50, "Плечо для фьючерсов (выставляется на бирже при старте); на споте не используется").needsRestart(),
             // фиды и клиент
             num("wsStaleMs", 0, 0, 600_000, "Тишина в WebSocket, после которой переподключение, мс (0 — по умолчанию для биржи)").needsRestart(),
