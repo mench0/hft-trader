@@ -26,16 +26,16 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * REST-клиент Binance на встроенном java.net.http.HttpClient.
- *
+ * <p>
  * Почему не OkHttp / Apache HttpClient: встроенный клиент в Java 21
  * поддерживает HTTP/2, пул соединений и keep-alive из коробки.
  * Для REST-части (ордера, балансы) его производительности достаточно,
  * а зависимостей меньше.
- *
+ * <p>
  * Ордера, отмены и статусы в LIVE идут по WebSocket API ({@link BinanceWsApi}), если он готов
  * (параметр биржи wsTrade=true); REST — запасной канал. Если WS-запрос ушёл, а ответа нет,
  * ордер не повторяется вслепую: его судьба выясняется по REST через origClientOrderId.
- *
+ * <p>
  * Класс потокобезопасен — HttpClient и Signer можно вызывать из разных потоков.
  */
 public final class BinanceRestClient implements ExchangeOrderApi {

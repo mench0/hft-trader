@@ -8,7 +8,7 @@ import com.hft.model.OrderResult;
  * Реализуют {@code BinanceRestClient} и {@code BybitRestClient} — каждый
  * по-своему подписывает запросы и разбирает ответ, но наружу отдаёт
  * одинаковый {@link OrderResult}.
- *
+ * <p>
  * Ввести этот интерфейс — единственный способ, которым OrderService
  * остаётся биржо-независимым: он вызывает buyLimit/sellMarket и не знает,
  * что творится внутри (HMAC в query у Binance или в заголовках у Bybit).

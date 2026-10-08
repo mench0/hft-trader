@@ -28,22 +28,26 @@ import java.util.concurrent.Executors;
  * торговли и изменения любого параметра риска. Предназначена для того,
  * чтобы отдельный проект (веб-панель) мог полностью настроить и
  * запустить бота, не трогая конфигурационные файлы на сервере.
- *
+ * <p>
  * Жизненный цикл через API:
- *   1. GET  /control/status                          — что выбрано, запущен ли бот
- *   2. POST /control/select?exchange=binance&symbols=BTCUSDT,ETHUSDT
- *   3. POST /control/select?exchange=bybit&symbols=BTCUSDT
- *   4. POST /control/deselect?exchange=bybit
- *   5. POST /exchange/params?exchange=binance&maxPositionQuote=50&entryZ=2.5&...
- *   6. POST /control/start                            — поднять WS/REST для выбранных бирж
- *   7. POST /trading/start                             — включить реальную отправку ордеров
- *   8. POST /trading/stop / /control/stop / /trading/panic
- *
+ * <pre>
+ * 1. GET  /control/status                          — что выбрано, запущен ли бот
+ * 2. POST /control/select?exchange=binance&symbols=BTCUSDT,ETHUSDT
+ * 3. POST /control/select?exchange=bybit&symbols=BTCUSDT
+ * 4. POST /control/deselect?exchange=bybit
+ * 5. POST /exchange/params?exchange=binance&maxPositionQuote=50&entryZ=2.5&...
+ * 6. POST /control/start                           — поднять WS/REST для выбранных бирж
+ * 7. POST /trading/start                           — включить реальную отправку ордеров
+ * 8. POST /trading/stop / /control/stop / /trading/panic
+ * </pre>
+ * <p>
  * Данные (только пока бот запущен, т.е. после /control/start):
- *   GET /market?exchange=binance
- *   GET /balances?exchange=binance
- *   GET /status
- *
+ * <pre>
+ * GET /market?exchange=binance
+ * GET /balances?exchange=binance
+ * GET /status
+ * </pre>
+ * <p>
  * CORS открыт для всех источников — панель управления живёт отдельным
  * проектом на другом порту/домене и обращается сюда через fetch().
  */

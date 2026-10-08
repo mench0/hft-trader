@@ -16,17 +16,18 @@ import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongSupplier;
 
+
 /**
- * Binance Spot WebSocket API (ws-api/v3): ордера, отмены и статусы по одному сокету, плюс события
+ * <b>Binance Spot WebSocket API (ws-api/v3)</b>: ордера, отмены и статусы по одному сокету, плюс события
  * аккаунта (executionReport, outboundAccountPosition) по подписке userDataStream.subscribe.signature
  * на том же соединении. REST остаётся запасным каналом — это решает {@link BinanceRestClient}.
- *
- * Подпись: параметры по алфавиту "k=v&k=v" (вместе с apiKey и timestamp) -> HMAC-SHA256 hex.
- * Ответ: {"id":…,"status":200,"result":…} или {"id":…,"status":4xx,"error":{"code":…,"msg":…}}.
- * Событие: {"subscriptionId":N,"event":{"e":"executionReport",…}}.
+ * <p>
+ * <b>Подпись:</b> параметры по алфавиту "k=v&k=v" (вместе с apiKey и timestamp) -> HMAC-SHA256 hex.
+ * <b>Ответ:</b> {"id":…,"status":200,"result":…} или {"id":…,"status":4xx,"error":{"code":…,"msg":…}}.
+ * <b>Событие:</b> {"subscriptionId":N,"event":{"e":"executionReport",…}}.
  * Сервер шлёт ping-кадры, JDK отвечает на них сам — прикладной пинг не нужен.
- *
- * ВНИМАНИЕ: формат взят из документации Binance без доступа к живому API — проверяйте в testnet.
+ * <p>
+ * <b>ВНИМАНИЕ:</b> формат взят из документации Binance без доступа к живому API — проверяйте в testnet.
  */
 final class BinanceWsApi implements WsRpcChannel.Protocol {
 

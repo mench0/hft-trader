@@ -114,7 +114,10 @@ public final class DiscoveryService {
             });
             try {
                 Map<String, Future<List<TickerSnapshot>>> futures = new LinkedHashMap<>();
-                for (MarketSource s : sources) { srcById.put(s.exchange(), s); futures.put(s.exchange(), pool.submit(s::tickers)); }
+                for (MarketSource s : sources) {
+                    srcById.put(s.exchange(), s);
+                    futures.put(s.exchange(), pool.submit(s::tickers));
+                }
                 for (var e : futures.entrySet()) {
                     Map<String, Object> st = new LinkedHashMap<>();
                     long s0 = System.currentTimeMillis();
