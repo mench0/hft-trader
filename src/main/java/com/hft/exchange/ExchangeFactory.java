@@ -27,12 +27,15 @@ public final class ExchangeFactory {
                     : new BinanceExchange(ec, settings);
             case BYBIT -> new BybitExchange(ec, settings);
             case OKX -> new SignedCexExchange(id, ec, settings, OkxRestClient::new);
-            case MEXC -> new SignedCexExchange(id, ec, settings, MexcRestClient::new);
-            case GATE -> new SignedCexExchange(id, ec, settings, GateRestClient::new);
+            case MEXC -> new SignedCexExchange(id, ec, settings, ec.params().isPerp()
+                    ? com.hft.exchange.mexc.MexcFuturesClient::new : MexcRestClient::new);        // contract.mexc.com
+            case GATE -> new SignedCexExchange(id, ec, settings, ec.params().isPerp()
+                    ? com.hft.exchange.gate.GateFuturesClient::new : GateRestClient::new);        // /futures/usdt
             case HYPERLIQUID -> new SignedCexExchange(id, ec, settings, HyperliquidRestClient::new);
             case UNISWAPV2 -> new SignedCexExchange(id, ec, settings, UniswapV2Client::new);
-            case KUCOIN -> new SignedCexExchange(id, ec, settings, KucoinRestClient::new);
-            case ASTER -> new SignedCexExchange(id, ec, settings, AsterRestClient::new);
+            case KUCOIN -> new SignedCexExchange(id, ec, settings, ec.params().isPerp()
+                    ? com.hft.exchange.kucoin.KucoinFuturesClient::new : KucoinRestClient::new);  // api-futures.kucoin.com
+            case ASTER -> new SignedCexExchange(id, ec, settings, AsterRestClient::new);           // спот и фьючерсы (/fapi/v3) — один клиент
             default -> throw new IllegalArgumentException("Неизвестная или не реализованная биржа: " + id);
         };
     }

@@ -50,7 +50,11 @@ public abstract class FundingSource {
     /** Источник ставок биржи; null — у биржи нет фьючерсов. */
     public static FundingSource forExchange(String id, String baseUrl) {
         return switch (Exchange.find(id).orElse(null)) {
-            case BINANCE -> new Binance(baseUrl);
+            case BINANCE -> new Binance(Exchange.BINANCE, baseUrl);
+            case ASTER -> new Binance(Exchange.ASTER, baseUrl);            // формат Binance USDⓈ-M
+            case GATE -> new Gate(baseUrl);
+            case KUCOIN -> new Kucoin(baseUrl);
+            case MEXC -> new Mexc(baseUrl);
             case BYBIT -> new Bybit(baseUrl);
             case OKX -> new Okx(baseUrl);
             case HYPERLIQUID -> new Hyperliquid(baseUrl);
@@ -99,7 +103,7 @@ public abstract class FundingSource {
         private volatile Map<String, Double> intervals = Map.of();
         /** Когда читались периоды. */
         private long intervalsAt;
-        Binance(String baseUrl) { super(Exchange.BINANCE.id(), baseUrl); }
+        Binance(Exchange ex, String baseUrl) { super(ex.id(), baseUrl); }
 
         @Override public Map<String, Funding> fetch(Collection<String> symbols) throws Exception {
             long now = System.currentTimeMillis();
@@ -117,6 +121,70 @@ public abstract class FundingSource {
                 if (!symbols.contains(s)) continue;
                 out.put(s, new Funding(num(x, "lastFundingRate"), intervals.getOrDefault(s, 8.0),
                         x.path("nextFundingTime").asLong(0), num(x, "markPrice"), now));
+            }
+            return out;
+        }
+    }
+
+    /** Gate USDT-фьючерсы: GET /api/v4/futures/usdt/contracts — funding_rate, funding_next_apply (с), funding_interval (с). */
+    static final class Gate extends FundingSource {
+        Gate(String baseUrl) { super(Exchange.GATE.id(), baseUrl); }
+
+        @Override public Map<String, Funding> fetch(Collection<String> symbols) throws Exception {
+            Map<String, String> byInst = new HashMap<>();
+            for (String s : symbols) byInst.put(com.hft.exchange.generic.ContractSizes.instrument(Exchange.GATE, s), s);
+            Map<String, Funding> out = new HashMap<>();
+            long now = System.currentTimeMillis();
+            for (JsonNode c : get("/api/v4/futures/usdt/contracts")) {
+                String s = byInst.get(c.path("name").asText());
+                if (s == null) continue;
+                double interval = c.path("funding_interval").asDouble(28_800) / 3600;
+                out.put(s, new Funding(num(c, "funding_rate"), interval > 0 ? interval : 8,
+                        c.path("funding_next_apply").asLong(0) * 1000, num(c, "mark_price"), now));
+            }
+            return out;
+        }
+    }
+
+    /**
+     * KuCoin Futures: GET /api/v1/contracts/active — fundingFeeRate, fundingRateGranularity (мс),
+     * nextFundingRateDateTime (мс; у старых ответов — nextFundingRateTime, мс до списания), markPrice.
+     */
+    static final class Kucoin extends FundingSource {
+        Kucoin(String baseUrl) { super(Exchange.KUCOIN.id(), baseUrl); }
+
+        @Override public Map<String, Funding> fetch(Collection<String> symbols) throws Exception {
+            Map<String, String> byInst = new HashMap<>();
+            for (String s : symbols) byInst.put(com.hft.exchange.generic.ContractSizes.instrument(Exchange.KUCOIN, s), s);
+            JsonNode r = get("/api/v1/contracts/active");
+            if (!"200000".equals(r.path("code").asText())) throw new IllegalStateException("kucoin funding: " + r.path("msg").asText());
+            Map<String, Funding> out = new HashMap<>();
+            long now = System.currentTimeMillis();
+            for (JsonNode c : r.path("data")) {
+                String s = byInst.get(c.path("symbol").asText());
+                if (s == null) continue;
+                double hours = c.path("fundingRateGranularity").asDouble(28_800_000) / 3_600_000;
+                long next = c.path("nextFundingRateDateTime").asLong(0);
+                if (next == 0 && c.has("nextFundingRateTime")) next = now + c.path("nextFundingRateTime").asLong(0);
+                out.put(s, new Funding(num(c, "fundingFeeRate"), hours > 0 ? hours : 8, next, num(c, "markPrice"), now));
+            }
+            return out;
+        }
+    }
+
+    /** MEXC Contract: GET /api/v1/contract/funding_rate/BTC_USDT — fundingRate, nextSettleTime (мс), collectCycle (ч). */
+    static final class Mexc extends FundingSource {
+        Mexc(String baseUrl) { super(Exchange.MEXC.id(), baseUrl); }
+
+        @Override public Map<String, Funding> fetch(Collection<String> symbols) throws Exception {
+            Map<String, Funding> out = new HashMap<>();
+            long now = System.currentTimeMillis();
+            for (String s : symbols) {
+                JsonNode r = get("/api/v1/contract/funding_rate/" + com.hft.exchange.generic.ContractSizes.instrument(Exchange.MEXC, s));
+                if (!r.path("success").asBoolean(false)) continue;               // контракта нет
+                JsonNode d = r.path("data");
+                double hours = d.path("collectCycle").asDouble(8);
+                out.put(s, new Funding(num(d, "fundingRate"), hours > 0 ? hours : 8, d.path("nextSettleTime").asLong(0), Double.NaN, now));
             }
             return out;
         }

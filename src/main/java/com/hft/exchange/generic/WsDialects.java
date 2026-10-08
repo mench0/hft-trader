@@ -38,6 +38,10 @@ public final class WsDialects {
             switch (Exchange.find(id).orElse(null)) {
                 case BINANCE: return Optional.of(binanceFutures());
                 case OKX: return Optional.of(new Okx(true, cfg.restUrl()));
+                case ASTER: return Optional.of(new Aster("Aster futures", "wss://fstream.asterdex.com/stream", "wss://fstream.asterdex-testnet.com/stream"));
+                case GATE: return Optional.of(new GateFutures(cfg.restUrl()));
+                case KUCOIN: return Optional.of(new Kucoin(true));
+                case MEXC: return Optional.of(new MexcFutures(cfg.restUrl()));
                 case null, default: break;                              // Hyperliquid — те же сообщения; Bybit — свой фид
             }
         }
@@ -56,7 +60,7 @@ public final class WsDialects {
             case GATE -> Optional.of(new Gate());
             case HYPERLIQUID -> Optional.of(new Hyperliquid());
             case UNISWAPV2 -> Optional.of(new Uniswap(""));
-            case KUCOIN -> Optional.of(new Kucoin());
+            case KUCOIN -> Optional.of(new Kucoin(false));
             case ASTER -> Optional.of(new Aster());
             case MEXC -> Optional.of(new MexcWsDialect());
             case null, default -> Optional.empty();
@@ -442,6 +446,11 @@ public final class WsDialects {
     static final class Kucoin implements WsDialect {
         private static final java.net.http.HttpClient HTTP = java.net.http.HttpClient.newBuilder()
                 .connectTimeout(java.time.Duration.ofSeconds(5)).build();
+        /** KuCoin Futures: тема /contractMarket/level2Depth50, символы XBTUSDTM, объём в лотах (× multiplier). */
+        private final boolean futures;
+        /** REST фьючерсов (для справочника размеров контрактов), запоминается при подключении. */
+        private volatile String restUrl = "https://api-futures.kucoin.com";
+        Kucoin(boolean futures) { this.futures = futures; }
         /** Интервал пинга из bullet-public, мс. */
         private volatile long pingMs = 18_000;
         /** Номера сообщений подписки и пинга. */
@@ -451,6 +460,7 @@ public final class WsDialects {
         public String defaultUrl(boolean testnet) { return "kucoin:bullet-public"; }
 
         @Override public String connectUrl(String url, String restUrl) throws Exception {
+            if (futures && restUrl != null && !restUrl.isBlank()) this.restUrl = restUrl.replaceAll("/+$", "");
             if (!url.startsWith("kucoin:")) return url;                       // адрес задан в конфиге явно
             com.hft.rest.RateBudget budget = com.hft.rest.RateBudget.of(Exchange.KUCOIN.id());
             budget.acquire(com.hft.rest.RateBudget.Kind.PUBLIC, 10, 60_000);
@@ -468,17 +478,22 @@ public final class WsDialects {
         }
 
         /** Имя символа на бирже. */
-        public String venueSymbol(String s) { return base(s) + "-" + quote(s); }
-        /** Сообщения подписки на стаканы символов. */
-        public List<String> subscribe(List<String> v, int d) { return op("subscribe", v); }
+        public String venueSymbol(String s) { return futures ? ContractSizes.instrument(Exchange.KUCOIN, s) : base(s) + "-" + quote(s); }
+        /** Сообщения подписки на стаканы символов (для фьючерсов сначала — размеры контрактов). */
+        public List<String> subscribe(List<String> v, int d) {
+            if (futures) for (String inst : v) ContractSizes.get(Exchange.KUCOIN, restUrl, inst);
+            return op("subscribe", v);
+        }
         /** Сообщения подписки на стаканы символов. */
         public List<String> unsubscribe(List<String> v, int d) { return op("unsubscribe", v); }
         /** Сообщения подписки/отписки пачками. */
         private List<String> op(String type, List<String> v) {
             List<String> out = new ArrayList<>();
-            for (int i = 0; i < v.size(); i += 100) {
+            int batch = futures ? 1 : 100;                                    // у фьючерсов — один символ на тему
+            for (int i = 0; i < v.size(); i += batch) {
                 ObjectNode o = objectMapper.createObjectNode().put("id", String.valueOf(ids.incrementAndGet())).put("type", type)
-                        .put("topic", "/spotMarket/level2Depth50:" + String.join(",", v.subList(i, Math.min(v.size(), i + 100))))
+                        .put("topic", (futures ? "/contractMarket/level2Depth50:" : "/spotMarket/level2Depth50:")
+                                + String.join(",", v.subList(i, Math.min(v.size(), i + batch))))
                         .put("privateChannel", false).put("response", true);
                 out.add(msg(o));
             }
@@ -529,12 +544,168 @@ public final class WsDialects {
                 case "error" -> throw new IllegalStateException("KuCoin error " + code + ": " + data);
                 case "message" -> {
                     if (!level2 || out.venue == null) throw new IllegalStateException("KuCoin: неожиданное сообщение " + abbreviate(c, len));
+                    if (futures) scale(out, ContractSizes.orOne(Exchange.KUCOIN, out.venue));   // лоты -> монеты
                     out.snapshot = true;                            // level2Depth50 — каждый раз полный снимок
                     if (out.tsMs == 0) out.tsMs = System.currentTimeMillis();
                     return null;
                 }
                 default -> throw new IllegalStateException("KuCoin: неизвестный type " + type);
             }
+        }
+    }
+
+    /** Объёмы уровней × множитель (контракты -> монеты). */
+    static void scale(BookBatch out, double k) {
+        if (k == 1) return;
+        for (int i = 0; i < out.bn; i++) out.bq[i] *= k;
+        for (int i = 0; i < out.an; i++) out.aq[i] *= k;
+    }
+
+    // ───────────────────────── Gate futures ─────────────────────────
+
+    /**
+     * Gate USDT-фьючерсы: wss://fx-ws.gateio.ws/v4/ws/usdt, канал futures.order_book (снимок ["BTC_USDT","20","0"]).
+     * Сообщение {"channel":"futures.order_book","event":"all","result":{"t":мс,"contract":"BTC_USDT",
+     * "asks":[{"p":"цена","s":контракты}],"bids":[…]}}. Объём в контрактах × quanto_multiplier.
+     */
+    static final class GateFutures implements WsDialect {
+        /** REST для справочника контрактов. */
+        private final String restUrl;
+        GateFutures(String restUrl) { this.restUrl = restUrl == null || restUrl.isBlank() ? "https://api.gateio.ws" : restUrl; }
+        public String defaultUrl(boolean testnet) {
+            return testnet ? "wss://fx-ws-testnet.gateio.ws/v4/ws/usdt" : "wss://fx-ws.gateio.ws/v4/ws/usdt";
+        }
+        public String venueSymbol(String s) { return ContractSizes.instrument(Exchange.GATE, s); }
+        public List<String> subscribe(List<String> v, int d) {
+            for (String inst : v) ContractSizes.get(Exchange.GATE, restUrl, inst);
+            return ev("subscribe", v, d);
+        }
+        public List<String> unsubscribe(List<String> v, int d) { return ev("unsubscribe", v, d); }
+        private List<String> ev(String event, List<String> v, int d) {
+            String depth = d <= 5 ? "5" : d <= 10 ? "10" : d <= 20 ? "20" : "50";
+            List<String> out = new ArrayList<>();
+            for (String s : v) {
+                ObjectNode o = objectMapper.createObjectNode().put("time", System.currentTimeMillis() / 1000)
+                        .put("channel", "futures.order_book").put("event", event);
+                o.putArray("payload").add(s).add(depth).add("0");
+                out.add(msg(o));
+            }
+            return out;
+        }
+        @Override public String pingMessage() {
+            return msg(objectMapper.createObjectNode().put("time", System.currentTimeMillis() / 1000).put("channel", "futures.ping"));
+        }
+
+        public String parse(char[] c, int len, BookBatch out) throws Exception {
+            out.reset();
+            boolean book = false, pong = false, all = false;
+            String err = null;
+            try (JsonParser p = open(c, len)) {
+                while (p.nextToken() == JsonToken.FIELD_NAME) {
+                    String f = p.currentName();
+                    p.nextToken();
+                    switch (f) {
+                        case "channel" -> { book = textIs(p, "futures.order_book"); pong = textIs(p, "futures.pong"); }
+                        case "event" -> all = textIs(p, "all");
+                        case "error" -> { if (p.currentToken() != JsonToken.VALUE_NULL) err = text(p); else p.skipChildren(); }
+                        case "result" -> {
+                            if (p.currentToken() != JsonToken.START_OBJECT) { p.skipChildren(); break; }
+                            while (p.nextToken() == JsonToken.FIELD_NAME) {
+                                String g = p.currentName(); p.nextToken();
+                                switch (g) {
+                                    case "contract" -> out.venue = out.resolve(p.getTextCharacters(), p.getTextOffset(), p.getTextLength());
+                                    case "t" -> out.tsMs = longOf(p, 0);
+                                    case "bids" -> levels(p, out, true);
+                                    case "asks" -> levels(p, out, false);
+                                    default -> p.skipChildren();
+                                }
+                            }
+                        }
+                        default -> p.skipChildren();
+                    }
+                }
+            }
+            if (pong) { out.reset(); return null; }
+            if (err != null) { out.reset(); throw new IllegalStateException("Gate futures error: " + err); }
+            if (!book) { out.reset(); throw new IllegalStateException("Gate futures: неожиданное сообщение " + abbreviate(c, len)); }
+            if (!all) { out.reset(); return null; }                        // ответ на подписку
+            if (out.venue == null) throw new IllegalStateException("Gate futures: нет контракта в снимке");
+            scale(out, ContractSizes.orOne(Exchange.GATE, out.venue));
+            out.snapshot = true;
+            if (out.tsMs == 0) out.tsMs = System.currentTimeMillis();
+            return null;
+        }
+    }
+
+    // ───────────────────────── MEXC futures ─────────────────────────
+
+    /**
+     * MEXC Contract: wss://contract.mexc.com/edge, подписка {"method":"sub.depth.full","param":{"symbol":"BTC_USDT","limit":20}}.
+     * Сообщение {"channel":"push.depth.full","data":{"asks":[[цена,контракты,заявок]],"bids":[…]},"symbol":"BTC_USDT","ts":мс}.
+     * Пинг {"method":"ping"} -> {"channel":"pong"}. Объём в контрактах × contractSize.
+     */
+    static final class MexcFutures implements WsDialect {
+        /** REST для справочника контрактов. */
+        private final String restUrl;
+        MexcFutures(String restUrl) { this.restUrl = restUrl == null || restUrl.isBlank() ? "https://contract.mexc.com" : restUrl; }
+        public String defaultUrl(boolean testnet) { return "wss://contract.mexc.com/edge"; }
+        public String venueSymbol(String s) { return ContractSizes.instrument(Exchange.MEXC, s); }
+        public List<String> subscribe(List<String> v, int d) {
+            for (String inst : v) ContractSizes.get(Exchange.MEXC, restUrl, inst);
+            return op("sub.depth.full", v, d);
+        }
+        public List<String> unsubscribe(List<String> v, int d) { return op("unsub.depth.full", v, d); }
+        private List<String> op(String method, List<String> v, int d) {
+            int limit = d <= 5 ? 5 : d <= 10 ? 10 : 20;
+            List<String> out = new ArrayList<>();
+            for (String s : v) {
+                ObjectNode o = objectMapper.createObjectNode().put("method", method);
+                o.putObject("param").put("symbol", s).put("limit", limit);
+                out.add(msg(o));
+            }
+            return out;
+        }
+        @Override public String pingMessage() { return "{\"method\":\"ping\"}"; }
+        @Override public long pingIntervalMs() { return 15_000; }
+
+        public String parse(char[] c, int len, BookBatch out) throws Exception {
+            out.reset();
+            boolean depth = false, service = false;
+            String err = null;
+            try (JsonParser p = open(c, len)) {
+                while (p.nextToken() == JsonToken.FIELD_NAME) {
+                    String f = p.currentName();
+                    p.nextToken();
+                    switch (f) {
+                        case "channel" -> {
+                            depth = textIs(p, "push.depth.full") || textIs(p, "push.depth");
+                            service = textIs(p, "pong") || p.getText().startsWith("rs.");
+                            if (textIs(p, "rs.error")) err = "rs.error";
+                        }
+                        case "symbol" -> { if (p.currentToken() == JsonToken.VALUE_STRING) out.venue = out.resolve(p.getTextCharacters(), p.getTextOffset(), p.getTextLength()); }
+                        case "ts" -> out.tsMs = longOf(p, 0);
+                        case "data" -> {
+                            if (p.currentToken() != JsonToken.START_OBJECT) { if (err != null) err = text(p); else p.skipChildren(); break; }
+                            while (p.nextToken() == JsonToken.FIELD_NAME) {
+                                String g = p.currentName(); p.nextToken();
+                                switch (g) {
+                                    case "bids" -> levels(p, out, true);
+                                    case "asks" -> levels(p, out, false);
+                                    default -> p.skipChildren();
+                                }
+                            }
+                        }
+                        default -> p.skipChildren();
+                    }
+                }
+            }
+            if (err != null) { out.reset(); throw new IllegalStateException("MEXC futures error: " + err); }
+            if (service) { out.reset(); return null; }
+            if (!depth || out.venue == null) { out.reset(); throw new IllegalStateException("MEXC futures: неожиданное сообщение " + abbreviate(c, len)); }
+            scale(out, ContractSizes.orOne(Exchange.MEXC, out.venue));
+            out.snapshot = true;
+            if (out.tsMs == 0) out.tsMs = System.currentTimeMillis();
+            return null;
         }
     }
 
