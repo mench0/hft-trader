@@ -63,12 +63,6 @@ public final class ExchangeCatalog {
         add(new ExchangeInfo(Exchange.UNISWAPV2.id(), "Uniswap V2-совместимые пулы", Kind.AMM_DEX, Adapter.LIVE_UNVERIFIED,
                 "https://ethereum-rpc.publicnode.com", 4, 0.30, 0.30, "USDC", "WETHUSDC",
                 "Стакан из событий Sync через eth_subscribe и все JSON-RPC вызовы по WebSocket ноды (HTTP — запасной). Свопы через Router02 (web3j). Нужны UNISWAPV2_ROUTER, UNISWAPV2_TOKENS, пулы UNISWAPV2_POOLS; GTC-лимиток и отмены нет. Горячий кошелёк с малой суммой, приватный RPC против сэндвичей."));
-        add(new ExchangeInfo(Exchange.PANCAKESWAP.id(), "PancakeSwap V2", Kind.AMM_DEX, Adapter.NOT_IMPLEMENTED,
-                "", 0, 0.25, 0.25, "USDT", "-", "Тот же формат, что у Uniswap V2: задайте RPC BSC и пулы."));
-        add(new ExchangeInfo(Exchange.RAYDIUM.id(), "Raydium (Solana)", Kind.AMM_DEX, Adapter.NOT_IMPLEMENTED,
-                "", 0, 0.25, 0.25, "USDC", "-", "Нужен разбор аккаунтов пула Solana, не реализовано."));
-        add(new ExchangeInfo(Exchange.ORCA.id(), "Orca (Solana)", Kind.AMM_DEX, Adapter.NOT_IMPLEMENTED,
-                "", 0, 0.30, 0.30, "USDC", "-", "Концентрированная ликвидность, не реализовано."));
     }
 
     /**
@@ -130,10 +124,13 @@ public final class ExchangeCatalog {
         return Optional.ofNullable(ALL.get(id == null ? "" : id.toLowerCase()));
     }
 
-    /** Биржи, которые можно выбрать и запустить. */
+    /** Биржи, которые можно выбрать и запустить (в каталоге только реализованные). */
     public static List<String> runnableIds() {
-        return ALL.values().stream()
-                .filter(i -> i.adapter() != Adapter.NOT_IMPLEMENTED)
-                .map(ExchangeInfo::id).toList();
+        return ALL.values().stream().map(ExchangeInfo::id).toList();
+    }
+
+    static {                                                     // у каждой биржи enum есть описание в каталоге
+        for (Exchange e : Exchange.values())
+            if (!ALL.containsKey(e.id())) throw new IllegalStateException("нет описания биржи в каталоге: " + e);
     }
 }

@@ -711,7 +711,7 @@ public final class MyStrategy extends Strategy {
 ## Биржи из каталога (формат API не проверен на живых биржах)
 
 `GET /exchanges/catalog` — список: Binance, Bybit (полные адаптеры), OKX, MEXC, Gate, KuCoin, Aster,
-Hyperliquid, Uniswap V2-пулы (LIVE не проверен), PancakeSwap/Raydium/Orca (пока не реализованы).
+Hyperliquid, Uniswap V2-пулы (LIVE не проверен). В каталоге только биржи с реализацией.
 Без ключей или с `live=false` любая биржа работает в бумажном режиме на живых данных.
 Форматы ответов взяты из документации по памяти и не сверялись с живыми API — сначала прогоните
 `GET /exchanges/request-stats` и сравните стакан с сайтом биржи.
@@ -831,6 +831,9 @@ KuCoin в режиме UTA торгует через `uta.order` / `uta.cancel` 
 Форматы публичных API записаны по памяти и проверены только на фейковом сервере; ошибка одной биржи видна в статусе и не мешает остальным.
 
 ## История изменений
+
+- **2026-10:** из каталога удалены биржи без реализации — PancakeSwap, Raydium, Orca (и статусы адаптера
+  `NOT_IMPLEMENTED`, `PAPER_BLIND`). При старте бот проверяет, что каждая биржа enum `Exchange` описана в каталоге.
 
 - **2026-10:** фьючерсы Gate и KuCoin — ордера и отмены по WebSocket (Gate WS API, KuCoin Pro WS API), исполнения,
   позиции и баланс — из приватных WS-потоков; MEXC Contract — результаты ордеров, позиции и баланс по WS (ордера — REST,
