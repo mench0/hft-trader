@@ -10,7 +10,7 @@ import com.hft.model.OrderEnums.Side;
 import com.hft.model.OrderEnums.Type;
 import com.hft.model.OrderResult;
 import com.hft.rest.ApiException;
-import com.hft.rest.SignedCexClient;
+import com.hft.rest.SignedClient;
 import com.hft.store.BalanceStore;
 import com.hft.store.PositionStore;
 import com.hft.store.SymbolFilters;
@@ -47,7 +47,7 @@ import java.util.Set;
  * ВНИМАНИЕ: MEXC ограничивает размещение фьючерсных ордеров через API (доступ выдаётся отдельно). Без него ордера
  * отклоняются биржей; стакан, funding и бумажная торговля работают без ключей.
  */
-public final class MexcFuturesClient extends SignedCexClient {
+public final class MexcFuturesClient extends SignedClient {
 
     /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(MexcFuturesClient.class);

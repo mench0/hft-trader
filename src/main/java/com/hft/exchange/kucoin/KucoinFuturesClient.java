@@ -10,7 +10,7 @@ import com.hft.model.OrderEnums.Side;
 import com.hft.model.OrderEnums.Type;
 import com.hft.model.OrderResult;
 import com.hft.rest.ApiException;
-import com.hft.rest.SignedCexClient;
+import com.hft.rest.SignedClient;
 import com.hft.store.BalanceStore;
 import com.hft.store.PositionStore;
 import com.hft.store.SymbolFilters;
@@ -44,7 +44,7 @@ import java.util.Set;
  *   <li>WS-запрос ушёл, ответа нет — ордер ищется по REST по clientOid, вслепую не повторяется.</li>
  * </ul>
  */
-public final class KucoinFuturesClient extends SignedCexClient {
+public final class KucoinFuturesClient extends SignedClient {
 
     /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(KucoinFuturesClient.class);

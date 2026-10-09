@@ -9,7 +9,7 @@ import com.hft.model.OrderEnums.Side;
 import com.hft.model.OrderEnums.Type;
 import com.hft.model.OrderResult;
 import com.hft.rest.ApiException;
-import com.hft.rest.SignedCexClient;
+import com.hft.rest.SignedClient;
 import com.hft.rest.WsRpcChannel;
 import com.hft.store.BalanceStore;
 import com.hft.store.SymbolFilters;
@@ -33,7 +33,7 @@ import java.util.Set;
  * В LIVE ордера и отмены идут по торговому WebSocket (Pro WS API), исполнения и балансы — по
  * приватному потоку (bullet-private), см. {@link KucoinWs}; REST — запасной канал.
  */
-public final class KucoinRestClient extends SignedCexClient {
+public final class KucoinRestClient extends SignedClient {
 
     /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(KucoinRestClient.class);

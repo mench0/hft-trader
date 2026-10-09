@@ -11,7 +11,7 @@ import com.hft.model.OrderEnums.Side;
 import com.hft.model.OrderEnums.Type;
 import com.hft.model.OrderResult;
 import com.hft.rest.ApiException;
-import com.hft.rest.SignedCexClient;
+import com.hft.rest.SignedClient;
 import com.hft.rest.WsRpcChannel;
 import com.hft.rest.WsRpcChannel.Msg;
 import com.hft.store.BalanceStore;
@@ -56,7 +56,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * по правилам биржи: размер — szDecimals монеты, цена — до 5 значащих цифр и не более 6 - szDecimals знаков.
  * Рыночный ордер — это IOC-лимитка с запасом цены 5% от середины.
  */
-public final class HyperliquidRestClient extends SignedCexClient {
+public final class HyperliquidRestClient extends SignedClient {
 
     /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(HyperliquidRestClient.class);

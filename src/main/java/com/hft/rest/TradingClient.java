@@ -6,7 +6,7 @@ import java.util.Map;
 
 /**
  * Клиент биржи для режима LIVE: ордера ({@link ExchangeOrderApi}) плюс то, что нужно классу биржи на старте
- * и в работе — правила, баланс, приватные WS-каналы, метрики. Реализуют {@link SignedCexClient},
+ * и в работе — правила, баланс, приватные WS-каналы, метрики. Реализуют {@link SignedClient},
  * {@link BinanceRestClient} и BybitRestClient.
  */
 public interface TradingClient extends ExchangeOrderApi {

@@ -10,7 +10,7 @@ import com.hft.model.OrderEnums.Side;
 import com.hft.model.OrderEnums.Type;
 import com.hft.model.OrderResult;
 import com.hft.rest.ApiException;
-import com.hft.rest.SignedCexClient;
+import com.hft.rest.SignedClient;
 import com.hft.rest.WsRpcChannel;
 import com.hft.rest.WsRpcChannel.Msg;
 import com.hft.store.BalanceStore;
@@ -39,7 +39,7 @@ import java.time.format.DateTimeFormatter;
  *  - IOC/FOK — это отдельные ordType, а не timeInForce;
  *  - testnet=true включает демо-торговлю заголовком x-simulated-trading.
  */
-public final class OkxRestClient extends SignedCexClient {
+public final class OkxRestClient extends SignedClient {
 
     /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(OkxRestClient.class);

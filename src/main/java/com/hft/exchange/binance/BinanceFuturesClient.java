@@ -9,7 +9,7 @@ import com.hft.model.OrderEnums.Side;
 import com.hft.model.OrderEnums.Type;
 import com.hft.model.OrderResult;
 import com.hft.rest.ApiException;
-import com.hft.rest.SignedCexClient;
+import com.hft.rest.SignedClient;
 import com.hft.rest.UserStream;
 import com.hft.rest.WsRpcChannel;
 import com.hft.rest.WsRpcChannel.Msg;
@@ -42,7 +42,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * Режим позиций — односторонний (One-way, по умолчанию у Binance); режим хеджирования не поддержан.
  * ВНИМАНИЕ: формат взят из документации Binance без доступа к живому API — сначала testnet.
  */
-public final class BinanceFuturesClient extends SignedCexClient {
+public final class BinanceFuturesClient extends SignedClient {
 
     /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(BinanceFuturesClient.class);

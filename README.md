@@ -636,7 +636,7 @@ scrape_configs:
 ## Как добавить биржу
 
 1. Константа в enum `Exchange`: строковый id и рынки (`Market.SPOT`, `Market.PERP`)
-2. REST-клиент на `SignedCexClient` (подпись, ордера, баланс, правила); для перпов — отдельный клиент фьючерсов
+2. REST-клиент на `SignedClient` (подпись, ордера, баланс, правила); для перпов — отдельный клиент фьючерсов
 3. Диалект стакана в `generic/Dialects` и `generic/WsDialects`; ордера по WS — через `WsRpcChannel`, если биржа умеет
 4. Ветка в `ExchangeFactory`, описание в `ExchangeCatalog`, лимиты в `rest/RateLimits`
 5. Проверка на поддельном сервере в `src/test/java`
@@ -721,7 +721,7 @@ Hyperliquid, Uniswap V2-пулы (LIVE не проверен). В каталог
 | Биржа | Клиент | Фид стакана | Режим |
 |---|---|---|---|
 | Binance (спот), Bybit (спот и linear) | BinanceRestClient, BybitRestClient | свой Netty-фид (`BinanceMarketDataFeed`, `BybitMarketDataFeed`) | LIVE при ключах и `live=true` |
-| Binance USDⓈ-M, OKX, MEXC, Gate, KuCoin, Aster | BinanceFuturesClient, OkxRestClient, Mexc/Gate/Kucoin RestClient и FuturesClient, AsterRestClient (общий скелет SignedCexClient) | общий WS + REST-запас | PAPER по умолчанию, LIVE не проверен |
+| Binance USDⓈ-M, OKX, MEXC, Gate, KuCoin, Aster | BinanceFuturesClient, OkxRestClient, Mexc/Gate/Kucoin RestClient и FuturesClient, AsterRestClient (общий скелет SignedClient) | общий WS + REST-запас | PAPER по умолчанию, LIVE не проверен |
 | Hyperliquid, Uniswap V2 | HyperliquidRestClient (EIP-712), UniswapV2Client (свопы через Router02) | общий WS + REST-запас | PAPER по умолчанию, LIVE не проверен |
 
 LIVE для любой биржи включается двумя условиями сразу: `<ID>_API_KEY` + `<ID>_API_SECRET`
@@ -838,6 +838,8 @@ KuCoin в режиме UTA торгует через `uta.order` / `uta.cancel` 
   сбрасываются при новом соединении, в `/exchanges/request-stats` — `reconnects`, `lastFrameAgeMs`, `lastError`.
   Сдавшийся WS-стакан запускается заново раз в минуту; WS-канал ордеров после отказов логина пробует снова через 10 минут.
   Во всех WS-клиентах пауза переподключения со случайным разбросом ±20 %. Проверка `ReconnectCheck`.
+
+- **2026-10:** `SignedCexClient` переименован в `SignedClient` — базовый класс подписанных клиентов, включая DEX.
 
 - **2026-10:** `SignedCexExchange` переименован в `GeneralExchange` — это класс для всех бирж, включая DEX (Hyperliquid, Uniswap V2).
 

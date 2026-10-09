@@ -26,11 +26,11 @@ hft-trader/
 │   │   │                             # фьючерсы остальных: GateFuturesClient, KucoinFuturesClient, MexcFuturesClient,
 │   │   │                             # Aster — тот же AsterRestClient с /fapi/v3
 │   │   ├── okx/, gate/, mexc/, kucoin/, aster/, hyperliquid/, uniswapv2/
-│   │   │                             # REST-клиенты на общем скелете SignedCexClient
+│   │   │                             # REST-клиенты на общем скелете SignedClient
 │   │   └── generic/                  # GeneralExchange (класс биржи для всех), NettyBookFeed, ContractSizes (размер контракта перпов), фиды стакана:
 │   │                                 # WsBookFeed, PollingBookFeed, HybridBookFeed; диалекты
 │   │                                 # Dialects (REST) и WsDialects (WS), LocalBook, FastJson
-│   ├── rest/                         # TradingClient (общий контракт клиента), SignedCexClient, BinanceRestClient, RateBudget/RateLimits/PacedLimiter,
+│   ├── rest/                         # TradingClient (общий контракт клиента), SignedClient, BinanceRestClient, RateBudget/RateLimits/PacedLimiter,
 │   │                                 # WsRpcChannel (ордера по WS), WsSender, ExchangeOrderApi
 │   ├── engine/                       # ядро исполнения: TickPipeline (Disruptor), MarketDataHandler, OrderService
 │   ├── strategy/                     # все стратегии — спот и перпы вместе:
@@ -78,7 +78,7 @@ hft-trader/
 ## Как добавить биржу
 
 1. Константа в enum `exchange/Exchange`: строковый id (ключ в админке и префикс переменных окружения) и рынки `Market`.
-2. REST-клиент `exchange/<id>/<Id>RestClient extends SignedCexClient` (подпись, ордера, баланс, правила).
+2. REST-клиент `exchange/<id>/<Id>RestClient extends SignedClient` (подпись, ордера, баланс, правила).
 3. Диалект стакана в `generic/Dialects` (REST) и, если есть WS, в `generic/WsDialects`.
 4. Строка в `ExchangeFactory`, `ExchangeCatalog`, лимиты в `rest/RateLimits`, источник сводок в `discovery/MarketSources`.
 5. Проверки в `src/test/java` (разбор ответов на фиктивном сервере `MiniWsServer`).

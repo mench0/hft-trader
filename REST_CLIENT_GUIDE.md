@@ -17,7 +17,7 @@
 | Hyperliquid | `exchange/hyperliquid/HyperliquidRestClient` | `HYPERLIQUID_API_KEY` (адрес), `HYPERLIQUID_API_SECRET` (agent-ключ) |
 | Uniswap V2 | `exchange/uniswapv2/UniswapV2Client` | `UNISWAPV2_API_KEY`, `UNISWAPV2_API_SECRET` |
 
-Все клиенты, кроме Binance и Bybit, наследуют `SignedCexClient`: общие HTTP-клиент, подпись,
+Все клиенты, кроме Binance и Bybit, наследуют `SignedClient`: общие HTTP-клиент, подпись,
 бюджет запросов (`RateBudget`, 80% официальных лимитов из `RateLimits`), разделение лимитеров ордеров
 и фоновых запросов, сопоставление строковых id ордеров с числовыми (`BoundedMap`).
 Реальные ордера уходят только при ключах **и** параметре биржи `live=true`; иначе — `PaperOrderApi`
