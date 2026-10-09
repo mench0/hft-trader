@@ -219,6 +219,7 @@ public abstract class SignedClient implements TradingClient {
             Thread.sleep(40L * (i + 1));
             try { cur = orderStatus(r.symbol(), r.orderId()); }
             catch (ApiException e) { if (e.isRateLimit()) break; throw e; }
+            catch (LocalThrottleException e) { break; }   // свой лимит — итог дочитаем из потока или сверкой
         }
         String st = cur.status();
         if ("CANCELED".equals(st) || "NEW".equals(st) && tif != null) {

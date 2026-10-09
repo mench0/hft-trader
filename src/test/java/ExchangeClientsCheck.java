@@ -59,7 +59,7 @@ public class ExchangeClientsCheck {
     status[0]=429; routes.put("POST /api/v5/trade/order","{\"code\":\"50011\",\"msg\":\"Too many\"}");
     boolean rl=false; try{ okx.buyMarket("BTCUSDT",0.5);}catch(ApiException e){rl=e.isRateLimit();}
     ck("okx rate limit", rl);
-    boolean blocked=false; try{ okx.buyMarket("BTCUSDT",0.5);}catch(ApiException e){blocked=e.getMessage().contains("приостановлены");}
+    boolean blocked=false; try{ okx.buyMarket("BTCUSDT",0.5);}catch(com.hft.rest.LocalThrottleException e){blocked=e.getMessage().contains("приостановлены") && e.reason()==com.hft.rest.LocalThrottleException.Reason.PAUSED;}
     ck("okx local block after 429", blocked);
     status[0]=200; seen.clear();
 

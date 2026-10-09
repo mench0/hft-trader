@@ -13,7 +13,7 @@ public class RateBudgetCheck {
   static int pass, fail;
   static void ck(String n, boolean ok){ if(ok) pass++; else {fail++; System.out.println("FAIL "+n);} }
   static HttpHeaders h(String... kv){ Map<String,List<String>> m = new HashMap<>(); for (int i=0;i<kv.length;i+=2) m.put(kv[i], List.of(kv[i+1])); return HttpHeaders.of(m,(a,b)->true); }
-  static boolean local(Runnable r){ try { r.run(); return false; } catch (ApiException e) { return "LOCAL".equals(e.code()); } }
+  static boolean local(Runnable r){ try { r.run(); return false; } catch (LocalThrottleException e) { return true; } catch (ApiException e) { return false; } }
 
   public static void main(String[] a) throws Exception {
     // ---- темп: 10/с официально -> 8 жетонов; 16 запросов не быстрее ~1 с
@@ -74,6 +74,28 @@ public class RateBudgetCheck {
     ck("client 429 blocks the shared exchange budget", mexc.blockedForMs() > 1000 && mexc.rateLimitedResponses() == 1);
     ck("public requests of the same exchange wait too", local(() -> { try { mexc.acquire(Kind.PUBLIC, 1, 100); } catch (InterruptedException e) {} }));
     srv.stop(0);
+
+    // ---- свой лимит — своя ошибка (не HTTP 429), ордер отклонён, kill switch; настоящий 429 биржи — тоже kill switch
+    var settings = new com.hft.config.TradingSettings(com.hft.config.TradingParams.DEFAULTS.with(Map.of("tradingEnabled", "true", "maxSlippagePercent", "100")));
+    var m = new com.hft.store.MarketDataStore(5, 10); m.register("BTCUSDT");
+    long now = System.currentTimeMillis();
+    m.book("BTCUSDT").applySnapshot(new double[]{99}, new double[]{10}, 1, new double[]{100}, new double[]{10}, 1, now, now);
+    var bal = new com.hft.store.BalanceStore(); bal.set("USDT", 1000, 0);
+    var f = new com.hft.store.SymbolFilters(); f.put("BTCUSDT", new com.hft.store.SymbolFilters.Filter(0, 1e12, 1e-6, 0, 1e12, 0.01, 0));
+    RuntimeException[] toThrow = {new LocalThrottleException(LocalThrottleException.Reason.QUEUE_FULL, 1500, "очередь запросов переполнена")};
+    var paper = new com.hft.paper.PaperOrderApi(m, bal, 0, 0);
+    ExchangeOrderApi api = (ExchangeOrderApi) java.lang.reflect.Proxy.newProxyInstance(ExchangeOrderApi.class.getClassLoader(), new Class<?>[]{ExchangeOrderApi.class},
+        (proxy, method, args) -> { if (method.getName().equals("buyMarket")) throw toThrow[0]; return method.invoke(paper, args); });
+    var risk = new com.hft.risk.RiskManager(settings, m, "t");
+    var os = new com.hft.engine.OrderService(api, m, bal, f, risk, settings);
+    var res = os.buyMarket("BTCUSDT", 0.1);
+    ck("local throttle: own error, order rejected", res.executedQty() == 0 && "REJECTED_LOCAL".equals(res.status()));
+    ck("local throttle: trading stopped", risk.isStopped());
+    ck("local throttle is not RateLimited/429", !(toThrow[0] instanceof RateLimited) && !(toThrow[0] instanceof ApiException));
+    risk.resumeTrading();
+    toThrow[0] = new ApiException(429, "-1003", "Too many requests", true);
+    os.buyMarket("BTCUSDT", 0.1);
+    ck("exchange 429: trading stopped", risk.isStopped());
 
     System.out.println("pass="+pass+" fail="+fail); System.exit(fail==0?0:1);
   }
