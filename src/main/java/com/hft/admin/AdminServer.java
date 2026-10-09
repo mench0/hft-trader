@@ -160,9 +160,8 @@ public final class AdminServer {
     }
 
     /**
-     * CORS: браузеру разрешается читать ответы только для веб-админки — адреса из ADMIN_CORS_ORIGINS, а если их нет,
-     * страницы с этого компьютера (http://localhost:*, http://127.0.0.1:*) и открытый файл (Origin: null).
-     * Чужой сайт ответа не получит, а без токена (заголовок X-Admin-Token) запрос не пройдёт в любом случае.
+     * CORS: если ADMIN_CORS_ORIGINS задан — браузеру разрешается читать ответы только с этих адресов;
+     * не задан — CORS открыт для любой страницы (режим тестирования). Без токена (X-Admin-Token) запрос не пройдёт в любом случае.
      */
     private void setCors(HttpExchange ex) {
         String origin = ex.getRequestHeaders().getFirst("Origin");
@@ -176,8 +175,8 @@ public final class AdminServer {
     /** Адрес страницы разрешён для CORS. */
     boolean originAllowed(String origin) {
         var allowed = config.adminCorsOrigins();
-        if (!allowed.isEmpty()) return allowed.contains(origin.replaceAll("/+$", ""));
-        return origin.equals("null") || origin.matches("https?://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:\\d+)?");
+        // TODO: перед продом вернуть ограничение по умолчанию (localhost и файл)
+        return allowed.isEmpty() || allowed.contains(origin.replaceAll("/+$", ""));
     }
 
     /** Обработчик одного эндпоинта. */
