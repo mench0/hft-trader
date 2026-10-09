@@ -105,7 +105,7 @@ public final class BotController {
             Map<String, String> values = s.trading() == null ? null : s.trading().get(ex);
             TradingParams p = defaultsFor(ex);
             if (values != null) {
-                try { p = p.with(values); }
+                try { TradingParams restored = p.with(values); validate(ex, restored); p = restored; }
                 catch (IllegalArgumentException e) { log.error("[{}] сохранённые параметры некорректны ({}) — беру значения по умолчанию", ex, e.getMessage()); }
             }
             settings.put(ex, new TradingSettings(applyEnvMode(ex, p)));
@@ -276,6 +276,23 @@ public final class BotController {
         if (p.testnet() && !testnetExists && p.restUrl().isBlank())
             throw new IllegalArgumentException("У биржи " + exchangeId + " нет тестовой сети: задайте testnet=false"
                     + (Exchange.UNISWAPV2.is(exchangeId) ? " или restUrl тестовой сети (RPC Sepolia и т.п.)" : ""));
+        requireSecureUrl("restUrl", p.restUrl());
+        requireSecureUrl("wsUrl", p.wsUrl());
+    }
+
+    /**
+     * Адрес биржи — только https:// и wss://: по нему уходят ключ API и подписанные запросы, а по ws:// ещё и логин
+     * приватного канала. Открытые http:// и ws:// — только для этого компьютера (локальная нода, тестовый сервер).
+     */
+    public static void requireSecureUrl(String name, String url) {
+        if (url == null || url.isBlank()) return;
+        java.net.URI u;
+        try { u = java.net.URI.create(url.trim()); }
+        catch (IllegalArgumentException e) { throw new IllegalArgumentException(name + ": некорректный адрес " + url); }
+        String scheme = u.getScheme() == null ? "" : u.getScheme().toLowerCase();
+        if (scheme.equals("https") || scheme.equals("wss")) return;
+        if ((scheme.equals("http") || scheme.equals("ws")) && u.getHost() != null && com.hft.config.AppConfig.isLoopback(u.getHost())) return;
+        throw new IllegalArgumentException(name + ": только https:// или wss:// (http/ws — только для localhost), получено " + url);
     }
 
     /** Выбранные биржи (у них и только у них есть параметры). */

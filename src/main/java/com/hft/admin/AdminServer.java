@@ -80,7 +80,7 @@ public final class AdminServer {
 
     /** Зарегистрировать все эндпоинты и запустить сервер. */
     public void start() throws IOException {
-        server = HttpServer.create(new InetSocketAddress(config.adminPort()), 0);
+        server = HttpServer.create(new InetSocketAddress(config.adminBind(), config.adminPort()), 0);
         server.setExecutor(Executors.newFixedThreadPool(4));
 
         // Управление выбором и жизненным циклом
@@ -126,8 +126,7 @@ public final class AdminServer {
         route("/metrics", this::handleMetrics);
 
         server.start();
-        log.info("Админка запущена на порту {}{}", config.adminPort(),
-                config.adminToken().isBlank() ? " (без токена)" : " (с токеном)");
+        log.info("Админка запущена на {}:{} (с токеном)", config.adminBind(), config.adminPort());
     }
 
     /** Остановить сервер. */
@@ -160,11 +159,25 @@ public final class AdminServer {
         });
     }
 
-    /** CORS для веб-панели на другом домене. */
+    /**
+     * CORS: браузеру разрешается читать ответы только для веб-админки — адреса из ADMIN_CORS_ORIGINS, а если их нет,
+     * страницы с этого компьютера (http://localhost:*, http://127.0.0.1:*) и открытый файл (Origin: null).
+     * Чужой сайт ответа не получит, а без токена (заголовок X-Admin-Token) запрос не пройдёт в любом случае.
+     */
     private void setCors(HttpExchange ex) {
-        ex.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+        String origin = ex.getRequestHeaders().getFirst("Origin");
+        ex.getResponseHeaders().add("Vary", "Origin");
+        if (origin == null || !originAllowed(origin)) return;
+        ex.getResponseHeaders().set("Access-Control-Allow-Origin", origin);
         ex.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
         ex.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type, X-Admin-Token, Authorization");
+    }
+
+    /** Адрес страницы разрешён для CORS. */
+    boolean originAllowed(String origin) {
+        var allowed = config.adminCorsOrigins();
+        if (!allowed.isEmpty()) return allowed.contains(origin.replaceAll("/+$", ""));
+        return origin.equals("null") || origin.matches("https?://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:\\d+)?");
     }
 
     /** Обработчик одного эндпоинта. */
@@ -174,14 +187,20 @@ public final class AdminServer {
         void handle(HttpExchange exchange) throws Exception;
     }
 
-    /** Токен из X-Admin-Token или Authorization: Bearer; пустой токен в конфиге — без проверки. */
+    /** Токен из X-Admin-Token или Authorization: Bearer; сравнение за постоянное время. Пустой токен — доступа нет. */
     private boolean authorized(HttpExchange ex) {
         String token = config.adminToken();
-        if (token.isBlank()) return true;
+        if (token == null || token.isBlank()) return false;
         String custom = ex.getRequestHeaders().getFirst("X-Admin-Token");
-        if (token.equals(custom)) return true;
+        if (custom != null && sameSecret(token, custom)) return true;
         String auth = ex.getRequestHeaders().getFirst("Authorization");
-        return auth != null && auth.equals("Bearer " + token);
+        return auth != null && auth.startsWith("Bearer ") && sameSecret(token, auth.substring(7));
+    }
+
+    /** Сравнить секреты за постоянное время (по времени ответа токен не подобрать). */
+    static boolean sameSecret(String expected, String given) {
+        return java.security.MessageDigest.isEqual(expected.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                given.getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 
     // ======================= ВЫБОР И ЗАПУСК =======================

@@ -122,7 +122,7 @@ public final class Main {
         log.info("Бот {}. Биржи: {}",
                 controller.isRunning() ? "запущен автоматически" : "в режиме настройки",
                 controller.isRunning() ? controller.active().keySet() : controller.selection().keySet());
-        log.info("Админка: http://localhost:{}/control/status", config.adminPort());
+        log.info("Админка: http://{}:{}/control/status (заголовок X-Admin-Token из .env)", config.adminBind(), config.adminPort());
         log.info("Метрики для Grafana/Prometheus: http://localhost:{}/metrics", config.adminPort());
         if (!controller.isRunning()) {
             log.info("");

@@ -15,7 +15,7 @@ import org.slf4j.LoggerFactory;
  * <p>Источники конфигурации в порядке приоритета:
  * <ol>
  *   <li>
- *     Переменные {@code ADMIN_ENABLED}, {@code ADMIN_PORT}, {@code ADMIN_TOKEN}
+ *     Переменные {@code ADMIN_ENABLED}, {@code ADMIN_PORT}, {@code ADMIN_TOKEN}, {@code ADMIN_BIND}, {@code ADMIN_CORS_ORIGINS}
  *     из файла {@code .env} ({@link Env}).
  *   </li>
  *   <li>
@@ -38,8 +38,12 @@ public final class AppConfig {
     private boolean adminEnabled = true;
     /** Порт HTTP-админки. */
     private int adminPort = 8080;
-    /** Токен админки; пусто — без авторизации. */
+    /** Токен админки; без него API не работает (пустой при старте — генерируется и пишется в .env). */
     private String adminToken = "";
+    /** Адрес, на котором слушает админка: по умолчанию только этот компьютер (доступ снаружи — SSH-туннель). */
+    private String adminBind = "127.0.0.1";
+    /** Адреса веб-админки, которым разрешён доступ из браузера (CORS); пусто — только localhost и файл. */
+    private java.util.List<String> adminCorsOrigins = java.util.List.of();
 
     /** Создаётся через load() или defaults(). */
     private AppConfig() {}
@@ -50,8 +54,38 @@ public final class AppConfig {
         cfg.adminEnabled = bool(env("ADMIN_ENABLED"), cfg.adminEnabled);
         cfg.adminPort = intOf(env("ADMIN_PORT"), cfg.adminPort);
         cfg.adminToken = str(env("ADMIN_TOKEN"), cfg.adminToken);
-        log.info("Админка: {}", cfg.adminEnabled ? "порт " + cfg.adminPort + (cfg.adminToken.isBlank() ? " (без токена)" : " (с токеном)") : "выключена");
+        cfg.adminBind = str(env("ADMIN_BIND"), cfg.adminBind).trim();
+        String origins = env("ADMIN_CORS_ORIGINS");
+        if (origins != null) cfg.adminCorsOrigins = java.util.Arrays.stream(origins.split(","))
+                .map(String::trim).filter(o -> !o.isEmpty()).map(o -> o.replaceAll("/+$", "")).toList();
+        if (cfg.adminEnabled && cfg.adminToken.isBlank()) cfg.adminToken = generateToken();
+        if (cfg.adminEnabled && !isLoopback(cfg.adminBind))
+            log.warn("Админка слушает {} — доступна по сети. Нужен ли этот доступ? Безопаснее ADMIN_BIND=127.0.0.1 и SSH-туннель", cfg.adminBind);
+        log.info("Админка: {}", cfg.adminEnabled ? cfg.adminBind + ":" + cfg.adminPort + " (с токеном)" : "выключена");
         return cfg;
+    }
+
+    /**
+     * ADMIN_TOKEN не задан — сгенерировать случайный (32 байта) и записать в .env: без токена любой процесс
+     * или сайт в браузере на этом компьютере мог бы управлять ботом. Сам токен в лог не пишется.
+     */
+    private static String generateToken() {
+        byte[] b = new byte[32];
+        new java.security.SecureRandom().nextBytes(b);
+        String token = java.util.HexFormat.of().formatHex(b);
+        try {
+            Env.set(java.util.Map.of("ADMIN_TOKEN", token));
+            log.warn("ADMIN_TOKEN не был задан — сгенерирован и записан в {} (укажите его в админке)", Env.file());
+        } catch (Exception e) {
+            throw new IllegalStateException("ADMIN_TOKEN не задан, а записать сгенерированный в " + Env.file()
+                    + " не удалось (" + e.getMessage() + "). Задайте ADMIN_TOKEN в .env или окружении.", e);
+        }
+        return token;
+    }
+
+    /** Адрес только этого компьютера (127.0.0.1, ::1, localhost). */
+    public static boolean isLoopback(String host) {
+        return host.equals("127.0.0.1") || host.equals("::1") || host.equalsIgnoreCase("localhost") || host.startsWith("127.");
     }
 
     /** Значения по умолчанию без .env и окружения (тесты). */
@@ -79,6 +113,21 @@ public final class AppConfig {
     /** Порт HTTP-админки. */
     public int adminPort() { return adminPort; }
 
-    /** Токен админки; пусто — без авторизации. */
+    /** Токен админки. */
     public String adminToken() { return adminToken; }
+
+    /** Адрес, на котором слушает админка. */
+    public String adminBind() { return adminBind; }
+
+    /** Разрешённые адреса веб-админки для CORS; пусто — только localhost и файл. */
+    public java.util.List<String> adminCorsOrigins() { return adminCorsOrigins; }
+
+    /** Задать токен (тесты). */
+    public AppConfig withToken(String token) { this.adminToken = token; return this; }
+
+    /** Задать порт (тесты). */
+    public AppConfig withPort(int port) { this.adminPort = port; return this; }
+
+    /** Задать разрешённые адреса CORS (тесты). */
+    public AppConfig withCorsOrigins(java.util.List<String> origins) { this.adminCorsOrigins = origins; return this; }
 }
