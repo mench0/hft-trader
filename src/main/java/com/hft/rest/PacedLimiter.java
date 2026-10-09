@@ -31,17 +31,18 @@ public final class PacedLimiter {
     /** Сколько ещё мс запросы запрещены. */
     public long blockedForMs() { return Math.max(0, blockedUntilMs - System.currentTimeMillis()); }
 
-    /** Дождаться своего слота; ApiException(LOCAL), если запросы приостановлены или ждать дольше maxWaitMs. */
+    /** Дождаться своего слота; LocalThrottleException, если запросы приостановлены или ждать дольше maxWaitMs. */
     public void acquire() throws InterruptedException {
         long blocked = blockedForMs();
-        if (blocked > 0) throw new ApiException(429, "LOCAL", "запросы приостановлены ещё на " + blocked + " мс", true);
+        if (blocked > 0) throw new LocalThrottleException(LocalThrottleException.Reason.PAUSED, blocked, "запросы приостановлены ещё на " + blocked + " мс");
         long waitNs;
         synchronized (this) {
             long now = System.nanoTime();
             long slot = Math.max(now, nextSlot);
             waitNs = slot - now;
             // слот занимаем только если реально будем ждать — отказ не должен съедать пропускную способность
-            if (waitNs / 1_000_000 > maxWaitMs) throw new ApiException(429, "LOCAL", "очередь запросов переполнена", true);
+            if (waitNs / 1_000_000 > maxWaitMs)
+                throw new LocalThrottleException(LocalThrottleException.Reason.QUEUE_FULL, waitNs / 1_000_000, "очередь запросов переполнена");
             nextSlot = slot + gapNanos;
         }
         if (waitNs > 0) Thread.sleep(waitNs / 1_000_000, (int) (waitNs % 1_000_000));

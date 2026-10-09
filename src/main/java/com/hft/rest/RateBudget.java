@@ -114,14 +114,15 @@ public final class RateBudget {
     // ------------------------------------------------------------ получение разрешения
 
     /**
-     * Дождаться разрешения на запрос вида kind весом weight; ApiException(LOCAL), если ждать дольше maxWaitMs или запросы приостановлены надолго.
+     * Дождаться разрешения на запрос вида kind весом weight; LocalThrottleException, если ждать дольше maxWaitMs или запросы приостановлены надолго.
      */
     public void acquire(Kind kind, double weight, long maxWaitMs) throws InterruptedException {
         long blocked = blockedForMs();
         if (blocked > 0) {
             if (blocked > maxWaitMs) {
                 localRejects.incrementAndGet();
-                throw new ApiException(429, "LOCAL", exchange + ": запросы приостановлены ещё на " + blocked + " мс (" + blockReason + ")", true);
+                throw new LocalThrottleException(LocalThrottleException.Reason.PAUSED, blocked,
+                        exchange + ": запросы приостановлены ещё на " + blocked + " мс (" + blockReason + ")");
             }
             Thread.sleep(blocked);
         }
@@ -138,7 +139,8 @@ public final class RateBudget {
             }
             if (waitMs > maxWaitMs) {
                 localRejects.incrementAndGet();
-                throw new ApiException(429, "LOCAL", exchange + ": очередь запросов переполнена (ждать " + waitMs + " мс)", true);
+                throw new LocalThrottleException(LocalThrottleException.Reason.QUEUE_FULL, waitMs,
+                        exchange + ": очередь запросов переполнена (ждать " + waitMs + " мс)");
             }
             for (Bucket b : buckets) if (b.limit.kinds().contains(kind)) b.tokens -= Math.min(weight, b.limit.capacity());
         }

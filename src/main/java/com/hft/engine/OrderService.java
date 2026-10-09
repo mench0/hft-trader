@@ -254,6 +254,10 @@ public final class OrderService {
             log.info("{} -> {}", request, result);
             return result;
 
+        } catch (com.hft.rest.LocalThrottleException e) {
+            // свой ограничитель: до биржи запрос не дошёл — ордер отклонён, торговля продолжается
+            log.warn("Ордер {} не отправлен: свой лимит запросов ({}: {})", request, e.reason(), e.getMessage());
+            return failed(symbol, request.side(), "Свой лимит запросов: " + e.getMessage());
         } catch (Exception e) {
             if (e instanceof com.hft.rest.RateLimited rl && rl.isRateLimit()) {
                 risk.stopTrading("Превышен лимит запросов биржи, нужна пауза");

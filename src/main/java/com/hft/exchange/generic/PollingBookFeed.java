@@ -239,8 +239,7 @@ public final class PollingBookFeed implements BookFeed {
             return true;
         } catch (InterruptedException e) {
             throw e;
-        } catch (ApiException e) {
-            if (!"LOCAL".equals(e.code())) throw e;
+        } catch (com.hft.rest.LocalThrottleException e) {
             lastError = e.getMessage();                 // свой бюджет исчерпан — это не ошибка биржи
             return true;
         } catch (Exception e) {
