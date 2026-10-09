@@ -4,11 +4,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.WebSocket;
-import java.nio.ByteBuffer;
+import com.hft.net.WsClient;
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -101,8 +98,6 @@ public final class WsRpcChannel {
     private final String name;
     /** Протокол биржи. */
     private final Protocol protocol;
-    /** HTTP-клиент для WebSocket. */
-    private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
     /** Ожидающие ответа запросы по id. */
     private final Map<String, CompletableFuture<String>> pending = new ConcurrentHashMap<>();
 
@@ -111,7 +106,7 @@ public final class WsRpcChannel {
     /** Состояние: работает, соединение есть, логин подтверждён, выключен после отказов логина. */
     private volatile boolean running, connected, loggedIn, disabled;
     /** Текущий сокет. */
-    private volatile WebSocket socket;
+    private volatile WsClient.Connection socket;
     /** Очередь отправки. */
     private volatile WsSender sender;
     /** Время последнего кадра. */
@@ -163,7 +158,7 @@ public final class WsRpcChannel {
     /** Остановить канал; ожидающие запросы завершаются ошибкой. */
     public synchronized void stop() {
         running = false;
-        WebSocket w = socket;
+        WsClient.Connection w = socket;
         if (w != null) w.abort();
         failPending("канал остановлен");
         if (thread != null) thread.interrupt();
@@ -194,7 +189,7 @@ public final class WsRpcChannel {
      * @throws WsUnknownOutcomeException отправка/ожидание сорвались — исход неизвестен
      */
     public String call(String id, String payload, long timeoutMs) throws WsUnknownOutcomeException {
-        WebSocket w = socket;
+        WsClient.Connection w = socket;
         if (!isReady() || w == null) throw new WsNotReadyException();
         WsSender snd = sender;
         if (snd == null) throw new WsNotReadyException();
@@ -273,8 +268,7 @@ public final class WsRpcChannel {
         CompletableFuture<Void> closed = new CompletableFuture<>();
         Listener l = new Listener(closed);
         RateBudget.of(name).acquire(RateBudget.Kind.WS_CONNECT, 1, 60_000);   // лимит подключений на IP
-        WebSocket w = http.newWebSocketBuilder().connectTimeout(Duration.ofSeconds(5))
-                .buildAsync(URI.create(protocol.url()), l).get(10, TimeUnit.SECONDS);
+        WsClient.Connection w = WsClient.connect(URI.create(protocol.url()), l);
         socket = w;                                   // очередь отправки создана в onOpen — до первого входящего сообщения
         lastFrameMs = System.currentTimeMillis();
         connected = true;
@@ -303,7 +297,7 @@ public final class WsRpcChannel {
     }
 
     /** Логин подтверждён — отправить подписки. */
-    private void afterLogin(WebSocket w) throws Exception {
+    private void afterLogin(WsClient.Connection w) throws Exception {
         loggedIn = true;
         loginFailures = 0;
         for (String m : protocol.subscriptions()) {
@@ -331,7 +325,7 @@ public final class WsRpcChannel {
     }
 
     /** Разобрать сообщение и раздать: логин, ответ, событие, pong. */
-    private void handle(WebSocket w, String text, Listener l) {
+    private void handle(WsClient.Connection w, String text, Listener l) {
         try {
             Msg m = protocol.parse(text);
             if (m.reply() != null) sender.send(m.reply());
@@ -356,49 +350,31 @@ public final class WsRpcChannel {
         }
     }
 
-    /** Слушатель сокета JDK: склейка фрагментов, кадры, закрытие. */
-    private final class Listener implements WebSocket.Listener {
+    /** Обработчик соединения (поток Netty): сообщения, закрытие. */
+    private final class Listener implements WsClient.Listener {
         /** Завершается при закрытии сокета. */
         private final CompletableFuture<Void> closed;
-        /** Буфер склейки фрагментов текста. */
-        private final StringBuilder text = new StringBuilder();
-        /** Буфер склейки бинарных фрагментов. */
-        private ByteBuffer bin = ByteBuffer.allocate(0);
         /** Запрошен сброс соединения из обработчика. */
         volatile boolean abort;
 
         Listener(CompletableFuture<Void> closed) { this.closed = closed; }
 
         /** Очередь отправки — сразу при открытии: сервер может написать первым (KuCoin: приветствие), и ответ нужен немедленно. */
-        @Override public void onOpen(WebSocket w) { sender = new WsSender(w, 1000); w.request(1); }
+        @Override public void onOpen(WsClient.Connection w) { sender = new WsSender(w, 1000); }
 
-        @Override public CompletionStage<?> onText(WebSocket w, CharSequence data, boolean last) {
+        @Override public void onText(WsClient.Connection w, char[] buf, int len) {
             lastFrameMs = System.currentTimeMillis();
-            text.append(data);
-            if (last) { String s = text.toString(); text.setLength(0); handle(w, s, this); }
-            w.request(1);
-            return null;
+            handle(w, new String(buf, 0, len), this);
         }
 
-        @Override public CompletionStage<?> onBinary(WebSocket w, ByteBuffer data, boolean last) {
+        @Override public void onBinary(WsClient.Connection w, byte[] data) {
             lastFrameMs = System.currentTimeMillis();
-            ByteBuffer merged = ByteBuffer.allocate(bin.remaining() + data.remaining());
-            merged.put(bin).put(data).flip();
-            bin = merged;
-            if (last) {
-                byte[] b = new byte[bin.remaining()];
-                bin.get(b);
-                bin = ByteBuffer.allocate(0);
-                try { handle(w, protocol.decodeBinary(b), this); }
-                catch (Exception e) { lastError = "binary: " + e; parseErrors.incrementAndGet(); }
-            }
-            w.request(1);
-            return null;
+            try { handle(w, protocol.decodeBinary(data), this); }
+            catch (Exception e) { lastError = "binary: " + e; parseErrors.incrementAndGet(); }
         }
 
-        @Override public CompletionStage<?> onPing(WebSocket w, ByteBuffer m) { lastFrameMs = System.currentTimeMillis(); w.request(1); return null; }
-        @Override public CompletionStage<?> onPong(WebSocket w, ByteBuffer m) { lastFrameMs = System.currentTimeMillis(); w.request(1); return null; }
-        @Override public CompletionStage<?> onClose(WebSocket w, int code, String reason) { lastError = "close " + code + " " + reason; closed.complete(null); return null; }
-        @Override public void onError(WebSocket w, Throwable e) { lastError = "ws error: " + e; closed.completeExceptionally(e); }
+        @Override public void onPing(WsClient.Connection w) { lastFrameMs = System.currentTimeMillis(); }
+        @Override public void onClose(WsClient.Connection w, int code, String reason) { lastError = "close " + code + " " + reason; closed.complete(null); }
+        @Override public void onError(WsClient.Connection w, Throwable e) { lastError = "ws error: " + e; closed.completeExceptionally(e); }
     }
 }
