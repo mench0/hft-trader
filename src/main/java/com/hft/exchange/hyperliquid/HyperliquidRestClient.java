@@ -298,6 +298,42 @@ public final class HyperliquidRestClient extends SignedClient {
         throw new ApiException(200, "NO_STATUS", "неожиданный ответ на ордер: " + r, false);
     }
 
+    /**
+     * Стоп на бирже: триггер-ордер (tpsl «sl», рыночный, reduceOnly) на весь объём позиции.
+     * Цена в ордере — предел проскальзывания: стоп ± marketPriceBandPercent.
+     */
+    @Override
+    public String placeStopLoss(String symbol, Side side, double qty, double stopPrice) throws Exception {
+        int sd = szDec(symbol);
+        boolean buy = side == Side.BUY;
+        double band = config.params().marketPriceBandPercent() / 100.0;
+        Map<String, Object> trigger = new LinkedHashMap<>();
+        trigger.put("isMarket", true);
+        trigger.put("triggerPx", formatPrice(stopPrice, sd));
+        trigger.put("tpsl", "sl");
+        Map<String, Object> order = new LinkedHashMap<>();
+        order.put("a", asset(symbol));
+        order.put("b", buy);
+        order.put("p", formatPrice(stopPrice * (buy ? 1 + band : 1 - band), sd));
+        order.put("s", com.hft.util.Numbers.plain(qty, sd));
+        order.put("r", true);
+        order.put("t", Map.of("trigger", trigger));
+        Map<String, Object> action = new LinkedHashMap<>();
+        action.put("type", "order");
+        action.put("orders", List.of(order));
+        action.put("grouping", "na");
+        JsonNode st = exchange(action).path("response").path("data").path("statuses").path(0);
+        String oid = st.path("resting").path("oid").asText("");
+        if (oid.isEmpty()) throw new ApiException(200, "NO_ID", "стоп не принят: " + st, false);
+        return oid;
+    }
+
+    /** Снять стоп (отмена по oid). */
+    @Override
+    public void cancelStopLoss(String symbol, String stopId) throws Exception {
+        cancel(List.of(cancelItem(asset(symbol), Long.parseLong(stopId))));
+    }
+
     /** Статус ордера: из WS-потока, если есть, иначе запрос к бирже. */
     @Override
     public OrderResult orderStatus(String symbol, long orderId) throws Exception {

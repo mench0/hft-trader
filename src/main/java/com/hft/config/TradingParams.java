@@ -29,6 +29,11 @@ public record TradingParams(
         // ---- рынок ----
         com.hft.exchange.Market market,
         int leverage,
+        // ---- защита позиций (перпы) ----
+        double exchangeStopLossPercent,
+        boolean guardOrphans,
+        double orphanStopLossPercent,
+        long orphanMaxHoldMinutes,
         // ---- работа фидов и клиента ----
         long wsStaleMs,
         long wsReconnectBaseMs,
@@ -112,6 +117,12 @@ public record TradingParams(
                     + "Новая биржа с фьючерсами получает perp: Binance, Bybit, OKX, Gate, KuCoin, MEXC, Aster (оба рынка), Hyperliquid (только perp); "
                     + "Uniswap V2 — только spot (у AMM фьючерсов нет)").needsRestart(),
             num("leverage", 2, 1, 50, "Плечо для фьючерсов (выставляется на бирже при старте); на споте не используется").needsRestart(),
+            // защита позиций
+            num("exchangeStopLossPercent", 0, 0, 50, "Стоп-ордер на самой бирже (перпы): после каждого входа ставится reduceOnly-стоп на столько % от цены входа "
+                    + "против позиции — страховка, если бот упадёт или пропадёт связь. 0 — выключено"),
+            flag("guardOrphans", true, "Перпы: брать под защиту позиции, которыми не управляет ни одна стратегия (остались после перезапуска, открыты вручную)"),
+            num("orphanStopLossPercent", 2, 0.1, 100, "Стоп-лосс для позиций без стратегии, % от цены входа"),
+            num("orphanMaxHoldMinutes", 0, 0, 7 * 24 * 60, "Закрыть позицию без стратегии через столько минут после того, как бот её заметил (0 — не закрывать по времени)"),
             // фиды и клиент
             num("wsStaleMs", 0, 0, 600_000, "Тишина в WebSocket, после которой переподключение, мс (0 — по умолчанию для биржи)").needsRestart(),
             num("wsReconnectBaseMs", 500, 50, 60_000, "Начальная пауза перед переподключением WebSocket, мс (дальше растёт вдвое)").needsRestart(),

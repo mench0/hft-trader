@@ -294,6 +294,31 @@ public final class AsterRestClient extends SignedClient {
         log.info("[aster] плечо {}x для {}", leverage, symbol);
     }
 
+    /** Стоп на бирже (фьючерсы): STOP_MARKET с closePosition=true по цене маркировки, формат Binance. */
+    @Override
+    public String placeStopLoss(String symbol, Side side, double qty, double stopPrice) throws Exception {
+        if (!perp) return null;
+        Map<String, String> p = params();
+        p.put("symbol", symbol.toUpperCase());
+        p.put("side", side == Side.BUY ? "BUY" : "SELL");
+        p.put("type", "STOP_MARKET");
+        p.put("stopPrice", plain(stopPrice, filters.priceScale(symbol)));
+        p.put("closePosition", "true");
+        p.put("workingType", "MARK_PRICE");
+        String id = signed("POST", "/order", p, true).path("orderId").asText("");
+        if (id.isEmpty()) throw new ApiException(200, "NO_ID", "нет orderId у стопа", false);
+        return id;
+    }
+
+    /** Снять стоп (обычная отмена по orderId). */
+    @Override
+    public void cancelStopLoss(String symbol, String stopId) throws Exception {
+        Map<String, String> p = params();
+        p.put("symbol", symbol.toUpperCase());
+        p.put("orderId", stopId);
+        signed("DELETE", "/order", p, true);
+    }
+
     /** Открытые позиции (односторонний режим). */
     @Override
     public void loadPositions(com.hft.store.PositionStore store) throws Exception {

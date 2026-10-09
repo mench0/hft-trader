@@ -34,6 +34,7 @@ public class StrategiesCheck {
     triangular();
     statArb();
     pipelineOrder();
+    meanReversionReconcile();
     System.out.println("pass="+pass+" fail="+fail); System.exit(fail==0?0:1);
   }
 
@@ -129,6 +130,35 @@ public class StrategiesCheck {
     book(m, "AVAXUSDT", b * 0.9999, b, 1e6); book(m, "SOLUSDT", back * 0.9999, back, 1e6);
     sa.onEvent(tick("SOLUSDT", back), 101, true);
     ck("exits when spread reverts, with profit", await(() -> sa.openPositions() == 0 && sa.tradesCount() == 1, 3000) && sa.totalPnl() > 0);
+  }
+
+  /** Возврат к среднему на перпах: позиция изменилась мимо стратегии — запись уменьшается или снимается, владелец отпускается. */
+  static void meanReversionReconcile() throws Exception {
+    var settings = new TradingSettings(TradingParams.DEFAULTS.with(kv("market", "perp", "tradingEnabled", "true")));
+    var m = new MarketDataStore(5, 50); m.register("BTCUSDT");
+    var bal = new BalanceStore(); bal.set("USDT", 1000, 0);
+    var ps = new com.hft.store.PositionStore();
+    var os = new OrderService(new PaperOrderApi(m, bal, 0, 0).perp(ps), m, bal, filters("BTCUSDT"), new RiskManager(settings, m, "mr"), settings, ps);
+    var mr = new MeanReversionStrategy(m, os, "mr", settings);
+    var posField = MeanReversionStrategy.class.getDeclaredField("positions"); posField.setAccessible(true);
+    @SuppressWarnings("unchecked") Map<String, Object> positions = (Map<String, Object>) posField.get(mr);
+    Class<?> posCls = Class.forName("com.hft.strategy.MeanReversionStrategy$Position");
+    var ctor = posCls.getDeclaredConstructors()[0]; ctor.setAccessible(true);
+    var reconcile = MeanReversionStrategy.class.getDeclaredMethod("reconcile", String.class, posCls); reconcile.setAccessible(true);
+    var qtyOf = posCls.getDeclaredMethod("quantity"); qtyOf.setAccessible(true);
+
+    Object pos = ctor.newInstance(100.0, 1.0, System.currentTimeMillis(), true);   // лонг 1 по 100
+    positions.put("BTCUSDT", pos); os.claim("BTCUSDT", "mean-reversion");
+    ps.set("BTCUSDT", 1, 100);
+    ck("mr: same position kept", reconcile.invoke(mr, "BTCUSDT", pos) == pos);
+    ps.set("BTCUSDT", 0.4, 100);                                          // часть закрыли на бирже
+    Object fixed = reconcile.invoke(mr, "BTCUSDT", pos);
+    ck("mr: shrunk to exchange position", fixed != null && Math.abs((double) qtyOf.invoke(fixed) - 0.4) < 1e-12);
+    ps.set("BTCUSDT", 0, 0);                                              // ликвидация / стоп на бирже
+    ck("mr: dropped when position gone", reconcile.invoke(mr, "BTCUSDT", fixed) == null && positions.isEmpty() && os.owner("BTCUSDT") == null);
+    ps.set("BTCUSDT", -1, 100);                                           // перевернулась в шорт мимо стратегии
+    positions.put("BTCUSDT", pos);
+    ck("mr: opposite side = gone", reconcile.invoke(mr, "BTCUSDT", pos) == null);
   }
 
   static void pipelineOrder() throws Exception {

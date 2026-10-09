@@ -354,6 +354,33 @@ public final class BybitRestClient implements com.hft.rest.TradingClient {
         log.info("[bybit] плечо {}x для {}", leverage, symbol);
     }
 
+    /**
+     * Стоп на бирже (linear): стоп-лосс самой позиции — {@code /v5/position/trading-stop}, tpslMode=Full
+     * (закрывает всю позицию), срабатывает по цене маркировки рыночным ордером. Отдельного id нет: «position».
+     */
+    @Override
+    public String placeStopLoss(String symbol, Side side, double qty, double stopPrice) throws Exception {
+        if (!isPerp()) return null;
+        credentials.require();
+        postSigned("/v5/position/trading-stop", tradingStop(symbol, Numbers.plain(stopPrice, filters.priceScale(symbol))));
+        return "position";
+    }
+
+    /** Снять стоп позиции: stopLoss=0. Позиции уже нет — не ошибка. */
+    @Override
+    public void cancelStopLoss(String symbol, String stopId) throws Exception {
+        if (!isPerp()) return;
+        try { postSigned("/v5/position/trading-stop", tradingStop(symbol, "0")); }
+        catch (ExchangeException e) { if (e.getMessage() == null || !e.getMessage().contains("10001")) throw e; }
+    }
+
+    /** Тело trading-stop: только стоп-лосс, вся позиция, по маркировке, рыночным. */
+    private String tradingStop(String symbol, String stopLoss) {
+        return mapper.createObjectNode().put("category", "linear").put("symbol", symbol.toUpperCase())
+                .put("tpslMode", "Full").put("positionIdx", 0).put("stopLoss", stopLoss)
+                .put("slTriggerBy", "MarkPrice").put("slOrderType", "Market").toString();
+    }
+
     /** Открытые позиции USDT-перпов; позиции приходят и по WS (поток position). */
     @Override
     public void loadPositions(com.hft.store.PositionStore store) throws Exception {

@@ -154,6 +154,30 @@ public final class GateFuturesClient extends SignedClient {
         for (String s : store.snapshot().keySet()) if (!seen.contains(s)) store.set(s, 0, 0);
     }
 
+    // ------------------------------------------------------------ защитный стоп
+
+    /**
+     * Стоп на бирже: ценовой триггер {@code /price_orders} по цене маркировки (price_type 1),
+     * исполнение — рыночное закрытие всей позиции (size 0, close, reduce_only). Лонг — при цене ≤ стопа (rule 2), шорт — ≥ (rule 1).
+     */
+    @Override
+    public String placeStopLoss(String symbol, Side side, double qty, double stopPrice) throws Exception {
+        ObjectNode b = mapper.createObjectNode();
+        b.putObject("initial").put("contract", contract(symbol)).put("size", 0).put("price", "0")
+                .put("tif", "ioc").put("close", true).put("reduce_only", true);
+        b.putObject("trigger").put("strategy_type", 0).put("price_type", 1)
+                .put("price", plain(stopPrice, filters.priceScale(symbol))).put("rule", side == Side.SELL ? 2 : 1);
+        String id = signed("POST", SETTLE + "/price_orders", "", b.toString(), true).path("id").asText("");
+        if (id.isEmpty()) throw new ApiException(200, "NO_ID", "нет id у стопа", false);
+        return id;
+    }
+
+    /** Снять стоп. */
+    @Override
+    public void cancelStopLoss(String symbol, String stopId) throws Exception {
+        signed("DELETE", SETTLE + "/price_orders/" + stopId, "", "", true);
+    }
+
     // ------------------------------------------------------------ ордера
 
     /** Монеты -> целое число контрактов со знаком стороны. */

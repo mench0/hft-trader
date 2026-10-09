@@ -193,11 +193,21 @@ public final class FundingCarryStrategy {
     /** Купить спот, затем зашортить перп на полученный объём; шорт не встал — продать спот обратно. */
     private void open(Opportunity o, GlobalParams g) {
         double qty = o.spot().orders().filters().roundQuantity(o.spot().symbol(), g.carryOrderQuote() / o.spot().mid());
-        if (qty <= 0) return;
+        if (qty <= 0 || !Venue.claimBoth(o.spot(), o.perp(), OWNER)) return;
+        boolean ok = false;
+        try { ok = openClaimed(o, qty); }
+        finally { if (!ok) { o.spot().release(OWNER); o.perp().release(OWNER); } }
+    }
+
+    /** Имя владельца позиций в OrderService. */
+    private static final String OWNER = "carry";
+
+    /** Открыть (ноги уже взяты под управление); true — позиция открыта. */
+    private boolean openClaimed(Opportunity o, double qty) {
         log.info("[carry] {}: покупаю спот {} и шорчу перп {} (ставка {}%/8ч, комиссии круга {}%)", o.coin(),
                 o.spot().name(), o.perp().name(), fmt(o.ratePercent()), fmt(o.feesPercent()));
         OrderResult b = o.spot().orders().buyMarket(o.spot().symbol(), qty);
-        if (b.executedQty() <= 0) { failed.incrementAndGet(); return; }
+        if (b.executedQty() <= 0) { failed.incrementAndGet(); return false; }
         // на бирже комиссия покупки списывается монетой — на руках чуть меньше купленного
         double held = o.spot().orders().feesInPrice() ? b.executedQty()
                 : b.executedQty() * (1 - takerFeePercent.applyAsDouble(o.spot().gw().id()) / 100);
@@ -213,11 +223,12 @@ public final class FundingCarryStrategy {
                 o.spot().gw().risk().recordPnl(r);
                 pricePnl += r;
             }
-            return;
+            return false;
         }
         carries.put(o.coin(), new Carry(o.coin(), o.spot(), o.perp(), held, s.executedQty(), b.avgPrice(), s.avgPrice(),
                 o.ratePercent(), System.currentTimeMillis()));
         opened.incrementAndGet();
+        return true;
     }
 
     /** Сколько спота можно продать: не больше купленного и не больше свободного остатка. */
@@ -229,7 +240,8 @@ public final class FundingCarryStrategy {
     /** Закрыть: закрыть шорт (reduceOnly) и продать спот; результат после комиссий — в дневной PnL бирж. */
     private void close(Carry c, String why) {
         log.info("[carry] {}: закрываю ({})", c.coin(), why);
-        OrderResult s = c.perp().orders().reduceMarket(c.perp().symbol(), Side.BUY, c.perpQty());
+        double pq = Math.min(c.perpQty(), c.perp().shortQty());   // шорт могли ликвидировать или закрыть стопом на бирже
+        OrderResult s = pq > 0 ? c.perp().orders().reduceMarket(c.perp().symbol(), Side.BUY, pq) : FundingArbitrageStrategy.none(c.perp().symbol(), Side.BUY);
         double sellQty = spotSellable(c.spot(), c.spotQty());
         OrderResult b = sellQty > 0 ? c.spot().orders().sellMarket(c.spot().symbol(), sellQty) : null;
         double r = 0;
@@ -246,7 +258,7 @@ public final class FundingCarryStrategy {
             r += x;
         }
         pricePnl += r;
-        double leftPerp = c.perpQty() - s.executedQty();
+        double leftPerp = Math.min(c.perpQty(), c.perp().shortQty());
         double leftSpot = c.spotQty() - (b == null ? 0 : b.executedQty());
         boolean spotDust = c.spot().orders().filters().roundQuantity(c.spot().symbol(), leftSpot) <= 0;   // остаток меньше шага — не продать
         if (leftPerp > c.perpQty() * 1e-6 || !spotDust) {
@@ -255,6 +267,8 @@ public final class FundingCarryStrategy {
                     c.spotEntry(), c.perpEntry(), c.entryRatePercent(), c.openedAtMs()));
         } else {
             carries.remove(c.coin());
+            c.spot().release(OWNER);
+            c.perp().release(OWNER);
             closed.incrementAndGet();
         }
     }

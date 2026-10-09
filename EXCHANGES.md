@@ -52,6 +52,10 @@ Uniswap V2 (AMM-пулы обмена — фьючерсов не бывает):
 - У MEXC режим позиций — раздельный (лонг и шорт отдельно): закрытие идёт reduceOnly-ордером со сторонами «закрыть
   лонг/шорт», позиции в боте складываются со знаком.
 - Режим позиций — односторонний (One-way / net), маржа — кросс. Режим хеджирования на бирже включать не нужно.
+- Стоп на бирже (`exchangeStopLossPercent`): Binance — `POST /fapi/v1/algoOrder` (STOP_MARKET, closePosition, MARK_PRICE;
+  запасной — `/fapi/v1/order`), Bybit — `/v5/position/trading-stop`, OKX — `/api/v5/trade/order-algo` (conditional,
+  closeFraction 1), Gate — `/futures/usdt/price_orders`, KuCoin — `/api/v1/orders` со `stop` и `closeOrder`, Hyperliquid —
+  триггер-ордер `tpsl: sl`, Aster — `STOP_MARKET` closePosition; MEXC — нет.
 - Ключи те же, что для спота; у ключа должно быть право торговли фьючерсами (у Binance — «Enable Futures»).
 - Testnet фьючерсов: Binance — `testnet.binancefuture.com`, Bybit — `api-testnet.bybit.com`, OKX — демо-торговля, Hyperliquid — testnet,
   Gate — `fx-api-testnet.gateio.ws`, Aster — `fapi.asterdex-testnet.com`. У KuCoin и MEXC тестовой сети фьючерсов нет.

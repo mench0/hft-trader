@@ -172,6 +172,58 @@ public final class BinanceFuturesClient extends SignedClient {
         for (String s : store.snapshot().keySet()) if (!seen.contains(s)) store.set(s, 0, 0);   // закрыта на бирже
     }
 
+    // ------------------------------------------------------------ защитный стоп
+
+    /**
+     * Стоп на бирже: STOP_MARKET с closePosition=true по цене маркировки — закрывает всю позицию.
+     * Условные ордера Binance перенесла в Algo Order API ({@code POST /fapi/v1/algoOrder}, id — algoId);
+     * если он недоступен (старый API, testnet), — классический {@code POST /fapi/v1/order}.
+     * id стопа: «a:&lt;algoId&gt;» или «o:&lt;orderId&gt;».
+     */
+    @Override
+    public String placeStopLoss(String symbol, Side side, double qty, double stopPrice) throws Exception {
+        String px = plain(stopPrice, filters.priceScale(symbol));
+        var a = params();
+        a.put("algoType", "CONDITIONAL");
+        a.put("symbol", symbol.toUpperCase());
+        a.put("side", side.name());
+        a.put("type", "STOP_MARKET");
+        a.put("triggerPrice", px);
+        a.put("closePosition", "true");
+        a.put("workingType", "MARK_PRICE");
+        try {
+            JsonNode r = signed("POST", "/fapi/v1/algoOrder", a, true);
+            String id = r.path("algoId").asText("");
+            if (!id.isEmpty()) return "a:" + id;
+            throw new ApiException(200, "NO_ID", "нет algoId в ответе: " + r, false);
+        } catch (ApiException algoErr) {
+            log.warn("[binance] Algo Order API: {} — ставлю стоп через /fapi/v1/order", algoErr.getMessage());
+            var p = params();
+            p.put("symbol", symbol.toUpperCase());
+            p.put("side", side.name());
+            p.put("type", "STOP_MARKET");
+            p.put("stopPrice", px);
+            p.put("closePosition", "true");
+            p.put("workingType", "MARK_PRICE");
+            JsonNode r = signed("POST", "/fapi/v1/order", p, true);
+            return "o:" + r.path("orderId").asText();
+        }
+    }
+
+    /** Снять стоп: algoId — через Algo Order API, orderId — обычной отменой. */
+    @Override
+    public void cancelStopLoss(String symbol, String stopId) throws Exception {
+        var p = params();
+        p.put("symbol", symbol.toUpperCase());
+        if (stopId.startsWith("a:")) {
+            p.put("algoId", stopId.substring(2));
+            signed("DELETE", "/fapi/v1/algoOrder", p, true);
+        } else {
+            p.put("orderId", stopId.substring(stopId.indexOf(':') + 1));
+            signed("DELETE", "/fapi/v1/order", p, true);
+        }
+    }
+
     // ------------------------------------------------------------ ордера
 
     /** Параметры ордера Binance. */

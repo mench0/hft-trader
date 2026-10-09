@@ -53,6 +53,10 @@ public final class PaperOrderApi implements ExchangeOrderApi {
     private final Map<Long, Resting> resting = new ConcurrentHashMap<>();
     /** Позиции в режиме перпов; null — спот. */
     private volatile PositionStore positions;
+    /** Защитный стоп: закрыть позицию, когда цена дойдёт до price. */
+    private record Stop(String symbol, Side side, double qty, double price) {}
+    /** Бумажные стопы по id. */
+    private final Map<String, Stop> stops = new ConcurrentHashMap<>();
 
     /**
      * @param market стаканы биржи
@@ -85,6 +89,22 @@ public final class PaperOrderApi implements ExchangeOrderApi {
     // ------------------------------------------------------------ ExchangeOrderApi
 
     @Override public boolean isPerp() { return positions != null; }
+
+    /** Бумажный стоп: срабатывает в {@link #settle}, когда лучшая цена дойдёт до stopPrice. */
+    @Override
+    public String placeStopLoss(String symbol, Side side, double qty, double stopPrice) {
+        if (positions == null) return null;
+        String id = "paper-stop-" + ids.incrementAndGet();
+        stops.put(id, new Stop(symbol, side, qty, stopPrice));
+        return id;
+    }
+
+    /** Снять бумажный стоп. */
+    @Override
+    public void cancelStopLoss(String symbol, String stopId) { stops.remove(stopId); }
+
+    /** Сколько бумажных стопов стоит. */
+    public int openStops() { return stops.size(); }
 
     /** Закрытие: не больше открытой позиции нужного знака. */
     @Override
@@ -208,6 +228,7 @@ public final class PaperOrderApi implements ExchangeOrderApi {
     public void settle(String symbol) {
         double[] top = TOP.get();
         if (!market.book(symbol).readTop(top)) return;
+        triggerStops(symbol, top);
         for (Resting r : resting.values()) {
             if (!r.symbol().equals(symbol)) continue;
             boolean crossed = r.side() == Side.BUY ? top[2] < r.price() : top[0] > r.price();
@@ -231,6 +252,29 @@ public final class PaperOrderApi implements ExchangeOrderApi {
             }
         }
     }
+
+    /** Стопы символа, до цены которых дошёл рынок: закрыть позицию рыночным reduceOnly (позицию и баланс правим сами). */
+    private void triggerStops(String symbol, double[] top) {
+        PositionStore ps = positions;
+        if (ps == null || stops.isEmpty()) return;
+        for (var e : stops.entrySet()) {
+            Stop st = e.getValue();
+            if (!st.symbol().equals(symbol)) continue;
+            boolean hit = st.side() == Side.SELL ? top[0] <= st.price() : top[2] >= st.price();   // лонг — по биду, шорт — по аску
+            if (!hit || stops.remove(e.getKey()) == null) continue;
+            OrderResult r = reduceMarket(symbol, st.side(), st.qty());
+            if (r.executedQty() <= 0) continue;
+            double pnl = ps.apply(symbol, st.side() == Side.BUY, r.executedQty(), r.avgPrice());
+            if (pnl != 0) balances.adjust(BalanceStore.quoteAsset(symbol), pnl);
+            stopsTriggered.incrementAndGet();
+        }
+    }
+
+    /** Сработавших бумажных стопов. */
+    private final AtomicLong stopsTriggered = new AtomicLong();
+
+    /** Сработавших бумажных стопов (тесты, админка). */
+    public long stopsTriggered() { return stopsTriggered.get(); }
 
     private static OrderResult result(long id, String symbol, Side side, String status,
                                       double req, double exec, double avg, long t0) {

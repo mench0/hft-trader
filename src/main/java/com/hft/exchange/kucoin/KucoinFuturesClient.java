@@ -161,6 +161,35 @@ public final class KucoinFuturesClient extends SignedClient {
         for (String s : store.snapshot().keySet()) if (!seen.contains(s)) store.set(s, 0, 0);
     }
 
+    // ------------------------------------------------------------ защитный стоп
+
+    /**
+     * Стоп на бирже: рыночный стоп-ордер closeOrder=true (закрыть всю позицию), срабатывание по цене маркировки
+     * (stopPriceType MP); лонг — stop=down, шорт — stop=up.
+     */
+    @Override
+    public String placeStopLoss(String symbol, Side side, double qty, double stopPrice) throws Exception {
+        ObjectNode b = mapper.createObjectNode()
+                .put("clientOid", "sl" + System.nanoTime())
+                .put("side", side == Side.BUY ? "buy" : "sell")
+                .put("symbol", instrument(symbol))
+                .put("type", "market")
+                .put("stop", side == Side.SELL ? "down" : "up")
+                .put("stopPriceType", "MP")
+                .put("stopPrice", plain(stopPrice, filters.priceScale(symbol)))
+                .put("closeOrder", true)
+                .put("marginMode", "CROSS");
+        String id = signed("POST", "/api/v1/orders", b.toString(), true).path("orderId").asText("");
+        if (id.isEmpty()) throw new ApiException(200, "NO_ID", "нет orderId у стопа", false);
+        return id;
+    }
+
+    /** Снять стоп-ордер. */
+    @Override
+    public void cancelStopLoss(String symbol, String stopId) throws Exception {
+        signed("DELETE", "/api/v1/orders/" + stopId, "", true);
+    }
+
     // ------------------------------------------------------------ ордера
 
     @Override

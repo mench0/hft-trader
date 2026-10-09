@@ -219,7 +219,17 @@ public final class PerpPriceArbitrageStrategy {
     private void open(Opportunity o, GlobalParams g) {
         double qty = Math.min(g.perpArbOrderQuote() / o.mid(), o.maxQty());
         qty = FundingArbitrageStrategy.commonQty(o.shortLeg(), o.longLeg(), qty);
-        if (qty <= 0) return;
+        if (qty <= 0 || !Venue.claimBoth(o.shortLeg(), o.longLeg(), OWNER)) return;
+        boolean ok = false;
+        try { ok = openClaimed(o, qty); }
+        finally { if (!ok) { o.shortLeg().release(OWNER); o.longLeg().release(OWNER); } }
+    }
+
+    /** Имя владельца позиций в OrderService. */
+    private static final String OWNER = "perp-arb";
+
+    /** Открыть пару (ноги уже взяты под управление); true — пара открыта. */
+    private boolean openClaimed(Opportunity o, double qty) {
         final double q = qty;
         log.info("[perp-arb] {}: продаю {} / покупаю {}, спред {}%, ожидаемо {}% после комиссий, объём {}", o.coin(),
                 o.shortLeg().name(), o.longLeg().name(), fmt(o.spreadPercent()), fmt(o.expectedPercent()), q);
@@ -232,7 +242,7 @@ public final class PerpPriceArbitrageStrategy {
             if (sq > 0) unwind(o.shortLeg(), Side.BUY, sq, s.avgPrice(), true);
             if (lq > 0) unwind(o.longLeg(), Side.SELL, lq, l.avgPrice(), false);
             log.warn("[perp-arb] {}: нога не исполнилась (шорт {}, лонг {}) — откатил", o.coin(), sq, lq);
-            return;
+            return false;
         }
         double common = Math.min(sq, lq);                               // объёмы разошлись — лишнее закрыть
         if (sq - common > 1e-12) unwind(o.shortLeg(), Side.BUY, sq - common, s.avgPrice(), true);
@@ -241,6 +251,7 @@ public final class PerpPriceArbitrageStrategy {
         pairs.put(o.coin(), new Pair(o.coin(), o.shortLeg(), o.longLeg(), common, s.avgPrice(), l.avgPrice(),
                 (s.avgPrice() - l.avgPrice()) / mid * 100, System.currentTimeMillis()));
         opened.incrementAndGet();
+        return true;
     }
 
     /** Закрыть часть одной ноги и учесть результат с комиссиями. */
@@ -256,8 +267,12 @@ public final class PerpPriceArbitrageStrategy {
     /** Закрыть обе ноги параллельно reduceOnly-ордерами; результат после комиссий — в дневной PnL бирж. */
     private void close(Pair p, String why) {
         log.info("[perp-arb] {}: закрываю ({})", p.coin(), why);
-        var fs = CompletableFuture.supplyAsync(() -> p.shortLeg().orders().reduceMarket(p.shortLeg().symbol(), Side.BUY, p.qty()), legs);
-        var fl = CompletableFuture.supplyAsync(() -> p.longLeg().orders().reduceMarket(p.longLeg().symbol(), Side.SELL, p.qty()), legs);
+        // закрываем не больше фактической позиции: ногу могли ликвидировать или закрыть стопом на бирже
+        double sq = Math.min(p.qty(), p.shortLeg().shortQty()), lq = Math.min(p.qty(), p.longLeg().longQty());
+        var fs = CompletableFuture.supplyAsync(() -> sq > 0 ? p.shortLeg().orders().reduceMarket(p.shortLeg().symbol(), Side.BUY, sq)
+                : FundingArbitrageStrategy.none(p.shortLeg().symbol(), Side.BUY), legs);
+        var fl = CompletableFuture.supplyAsync(() -> lq > 0 ? p.longLeg().orders().reduceMarket(p.longLeg().symbol(), Side.SELL, lq)
+                : FundingArbitrageStrategy.none(p.longLeg().symbol(), Side.SELL), legs);
         OrderResult s = fs.join(), l = fl.join();
         double r = 0;
         if (s.executedQty() > 0) {
@@ -273,13 +288,15 @@ public final class PerpPriceArbitrageStrategy {
             r += x;
         }
         pnl += r;
-        double leftS = p.qty() - s.executedQty(), leftL = p.qty() - l.executedQty();
+        double leftS = Math.min(p.qty(), p.shortLeg().shortQty()), leftL = Math.min(p.qty(), p.longLeg().longQty());
         if (leftS > p.qty() * 1e-6 || leftL > p.qty() * 1e-6) {
             log.error("[perp-arb] {}: не всё закрылось (шорт {}, лонг {}) — повторю на следующем цикле", p.coin(), leftS, leftL);
             pairs.put(p.coin(), new Pair(p.coin(), p.shortLeg(), p.longLeg(), Math.max(leftS, leftL), p.shortEntry(), p.longEntry(),
                     p.entrySpreadPercent(), p.openedAtMs()));
         } else {
             pairs.remove(p.coin());
+            p.shortLeg().release(OWNER);
+            p.longLeg().release(OWNER);
             closed.incrementAndGet();
         }
     }

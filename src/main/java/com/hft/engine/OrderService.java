@@ -17,6 +17,9 @@ import com.hft.store.SymbolFilters;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
 /**
  * Единая точка входа для всех торговых операций.
  *
@@ -49,6 +52,21 @@ public final class OrderService {
     private final PositionStore positions;
     /** Торгуются перпы: объём ордера меняет позицию, а не баланс базовой валюты. */
     private final boolean perp;
+
+    /** Защитный стоп на бирже: id, сторона закрытия, объём и цена срабатывания. */
+    private record Stop(String id, Side side, double qty, double price) {}
+    /** Стоящие на бирже стопы по символу. */
+    private final Map<String, Stop> stops = new ConcurrentHashMap<>();
+    /** Блокировки по символу: стоп символа меняет один поток. */
+    private final Map<String, Object> stopLocks = new ConcurrentHashMap<>();
+    /** Когда постановка стопа по символу последний раз не удалась (повтор не чаще STOP_RETRY_MS). */
+    private final Map<String, Long> stopFailedAt = new ConcurrentHashMap<>();
+    /** Пауза перед повтором неудачной постановки стопа, мс. */
+    private static final long STOP_RETRY_MS = 30_000;
+    /** Клиент биржи стопы не поддерживает — больше не пытаемся. */
+    private volatile boolean stopsUnsupported;
+    /** Кто управляет позицией символа (стратегия); нет записи — позиция «ничья». */
+    private final Map<String, String> owners = new ConcurrentHashMap<>();
 
     /** Риск-менеджер биржи (стратегии пишут в него результат сделок). */
     public RiskManager risk() { return risk; }
@@ -227,9 +245,10 @@ public final class OrderService {
             OrderResult result = send(request, qty);
             orderLatency.recordSince(start);
 
-            // 5. Обновление локальных балансов
+            // 5. Обновление локальных балансов; на перпах — защитный стоп под новый размер позиции
             if (result.executedQty() > 0) {
                 applyToBalances(result);
+                if (perp) syncStop(symbol);
             }
 
             log.info("{} -> {}", request, result);
@@ -387,4 +406,86 @@ public final class OrderService {
 
     /** Латентность ордеров. */
     public Latency latency() { return orderLatency; }
+
+    // ======================= ВЛАДЕЛЬЦЫ ПОЗИЦИЙ =======================
+
+    /** Стратегия берёт позицию символа под управление; false — ею уже управляет другая. */
+    public boolean claim(String symbol, String owner) {
+        String cur = owners.putIfAbsent(symbol, owner);
+        return cur == null || cur.equals(owner);
+    }
+
+    /** Стратегия отпускает позицию символа. */
+    public void release(String symbol, String owner) { owners.remove(symbol, owner); }
+
+    /** Кто управляет позицией символа; null — никто. */
+    public String owner(String symbol) { return owners.get(symbol); }
+
+    // ======================= ЗАЩИТНЫЙ СТОП НА БИРЖЕ =======================
+
+    /**
+     * Привести защитный стоп символа на бирже к текущей позиции (перпы, exchangeStopLossPercent > 0):
+     * позиция есть — стоп на exchangeStopLossPercent % от цены входа против неё, на весь объём; позиции нет — стоп снят.
+     * Новый стоп ставится до снятия старого, чтобы позиция не оставалась без защиты. Вызывается после каждого
+     * исполнения и сторожем позиций (позиция изменилась мимо бота, стоп сработал, прошлая попытка не удалась).
+     */
+    public void syncStop(String symbol) {
+        if (!perp) return;
+        synchronized (stopLocks.computeIfAbsent(symbol, k -> new Object())) {
+            double pct = settings.get().exchangeStopLossPercent();
+            PositionStore.Position p = positions.get(symbol);
+            Stop cur = stops.get(symbol);
+            if (pct <= 0 || p.isFlat() || stopsUnsupported) {
+                if (cur != null) cancelStop(symbol, cur);
+                return;
+            }
+            boolean isLong = p.qty() > 0;
+            Side side = isLong ? Side.SELL : Side.BUY;
+            double qty = Math.abs(p.qty());
+            double price = filters.roundPrice(symbol, p.entryPrice() * (isLong ? 1 - pct / 100 : 1 + pct / 100));
+            if (price <= 0) return;
+            if (cur != null && cur.side() == side && near(cur.qty(), qty) && near(cur.price(), price)) return;   // уже стоит
+            Long failed = stopFailedAt.get(symbol);
+            if (failed != null && System.currentTimeMillis() - failed < STOP_RETRY_MS && cur == null) return;
+            try {
+                String id = rest.placeStopLoss(symbol, side, qty, price);
+                if (id == null) {
+                    stopsUnsupported = true;
+                    log.warn("[{}] биржа не поддерживает стоп-ордера в боте — защищает только стоп-лосс бота", symbol);
+                    return;
+                }
+                stops.put(symbol, new Stop(id, side, qty, price));
+                stopFailedAt.remove(symbol);
+                log.info("Стоп на бирже {} {} {} @ {} (id {})", symbol, side, qty, price, id);
+                if (cur != null) cancelStopQuietly(symbol, cur);
+            } catch (Exception e) {
+                stopFailedAt.put(symbol, System.currentTimeMillis());
+                log.error("Стоп на бирже по {} не поставлен: {} — повтор через {} с", symbol, e.getMessage(), STOP_RETRY_MS / 1000);
+            }
+        }
+    }
+
+    /** Снять стоп и забыть его. */
+    private void cancelStop(String symbol, Stop st) {
+        stops.remove(symbol, st);
+        cancelStopQuietly(symbol, st);
+    }
+
+    /** Снять стоп на бирже; ошибка (стоп уже сработал или снят) — только в лог. */
+    private void cancelStopQuietly(String symbol, Stop st) {
+        try { rest.cancelStopLoss(symbol, st.id()); log.info("Стоп {} по {} снят", st.id(), symbol); }
+        catch (Exception e) { log.warn("Стоп {} по {} не снят: {}", st.id(), symbol, e.getMessage()); }
+    }
+
+    /** Символы, по которым стоит стоп на бирже. */
+    public java.util.Set<String> stopSymbols() { return java.util.Set.copyOf(stops.keySet()); }
+
+    /** Стоп символа на бирже (для админки и тестов): цена срабатывания, NaN — стопа нет. */
+    public double stopPrice(String symbol) {
+        Stop st = stops.get(symbol);
+        return st == null ? Double.NaN : st.price();
+    }
+
+    /** Примерно равны (объём и цена после округления). */
+    private static boolean near(double a, double b) { return Math.abs(a - b) <= Math.max(1e-12, Math.abs(b) * 1e-9); }
 }
