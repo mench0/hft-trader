@@ -33,10 +33,10 @@ import java.util.Map;
  * Биржи отличаются клиентом ({@link TradingClient}) и, у Binance и Bybit, своим Netty-фидом — их передаёт фабрика.
  * LIVE включается только при ID_API_KEY/_SECRET и ID_LIVE=true, иначе — бумажный движок на живых данных.
  */
-public final class SignedCexExchange implements ExchangeGateway, RequestStatsSource {
+public final class GeneralExchange implements ExchangeGateway, RequestStatsSource {
 
     /** Логгер. */
-    private static final Logger log = LoggerFactory.getLogger(SignedCexExchange.class);
+    private static final Logger log = LoggerFactory.getLogger(GeneralExchange.class);
 
     /** Описание биржи из каталога. */
     private final ExchangeInfo info;
@@ -92,7 +92,7 @@ public final class SignedCexExchange implements ExchangeGateway, RequestStatsSou
      * @param settings параметры биржи
      * @param clientFactory создаёт REST-клиент для LIVE
      */
-    public SignedCexExchange(String id, ExchangeConfig config, TradingSettings settings, ClientFactory clientFactory) {
+    public GeneralExchange(String id, ExchangeConfig config, TradingSettings settings, ClientFactory clientFactory) {
         this(id, config, settings, clientFactory, null);
     }
 
@@ -103,7 +103,7 @@ public final class SignedCexExchange implements ExchangeGateway, RequestStatsSou
      * @param clientFactory создаёт REST-клиент для LIVE
      * @param feedFactory свой Netty-фид биржи; null — общий фид (WS по диалекту, REST — запасной)
      */
-    public SignedCexExchange(String id, ExchangeConfig config, TradingSettings settings,
+    public GeneralExchange(String id, ExchangeConfig config, TradingSettings settings,
                              ClientFactory clientFactory, FeedFactory feedFactory) {
         this.info = ExchangeCatalog.find(id).orElseThrow();
         this.config = config;
