@@ -15,7 +15,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Мелкие общие функции для класса биржи {@link SignedCexExchange}: здесь — только то, что иначе
+ * Мелкие общие функции для класса биржи {@link GeneralExchange}: здесь — только то, что иначе
  * пришлось бы копировать построчно (режим LIVE/PAPER, правила и баланс для бумажной торговли, сборка фида).
  */
 public final class ExchangeSupport {

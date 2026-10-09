@@ -6,7 +6,7 @@ import com.hft.exchange.ExchangeFactory;
 import java.util.*;
 import java.util.function.BooleanSupplier;
 
-/** Биржи целиком (paper-режим, общий класс SignedCexExchange): start -> WS-стакан -> конвейер -> stop. */
+/** Биржи целиком (paper-режим, общий класс GeneralExchange): start -> WS-стакан -> конвейер -> stop. */
 public class ExchangeLifecycleCheck {
   static int pass, fail;
   static void ck(String n, boolean ok){ if(ok) pass++; else {fail++; System.out.println("FAIL "+n);} }
@@ -34,13 +34,13 @@ public class ExchangeLifecycleCheck {
       gw.syncBalances();
       gw.stop();
     }
-    // Binance и Bybit — тот же SignedCexExchange со своим Netty-фидом
+    // Binance и Bybit — тот же GeneralExchange со своим Netty-фидом
     try (var ws = new MiniWsServer()) {
       ws.onOpen = c -> c.text("{\"stream\":\"btcusdt@depth20@100ms\",\"data\":{\"lastUpdateId\":1,\"bids\":[[\"99\",\"3\"]],\"asks\":[[\"101\",\"2\"]]}}");
       var cfg = new ExchangeConfig("binance", false, "http://127.0.0.1:9", ws.url().replace("/ws", ""), 5000, List.of("BTCUSDT"), 20, 100,
           TradingParams.DEFAULTS.with(Map.of("market", "spot")));
       ExchangeGateway gw = ExchangeFactory.create("binance", cfg, app);
-      ck("binance spot is SignedCexExchange with Netty feed", gw instanceof SignedCexExchange se && se.feed() instanceof NettyBookFeed);
+      ck("binance spot is GeneralExchange with Netty feed", gw instanceof GeneralExchange se && se.feed() instanceof NettyBookFeed);
       gw.start();
       var b = gw.marketData().book("BTCUSDT");
       ck("binance book through Netty feed", await(() -> b.bestBid()==99 && b.bestAsk()==101, 5000));
@@ -54,7 +54,7 @@ public class ExchangeLifecycleCheck {
       var cfg = new ExchangeConfig("bybit", false, "http://127.0.0.1:9", "ws://127.0.0.1:9", 5000, List.of("BTCUSDT"), 20, 100,
           TradingParams.DEFAULTS.with(Map.of("market", mkt)));
       ExchangeGateway gw = ExchangeFactory.create("bybit", cfg, app);
-      ck("bybit " + mkt + " is SignedCexExchange", gw instanceof SignedCexExchange se && se.feed() instanceof NettyBookFeed
+      ck("bybit " + mkt + " is GeneralExchange", gw instanceof GeneralExchange se && se.feed() instanceof NettyBookFeed
           && (gw.perp() != null) == mkt.equals("perp"));
     }
     // остальные классы конструируются и стартуют в paper-режиме (стакан возьмут REST-опросом позже; тут — только жизненный цикл)

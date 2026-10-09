@@ -716,7 +716,7 @@ Hyperliquid, Uniswap V2-пулы (LIVE не проверен). В каталог
 
 ## Структура бирж
 
-Все биржи — один класс `SignedCexExchange`; отличаются клиентом (`TradingClient`) и фидом стакана, которые задаёт `ExchangeFactory`.
+Все биржи — один класс `GeneralExchange`; отличаются клиентом (`TradingClient`) и фидом стакана, которые задаёт `ExchangeFactory`.
 
 | Биржа | Клиент | Фид стакана | Режим |
 |---|---|---|---|
@@ -786,7 +786,7 @@ OKX, Gate, KuCoin, Aster, MEXC и Hyperliquid получают стакан по
 
 ## Устройство классов бирж
 
-`SignedCexExchange` — класс для всех бирж (отличаются клиентом и, у Binance и Bybit, своим Netty-фидом из `ExchangeFactory`):
+`GeneralExchange` — класс для всех бирж (отличаются клиентом и, у Binance и Bybit, своим Netty-фидом из `ExchangeFactory`):
 свои `MarketDataStore`, `BalanceStore`, `SymbolFilters`,
 REST-клиент, `RiskManager`, `OrderService`, конвейер `TickPipeline` (Disruptor) и фид, явные `start()`/`stop()`.
 Общие мелочи (режим LIVE/PAPER, стартовый бумажный баланс, сборка WS+REST-фида, остановка при потере данных) — в `ExchangeSupport`.
@@ -839,7 +839,9 @@ KuCoin в режиме UTA торгует через `uta.order` / `uta.cancel` 
   Сдавшийся WS-стакан запускается заново раз в минуту; WS-канал ордеров после отказов логина пробует снова через 10 минут.
   Во всех WS-клиентах пауза переподключения со случайным разбросом ±20 %. Проверка `ReconnectCheck`.
 
-- **2026-10:** классы `BinanceExchange` и `BybitExchange` удалены — Binance и Bybit работают через общий `SignedCexExchange`
+- **2026-10:** `SignedCexExchange` переименован в `GeneralExchange` — это класс для всех бирж, включая DEX (Hyperliquid, Uniswap V2).
+
+- **2026-10:** классы `BinanceExchange` и `BybitExchange` удалены — Binance и Bybit работают через общий `GeneralExchange`
   со своими Netty-фидами (`NettyBookFeed`); у всех бирж одна схема старта, остановки и сверки баланса. Бумажный режим
   Binance и Bybit теперь сводит лимитные заявки по стакану, как у остальных бирж. Netty-фид исправлен: переподключение
   после обрыва раньше не срабатывало (блокирующее ожидание в потоке Netty), первый неудачный коннект больше не роняет старт,

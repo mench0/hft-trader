@@ -21,13 +21,13 @@ hft-trader/
 │   │   ├── ExchangeGateway.java      # общий контракт биржи
 │   │   ├── ExchangeFactory.java      # id биржи -> реализация
 │   │   ├── catalog/                  # ExchangeCatalog/ExchangeInfo: список бирж, комиссии, лимиты, статус адаптера
-│   │   ├── binance/, bybit/          # REST-клиенты и свои WS-фиды на Netty (класс биржи — общий SignedCexExchange);
+│   │   ├── binance/, bybit/          # REST-клиенты и свои WS-фиды на Netty (класс биржи — общий GeneralExchange);
 │   │   │                             # BinanceFuturesClient — USDⓈ-M (fapi, ws-fapi, listenKey);
 │   │   │                             # фьючерсы остальных: GateFuturesClient, KucoinFuturesClient, MexcFuturesClient,
 │   │   │                             # Aster — тот же AsterRestClient с /fapi/v3
 │   │   ├── okx/, gate/, mexc/, kucoin/, aster/, hyperliquid/, uniswapv2/
 │   │   │                             # REST-клиенты на общем скелете SignedCexClient
-│   │   └── generic/                  # SignedCexExchange (класс биржи для всех), NettyBookFeed, ContractSizes (размер контракта перпов), фиды стакана:
+│   │   └── generic/                  # GeneralExchange (класс биржи для всех), NettyBookFeed, ContractSizes (размер контракта перпов), фиды стакана:
 │   │                                 # WsBookFeed, PollingBookFeed, HybridBookFeed; диалекты
 │   │                                 # Dialects (REST) и WsDialects (WS), LocalBook, FastJson
 │   ├── rest/                         # TradingClient (общий контракт клиента), SignedCexClient, BinanceRestClient, RateBudget/RateLimits/PacedLimiter,
@@ -66,10 +66,10 @@ hft-trader/
 
 | Биржа | Рынки | Реализация | Режим по умолчанию |
 |---|---|---|---|
-| Binance, Bybit | spot, perp | SignedCexExchange + BinanceRestClient / BybitRestClient и Netty-фид; перпы Binance — BinanceFuturesClient | LIVE при ключах и `live=true` |
-| OKX, Gate, MEXC, KuCoin, Aster | spot, perp | SignedCexExchange + свой RestClient (фьючерсы — Gate/Kucoin/MexcFuturesClient, OKX SWAP, Aster `/fapi/v3`) | PAPER, LIVE не проверен |
-| Hyperliquid | perp | SignedCexExchange + HyperliquidRestClient | PAPER, LIVE не проверен |
-| Uniswap V2 | spot | SignedCexExchange + UniswapV2Client | PAPER, LIVE не проверен |
+| Binance, Bybit | spot, perp | GeneralExchange + BinanceRestClient / BybitRestClient и Netty-фид; перпы Binance — BinanceFuturesClient | LIVE при ключах и `live=true` |
+| OKX, Gate, MEXC, KuCoin, Aster | spot, perp | GeneralExchange + свой RestClient (фьючерсы — Gate/Kucoin/MexcFuturesClient, OKX SWAP, Aster `/fapi/v3`) | PAPER, LIVE не проверен |
+| Hyperliquid | perp | GeneralExchange + HyperliquidRestClient | PAPER, LIVE не проверен |
+| Uniswap V2 | spot | GeneralExchange + UniswapV2Client | PAPER, LIVE не проверен |
 
 Полный список с комиссиями — `GET /exchanges/catalog` или вкладка «Биржи» в админке.
 Рынок биржи — параметр `market` (enum `Market`): по умолчанию `perp`, если он есть у биржи, иначе `spot`.

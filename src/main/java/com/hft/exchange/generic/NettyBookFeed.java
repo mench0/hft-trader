@@ -6,7 +6,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Свой Netty-фид биржи (Binance, Bybit — {@link AbstractWsFeed}) в виде {@link BookFeed} для {@link SignedCexExchange}.
+ * Свой Netty-фид биржи (Binance, Bybit — {@link AbstractWsFeed}) в виде {@link BookFeed} для {@link GeneralExchange}.
  * REST-запаса у такого фида нет: он сам переподключается с нарастающей паузой и не сдаётся;
  * пока данных нет или они старше wsStaleMs, {@link #isRealtime()} = false и стратегии не открывают позиции.
  */
