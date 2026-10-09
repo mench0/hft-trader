@@ -32,7 +32,8 @@ hft-trader/
 │   │                                 # Dialects (REST) и WsDialects (WS), LocalBook, FastJson
 │   ├── rest/                         # TradingClient (общий контракт клиента), SignedClient, BinanceRestClient, RateBudget/RateLimits/PacedLimiter,
 │   │                                 # WsRpcChannel (ордера по WS), WsSender, ExchangeOrderApi
-│   ├── engine/                       # ядро исполнения: TickPipeline (Disruptor), MarketDataHandler, OrderService
+│   ├── engine/                       # ядро исполнения: TickPipeline (Disruptor), MarketDataHandler,
+│   │                                 # OrderService (риск, объём, баланс; владельцы позиций, стоп на бирже — syncStop)
 │   ├── strategy/                     # все стратегии — спот и перпы вместе:
 │   │                                 #   одна биржа (на тиках, StrategySet): MeanReversionStrategy (спот: лонг; перп: лонг и шорт),
 │   │                                 #   StatArbStrategy (спот: дешёвая нога; перп: пара лонг/шорт), TriangularArbStrategy (только спот);
@@ -41,13 +42,14 @@ hft-trader/
 │   ├── risk/RiskManager.java         # проверки перед ордером, дневной лимит, kill switch
 │   ├── paper/PaperOrderApi.java      # бумажное исполнение против живого стакана (спот и перпы)
 │   ├── perp/                         # фьючерсный счёт: PerpAccount (позиции, плечо, опрос funding),
-│   │                                 # FundingSource (ставки по REST бирж)
+│   │                                 # FundingSource (ставки по REST бирж), PositionGuard (сторож позиций без стратегии
+│   │                                 # и стопов на бирже)
 │   ├── discovery/                    # подбор тикеров под стратегии: MarketSources (сводки 24ч бирж),
 │   │                                 # профили стратегий, бэктест возврата к среднему
 │   ├── store/                        # MarketDataStore, OrderBook (StampedLock), PriceWindow, BalanceStore, SymbolFilters,
 │   │                                 # PositionStore (позиции перпов), FundingStore (ставки funding)
 │   ├── metrics/                      # Latency (HdrHistogram), PrometheusExporter (/metrics)
-│   ├── net/AbstractWsFeed.java       # общий Netty WS-клиент для Binance/Bybit
+│   ├── net/AbstractWsFeed.java       # общий Netty WS-клиент для Binance/Bybit (переподключение, контроль тишины, пинги)
 │   ├── crypto/                       # Keccak, Hex, EvmCrypto/Web3jCrypto (Hyperliquid, Uniswap)
 │   ├── model/                        # Tick, OrderRequest, OrderResult, OrderEnums
 │   └── util/                         # Signer/Hmac, Numbers, BoundedMap, MsgPack
@@ -81,7 +83,8 @@ hft-trader/
 2. REST-клиент `exchange/<id>/<Id>RestClient extends SignedClient` (подпись, ордера, баланс, правила).
 3. Диалект стакана в `generic/Dialects` (REST) и, если есть WS, в `generic/WsDialects`.
 4. Строка в `ExchangeFactory`, `ExchangeCatalog`, лимиты в `rest/RateLimits`, источник сводок в `discovery/MarketSources`.
-5. Проверки в `src/test/java` (разбор ответов на фиктивном сервере `MiniWsServer`).
+5. Для перпов — `setLeverage`, `loadPositions`, `reduceMarket` и защитный стоп `placeStopLoss` / `cancelStopLoss`.
+6. Проверки в `src/test/java` (разбор ответов на фиктивном сервере `MiniWsServer`).
 
 ## Тесты
 
@@ -90,3 +93,7 @@ mvn -q package -DskipTests
 javac -d target/checks -cp target/hft-trader.jar $(find src/test/java -name '*.java')
 java -cp target/checks:target/hft-trader.jar WsFeedCheck     # любой *Check
 ```
+
+Основные проверки: `FuturesCheck`, `FuturesClientsCheck` (фьючерсы), `WsTradeCheck`, `WsFeedCheck` (WebSocket),
+`ReconnectCheck` (обрывы связи), `PositionProtectionCheck` (сторож позиций, стоп на бирже), `StrategiesCheck`,
+`ExchangeLifecycleCheck` (биржа целиком).

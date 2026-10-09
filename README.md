@@ -666,14 +666,16 @@ scrape_configs:
 2. REST-клиент на `SignedClient` (подпись, ордера, баланс, правила); для перпов — отдельный клиент фьючерсов
 3. Диалект стакана в `generic/Dialects` и `generic/WsDialects`; ордера по WS — через `WsRpcChannel`, если биржа умеет
 4. Ветка в `ExchangeFactory`, описание в `ExchangeCatalog`, лимиты в `rest/RateLimits`
-5. Проверка на поддельном сервере в `src/test/java`
+5. Для перпов: `isPerp`, `setLeverage`, `loadPositions`, `reduceMarket`; защитный стоп — `placeStopLoss` / `cancelStopLoss`
+   (не реализован — защищает только стоп бота)
+6. Проверка на поддельном сервере в `src/test/java`
 
 При старте бот проверяет, что каждая биржа enum `Exchange` описана в каталоге; дальше она сама появится
 в `/control/exchanges`, `/exchanges/catalog` и в админке.
 
 ## Своя стратегия
 
-Наследуйтесь от `Strategy` и добавьте в конвейер в `Main`:
+Наследуйтесь от `Strategy` и добавьте в `StrategySet` (там собраны стратегии одной биржи, которые получают тики из конвейера):
 
 ```java
 public final class MyStrategy extends Strategy {
@@ -691,15 +693,17 @@ public final class MyStrategy extends Strategy {
         double z = window.currentZScore();
         double imbalance = book.imbalance(5);
 
-        if (z < -2.0 && imbalance > 0.2) {
-            orders.buyMarket(tick.symbol(), 0.001);
+        // перед входом — взять символ под управление, чтобы другая стратегия и сторож позиций его не трогали
+        if (z < -2.0 && imbalance > 0.2 && orders.claim(tick.symbol(), "моя-стратегия")) {
+            orders.buyMarket(tick.symbol(), 0.001);   // после выхода — orders.release(symbol, "моя-стратегия")
         }
     }
 }
 ```
 
 `MeanReversionStrategy` в проекте — рабочий пример на z-score с
-подтверждением по стакану, стоп-лоссом и таймаутом позиции. Параметры
+подтверждением по стакану, стоп-лоссом, таймаутом позиции и сверкой позиции с биржей.
+Ордера из потока тиков отправляйте через `OrderExecutor`: ждать ответа биржи в конвейере нельзя. Параметры
 подобраны навскидку: перед реальными деньгами их нужно проверять на истории.
 
 ## Что стоит добавить дальше
@@ -717,6 +721,10 @@ public final class MyStrategy extends Strategy {
   пока не убедитесь в поведении бота
 - Задайте `ADMIN_TOKEN` — иначе любой, кто достучится до порта, сможет
   торговать вашими деньгами
+- На фьючерсах включите стоп на бирже (`exchangeStopLossPercent`) после проверки в testnet: стоп-лосс бота
+  не сработает, если процесс упал или пропала связь
+- Позиции, открытые вручную на тех же фьючерсах, попадают под стоп сторожа (`orphanStopLossPercent`);
+  если это не нужно — `guardOrphans=false`
 - Бот пишет `logs/hft-trader.log` и `logs/gc.log` — если начнутся всплески
   задержки, смотрите второй файл
 
@@ -817,7 +825,8 @@ OKX, Gate, KuCoin, Aster, MEXC и Hyperliquid получают стакан по
 свои `MarketDataStore`, `BalanceStore`, `SymbolFilters`,
 REST-клиент, `RiskManager`, `OrderService`, конвейер `TickPipeline` (Disruptor) и фид, явные `start()`/`stop()`.
 Общие мелочи (режим LIVE/PAPER, стартовый бумажный баланс, сборка WS+REST-фида, остановка при потере данных) — в `ExchangeSupport`.
-`start()` в LIVE: синхронизировать часы (Binance) → поднять WS-каналы → загрузить правила (без них старт падает) → баланс → конвейер → фид.
+`start()` в LIVE: синхронизировать часы (Binance) → поднять WS-каналы → загрузить правила (без них старт падает) → баланс →
+на перпах позиции и плечо (`PerpAccount`) и сторож позиций (`PositionGuard`) → конвейер → фид.
 
 WS-ордеров нет в документации MEXC и Aster — у них ордера по REST, а события аккаунта
 идут по приватному потоку через `listenKey` (`UserStream`: ключ по REST перед подключением, продление раз в 25 минут).
