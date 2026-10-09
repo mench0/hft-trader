@@ -357,7 +357,7 @@ curl -X POST "localhost:8080/exchange/params?exchange=bybit&maxPositionQuote=50&
 | Binance | USDⓈ-M | REST `fapi.binance.com`, стакан `fstream`, ордера WebSocket API `ws-fapi`, исполнения/баланс/позиции — поток по listenKey |
 | Bybit | linear | v5 `category=linear`: стакан `/v5/public/linear`, ордера `/v5/trade`, позиции — поток `position` |
 | OKX | SWAP | инструменты `BTC-USDT-SWAP`, `tdMode=cross`, объём в контрактах (`ctVal`) пересчитывается в монеты; позиции — канал `positions` |
-| Hyperliquid | только перпы | то же, что и раньше; плечо — действие `updateLeverage`, позиции — `clearinghouseState` |
+| Hyperliquid | перпы (по умолчанию) и спот | плечо — действие `updateLeverage`, позиции — `clearinghouseState`; спот (`market=spot`) — пары из `spotMeta`, символ — имена токенов подряд (`HYPEUSDC`, `UBTCUSDC`), баланс — `spotClearinghouseState` |
 | Gate | USDT-фьючерсы | контракт `BTC_USDT`, объём в контрактах (`quanto_multiplier`); ордера — WS API `futures.order_place`, исполнения/позиции/баланс — WS `futures.*`; стакан — WS `futures.order_book` |
 | KuCoin | Futures | символ `XBTUSDTM`, объём в лотах (`multiplier`); ордера — Pro WS API `futures.order`, исполнения/позиции/кошелёк — приватный WS фьючерсов; стакан — WS `/contractMarket/level2Depth50` |
 | MEXC | Contract | `BTC_USDT`, объём в контрактах (`contractSize`); ордера — REST (WS-ордеров нет), результаты/позиции/баланс — WS `push.personal.*`; стакан — WS `sub.depth.full`. Ордера через API MEXC выдаёт по отдельному доступу |
@@ -867,6 +867,14 @@ KuCoin в режиме UTA торгует через `uta.order` / `uta.cancel` 
 Форматы публичных API записаны по памяти и проверены только на фейковом сервере; ошибка одной биржи видна в статусе и не мешает остальным.
 
 ## История изменений
+
+- **2026-10:** спот Hyperliquid (`market=spot`; по умолчанию по-прежнему перпы). Справочник пар `HyperliquidSpotMeta`
+  (`spotMeta`): имя на бирже `PURR/USDC` или `@<индекс>`, номер актива в ордере `10000 + индекс`, шаг объёма — по
+  базовому токену, цена — до 8 знаков; баланс токенов — `spotClearinghouseState`; стакан (WS `l2Book` и REST) по имени
+  пары. Символ — имена токенов подряд: `HYPEUSDC`; биткоин и эфир на споте — обёрнутые `UBTC`, `UETH` (`UBTCUSDC`).
+  Плеча, позиций и стопа на бирже у спота нет. Подбор тикеров для спота Hyperliquid пока не сделан.
+  Заодно: частично исполненный IOC-ордер Hyperliquid сразу считается итоговым (остаток биржа уже сняла);
+  проверки `*Check`, печатавшие `passed=`, теперь при ошибке завершаются с кодом 1.
 
 - **2026-10:** классы, сделанные для одной биржи, названы по ней: `HyperliquidMsgPack` (бывший `util/MsgPack`, теперь
   в `exchange/hyperliquid`), `MexcProtobuf` (бывший `util/Protobuf`, в `exchange/mexc`), `UniswapV2Abi`. Форматы, общие

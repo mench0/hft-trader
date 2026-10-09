@@ -61,7 +61,8 @@ public class ExchangeLifecycleCheck {
     List<ExchangeGateway> all = new ArrayList<>();
     String[][] defs = {{"gate","BTCUSDT"},{"mexc","BTCUSDT"},{"hyperliquid","BTCUSDC"}};
     for (String[] d : defs) {
-      var cfg = new ExchangeConfig(d[0], false, "http://127.0.0.1:9", "ws://127.0.0.1:9/ws", 5000, List.of(d[1]), 20, 100);
+      var cfg = new ExchangeConfig(d[0], false, "http://127.0.0.1:9", "ws://127.0.0.1:9/ws", 5000, List.of(d[1]), 20, 100,
+          com.hft.control.BotController.defaultsFor(d[0]));   // рынок по умолчанию биржи (Hyperliquid — perp)
       ExchangeGateway g = ExchangeFactory.create(d[0], cfg, app);
       g.start();
       ck(d[0]+" starts paper", g.id().equals(d[0]) && g.balances().total(d[1].endsWith("USDC")?"USDC":"USDT")==1000 && g instanceof RequestStatsSource r && !r.isLive());

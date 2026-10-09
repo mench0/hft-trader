@@ -16,7 +16,7 @@ public enum Exchange {
     OKX        ("okx",         Market.SPOT, Market.PERP),
     MEXC       ("mexc",        Market.SPOT, Market.PERP),
     GATE       ("gate",        Market.SPOT, Market.PERP),
-    HYPERLIQUID("hyperliquid", Market.PERP),
+    HYPERLIQUID("hyperliquid", Market.PERP, Market.SPOT),
     KUCOIN     ("kucoin",      Market.SPOT, Market.PERP),
     ASTER      ("aster",       Market.SPOT, Market.PERP),
     UNISWAPV2  ("uniswapv2",   Market.SPOT);                // AMM-пулы обмена: фьючерсов не бывает

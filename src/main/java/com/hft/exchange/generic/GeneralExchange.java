@@ -105,8 +105,7 @@ public final class GeneralExchange implements ExchangeGateway, RequestStatsSourc
 
         boolean live = ExchangeSupport.isLive(info, config, credentials);
         this.rest = live ? clientFactory.create(config, credentials, filters) : null;
-        // Hyperliquid в боте — только перпы, даже если в старом конфиге market не задан
-        boolean isPerp = config.params().isPerp() || !ExchangeCatalog.supportsSpot(info.id());
+        boolean isPerp = config.params().isPerp();
         PositionStore positions = new PositionStore();
         var fees = ExchangeSupport.fees(info, config);
         this.paper = live ? null : new PaperOrderApi(market, balances, fees[0], fees[1]);

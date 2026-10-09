@@ -26,7 +26,8 @@ public class WsTradeCheck {
   static boolean near(double a,double b){ return Math.abs(a-b)<1e-9*Math.max(1,Math.abs(b)); }
   static ObjectMapper m = new ObjectMapper();
   static JsonNode j(String s){ try { return m.readTree(s); } catch(Exception e){ throw new RuntimeException(e); } }
-  static ExchangeConfig cfg(String id, String url, String sym){ return new ExchangeConfig(id, false,url,"",5000,List.of(sym),20,100); }
+  static ExchangeConfig cfg(String id, String url, String sym){ return new ExchangeConfig(id, false,url,"",5000,List.of(sym),20,100,
+      id.equals("hyperliquid") ? TradingParams.DEFAULTS.with(Map.of("market","perp")) : TradingParams.DEFAULTS); }   // Hyperliquid — перп, остальные — спот
   static SymbolFilters filt(String sym){ var f=new SymbolFilters(); f.put(sym, new SymbolFilters.Filter(0.0001,1e9,0.0001,0,1e9,0.01,1)); return f; }
   static Credentials cr = new Credentials("KEY","SECRET");
 
