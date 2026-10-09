@@ -16,7 +16,6 @@ import com.hft.rest.WsRpcChannel;
 import com.hft.rest.WsRpcChannel.Msg;
 import com.hft.store.BalanceStore;
 import com.hft.store.SymbolFilters;
-import com.hft.util.MsgPack;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -116,7 +115,7 @@ public final class HyperliquidRestClient extends SignedClient {
 
     /** Хеш действия: keccak(msgpack(action) ‖ nonce ‖ vault-флаг) — connectionId «фантомного агента». */
     byte[] connectionId(Map<String, Object> action, long nonceValue) {
-        byte[] packed = MsgPack.pack(action);
+        byte[] packed = HyperliquidMsgPack.pack(action);
         ByteBuffer buf = ByteBuffer.allocate(packed.length + 8 + 1);
         buf.put(packed).putLong(nonceValue).put((byte) 0);
         return crypto.keccak256(buf.array());

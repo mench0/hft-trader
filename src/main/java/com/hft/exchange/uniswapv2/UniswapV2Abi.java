@@ -9,10 +9,10 @@ import java.util.List;
  * Селектор (первые 4 байта keccak имени функции) передаётся готовым hex — проверен в тестах
  * независимым keccak.
  */
-final class Abi {
+final class UniswapV2Abi {
 
     /** Утилитный класс — экземпляры не создаются. */
-    private Abi() {}
+    private UniswapV2Abi() {}
 
     /** Данные вызова контракта: селектор + аргументы по ABI (uint, address, bool, массив адресов). */
     static String call(String selectorHex, Object... args) {
@@ -25,7 +25,7 @@ final class Abi {
                 head.append(word(BigInteger.valueOf(headSize + tail.length() / 2)));
                 tail.append(word(BigInteger.valueOf(list.size())));
                 for (Object x : list) tail.append(addressWord((String) x));
-            } else throw new IllegalArgumentException("Abi: неподдерживаемый тип " + a.getClass());
+            } else throw new IllegalArgumentException("UniswapV2Abi: неподдерживаемый тип " + a.getClass());
         }
         return "0x" + selectorHex + head + tail;
     }

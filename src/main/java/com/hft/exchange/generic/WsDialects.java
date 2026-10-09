@@ -38,7 +38,7 @@ public final class WsDialects {
             switch (Exchange.find(id).orElse(null)) {
                 case BINANCE: return Optional.of(binanceFutures());
                 case OKX: return Optional.of(new Okx(true, cfg.restUrl()));
-                case ASTER: return Optional.of(new Aster("Aster futures", "wss://fstream.asterdex.com/stream", "wss://fstream.asterdex-testnet.com/stream"));
+                case ASTER: return Optional.of(new BinanceLike("Aster futures", "wss://fstream.asterdex.com/stream", "wss://fstream.asterdex-testnet.com/stream"));
                 case GATE: return Optional.of(new GateFutures(cfg.restUrl()));
                 case KUCOIN: return Optional.of(new Kucoin(true));
                 case MEXC: return Optional.of(new MexcFutures(cfg.restUrl()));
@@ -51,12 +51,12 @@ public final class WsDialects {
 
     /** Binance USDⓈ-M: формат Aster/Binance (b/a), адрес fstream. */
     public static WsDialect binanceFutures() {
-        return new Aster("Binance futures", "wss://fstream.binance.com/stream", "wss://fstream.binancefuture.com/stream");
+        return new BinanceLike("Binance futures", "wss://fstream.binance.com/stream", "wss://fstream.binancefuture.com/stream");
     }
 
     /** Binance спот: комбинированные потоки /stream, частичный стакан depthN@100ms (формат Aster/Binance). */
     public static WsDialect binanceSpot() {
-        return new Aster("Binance", "wss://stream.binance.com:9443/stream", "wss://stream.testnet.binance.vision/stream");
+        return new BinanceLike("Binance", "wss://stream.binance.com:9443/stream", "wss://stream.testnet.binance.vision/stream");
     }
 
     /** WS-диалект биржи без её параметров (для Uniswap пулы пусты); пусто — у биржи нет WS-стакана. */
@@ -69,7 +69,7 @@ public final class WsDialects {
             case HYPERLIQUID -> Optional.of(new Hyperliquid());
             case UNISWAPV2 -> Optional.of(new Uniswap(""));
             case KUCOIN -> Optional.of(new Kucoin(false));
-            case ASTER -> Optional.of(new Aster());
+            case ASTER -> Optional.of(new BinanceLike());
             case MEXC -> Optional.of(new MexcWsDialect());
             case null, default -> Optional.empty();
         };
@@ -724,14 +724,14 @@ public final class WsDialects {
      * "params":["btcusdt@depth20@100ms"],"id":N}. Сообщение {"stream":"btcusdt@depth20@100ms","data":{
      * lastUpdateId, bids, asks}} (у фьючерсного формата — b/a и E). Каждое сообщение — снимок.
      */
-    static final class Aster implements WsDialect {
+    static final class BinanceLike implements WsDialect {
         /** Номера сообщений подписки. */
         private final java.util.concurrent.atomic.AtomicLong ids = new java.util.concurrent.atomic.AtomicLong();
         /** Имя для ошибок и адреса основной и тестовой сети. */
         private final String name, mainUrl, testUrl;
 
-        Aster() { this("Aster", "wss://sstream.asterdex.com/stream", "wss://sstream.asterdex-testnet.com/stream"); }
-        Aster(String name, String mainUrl, String testUrl) { this.name = name; this.mainUrl = mainUrl; this.testUrl = testUrl; }
+        BinanceLike() { this("Aster", "wss://sstream.asterdex.com/stream", "wss://sstream.asterdex-testnet.com/stream"); }
+        BinanceLike(String name, String mainUrl, String testUrl) { this.name = name; this.mainUrl = mainUrl; this.testUrl = testUrl; }
 
         /** Адрес по умолчанию (основная или тестовая сеть). */
         public String defaultUrl(boolean testnet) { return testnet ? testUrl : mainUrl; }

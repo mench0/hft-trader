@@ -1,5 +1,5 @@
 import com.hft.config.*; import com.hft.exchange.hyperliquid.*; import com.hft.model.OrderResult; import com.hft.model.OrderEnums.*;
-import com.hft.rest.*; import com.hft.store.*; import com.hft.util.MsgPack; import com.sun.net.httpserver.*;
+import com.hft.rest.*; import com.hft.store.*; import com.hft.exchange.hyperliquid.HyperliquidMsgPack; import com.sun.net.httpserver.*;
 import java.io.*; import java.net.InetSocketAddress; import java.nio.ByteBuffer; import java.nio.charset.StandardCharsets; import java.util.*;
 import com.fasterxml.jackson.databind.*;
 
@@ -14,10 +14,10 @@ public class HyperliquidClientCheck {
     ck("keccak empty", K.hex(K.keccak256(new byte[0])).equals("c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"));
     ck("keccak abc", K.hex(K.keccak256("abc".getBytes())).equals("4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45"));
     ck("keccak long", K.hex(K.keccak256(new byte[200])).length()==64);
-    ck("mp map", Arrays.equals(MsgPack.pack(new LinkedHashMap<>(Map.of("a",1))), b(0x81,0xa1,0x61,0x01)));
-    ck("mp list", Arrays.equals(MsgPack.pack(Arrays.asList(true,null,false)), b(0x93,0xc3,0xc0,0xc2)));
-    ck("mp ints", Arrays.equals(MsgPack.pack(Arrays.asList(127,128,256,70000,-1,-33)), cat(b(0x96,0x7f,0xcc,0x80,0xcd,1,0,0xce,0,1,0x11,0x70,0xff,0xd0,0xdf))));
-    ck("mp str32", MsgPack.pack("x".repeat(32))[0]==(byte)0xd9);
+    ck("mp map", Arrays.equals(HyperliquidMsgPack.pack(new LinkedHashMap<>(Map.of("a",1))), b(0x81,0xa1,0x61,0x01)));
+    ck("mp list", Arrays.equals(HyperliquidMsgPack.pack(Arrays.asList(true,null,false)), b(0x93,0xc3,0xc0,0xc2)));
+    ck("mp ints", Arrays.equals(HyperliquidMsgPack.pack(Arrays.asList(127,128,256,70000,-1,-33)), cat(b(0x96,0x7f,0xcc,0x80,0xcd,1,0,0xce,0,1,0x11,0x70,0xff,0xd0,0xdf))));
+    ck("mp str32", HyperliquidMsgPack.pack("x".repeat(32))[0]==(byte)0xd9);
     // --- формат цены
     ck("px 5sig", HyperliquidRestClient.formatPrice(1234.5678, 3).equals("1234.6"));
     ck("px small", HyperliquidRestClient.formatPrice(0.000012345678, 0).equals("0.000012"));
@@ -61,7 +61,7 @@ public class HyperliquidClientCheck {
     // независимая сборка msgpack и проверка пути подписи
     byte[] expectedPack = cat(b(0x83), s("type"), s("order"), s("orders"), b(0x91), b(0x86), s("a"), b(0x00), s("b"), b(0xc3), s("p"), s("52500"),
         s("s"), s("0.001"), s("r"), b(0xc2), s("t"), b(0x81), s("limit"), b(0x81), s("tif"), s("Ioc"), s("grouping"), s("na"));
-    ck("msgpack action", Arrays.equals(MsgPack.pack(new ObjectMapper().readValue(m.writeValueAsString(j.path("action")), LinkedHashMap.class)), expectedPack));
+    ck("msgpack action", Arrays.equals(HyperliquidMsgPack.pack(new ObjectMapper().readValue(m.writeValueAsString(j.path("action")), LinkedHashMap.class)), expectedPack));
     long nonce = j.path("nonce").asLong();
     byte[] connId = K.keccak256(cat(expectedPack, ByteBuffer.allocate(8).putLong(nonce).array(), b(0)));
     byte[] dom = K.keccak256(cat(K.keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)".getBytes()),

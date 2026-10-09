@@ -205,17 +205,17 @@ public final class UniswapV2Client extends SignedClient {
 
     /** Баланс токена кошелька в минимальных единицах. */
     BigInteger balanceOf(Token t) throws Exception {
-        return big(ethCall(t.address, Abi.call("70a08231", crypto.address())));
+        return big(ethCall(t.address, UniswapV2Abi.call("70a08231", crypto.address())));
     }
 
     /** Сколько получим за in (getAmountsOut роутера). */
     private BigInteger amountOut(BigInteger in, Token from, Token to) throws Exception {
-        return lastWord(ethCall(router, Abi.call("d06ca61f", in, List.of(from.address, to.address))));
+        return lastWord(ethCall(router, UniswapV2Abi.call("d06ca61f", in, List.of(from.address, to.address))));
     }
 
     /** Сколько нужно отдать за out (getAmountsIn роутера). */
     private BigInteger amountIn(BigInteger out, Token from, Token to) throws Exception {
-        return firstWord(ethCall(router, Abi.call("1f00ca74", out, List.of(from.address, to.address))));
+        return firstWord(ethCall(router, UniswapV2Abi.call("1f00ca74", out, List.of(from.address, to.address))));
     }
 
     /** Возврат uint[]: [offset, length, e0, e1, …] — берём последний элемент. */
@@ -293,8 +293,8 @@ public final class UniswapV2Client extends SignedClient {
         ensureAllowance(from, spend);
         long deadline = System.currentTimeMillis() / 1000 + 120;
         String data = exactIn
-                ? Abi.call("38ed1739", amountA, amountB, List.of(from.address, to.address), crypto.address(), BigInteger.valueOf(deadline))
-                : Abi.call("8803dbee", amountA, amountB, List.of(from.address, to.address), crypto.address(), BigInteger.valueOf(deadline));
+                ? UniswapV2Abi.call("38ed1739", amountA, amountB, List.of(from.address, to.address), crypto.address(), BigInteger.valueOf(deadline))
+                : UniswapV2Abi.call("8803dbee", amountA, amountB, List.of(from.address, to.address), crypto.address(), BigInteger.valueOf(deadline));
         String txHash = sendTx(router, data);
         waitReceipt(txHash);
 
@@ -316,10 +316,10 @@ public final class UniswapV2Client extends SignedClient {
 
     /** Разрешить роутеру тратить токен (approve), если разрешения не хватает. */
     private void ensureAllowance(Token t, BigInteger need) throws Exception {
-        BigInteger have = big(ethCall(t.address, Abi.call("dd62ed3e", crypto.address(), router)));
+        BigInteger have = big(ethCall(t.address, UniswapV2Abi.call("dd62ed3e", crypto.address(), router)));
         if (have.compareTo(need) >= 0) return;
         log.info("[uniswapv2] approve {} на сумму {}", t.address, need);
-        waitReceipt(sendTx(t.address, Abi.call("095ea7b3", router, need)));   // ровно нужная сумма, не безлимит
+        waitReceipt(sendTx(t.address, UniswapV2Abi.call("095ea7b3", router, need)));   // ровно нужная сумма, не безлимит
     }
 
     /** Подписать и отправить транзакцию; возвращает хеш. */
