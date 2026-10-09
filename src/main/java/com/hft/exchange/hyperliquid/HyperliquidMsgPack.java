@@ -1,4 +1,4 @@
-package com.hft.util;
+package com.hft.exchange.hyperliquid;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -10,10 +10,10 @@ import java.util.Map;
  * для подписи действий Hyperliquid. Порядок ключей map сохраняется как в переданном LinkedHashMap,
  * это критично: хеш считается от байтов. Целые кодируются самым коротким форматом.
  */
-public final class MsgPack {
+public final class HyperliquidMsgPack {
 
     /** Утилитный класс — экземпляры не создаются. */
-    private MsgPack() {}
+    private HyperliquidMsgPack() {}
 
     /** Упаковать значение (Map, List, String, число, boolean, null) в MessagePack — формат действий Hyperliquid. */
     public static byte[] pack(Object value) {
@@ -38,7 +38,7 @@ public final class MsgPack {
             for (Object x : l) write(o, x);
             return;
         }
-        throw new IllegalArgumentException("MsgPack: неподдерживаемый тип " + v.getClass());
+        throw new IllegalArgumentException("HyperliquidMsgPack: неподдерживаемый тип " + v.getClass());
     }
 
     /** fix-формат (до 15 элементов), иначе 16- или 32-битная длина. */

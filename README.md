@@ -868,6 +868,10 @@ KuCoin в режиме UTA торгует через `uta.order` / `uta.cancel` 
 
 ## История изменений
 
+- **2026-10:** классы, сделанные для одной биржи, названы по ней: `HyperliquidMsgPack` (бывший `util/MsgPack`, теперь
+  в `exchange/hyperliquid`), `MexcProtobuf` (бывший `util/Protobuf`, в `exchange/mexc`), `UniswapV2Abi`. Форматы, общие
+  для Binance и Aster, называются `BinanceLike` (диалекты стакана и источник funding).
+
 - **2026-10:** все WebSocket-соединения — на Netty (`net/WsClient`): стакан всех бирж (`WsBookFeed`), ордера и приватные
   потоки (`WsRpcChannel`, `UserStream`). Общая группа потоков, нативный epoll в Linux (иначе NIO), TCP_NODELAY, текст —
   в переиспользуемый `char[]` без строки на сообщение, склейка фрагментов, предел сообщения 8 МБ (больше — разрыв),

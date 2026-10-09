@@ -14,7 +14,6 @@ import com.hft.rest.WsRpcChannel;
 import com.hft.store.BalanceStore;
 import com.hft.store.SymbolFilters;
 import com.hft.util.Hmac;
-import com.hft.util.Protobuf;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -33,7 +32,7 @@ import java.util.Map;
  *
  * Ордера — только REST (WS-ордеров у MEXC нет). Исполнения и баланс в LIVE приходят по приватному
  * потоку (listenKey, каналы spot@private.orders.v3.api.pb и spot@private.account.v3.api.pb, protobuf),
- * см. {@link UserStream} и {@link Protobuf}.
+ * см. {@link UserStream} и {@link MexcProtobuf}.
  */
 public final class MexcRestClient extends SignedClient {
 
@@ -271,9 +270,9 @@ public final class MexcRestClient extends SignedClient {
     private void onUserEvent(String text) {
         if (!text.startsWith(PB)) return;
         byte[] b = java.util.Base64.getDecoder().decode(text.substring(PB.length()));
-        Protobuf.Reader w = new Protobuf.Reader(b, 0, b.length);
+        MexcProtobuf.Reader w = new MexcProtobuf.Reader(b, 0, b.length);
         String symbol = "";
-        Protobuf.Reader order = null, account = null;
+        MexcProtobuf.Reader order = null, account = null;
         while (w.next()) {
             switch (w.field()) {
                 case 3 -> symbol = w.string();
@@ -287,7 +286,7 @@ public final class MexcRestClient extends SignedClient {
     }
 
     /** Состояние ордера из privateOrders. */
-    private void onOrder(Protobuf.Reader r, String symbol) {
+    private void onOrder(MexcProtobuf.Reader r, String symbol) {
         String id = "", clientId = "";
         double qty = 0, avg = 0, cumQty = 0, cumAmount = 0;
         long side = 1, status = 0;
@@ -318,7 +317,7 @@ public final class MexcRestClient extends SignedClient {
     }
 
     /** Баланс актива из privateAccount. */
-    private void onAccount(Protobuf.Reader r) {
+    private void onAccount(MexcProtobuf.Reader r) {
         String asset = "";
         double free = 0, locked = 0;
         while (r.next()) {

@@ -50,8 +50,8 @@ public abstract class FundingSource {
     /** Источник ставок биржи; null — у биржи нет фьючерсов. */
     public static FundingSource forExchange(String id, String baseUrl) {
         return switch (Exchange.find(id).orElse(null)) {
-            case BINANCE -> new Binance(Exchange.BINANCE, baseUrl);
-            case ASTER -> new Binance(Exchange.ASTER, baseUrl);            // формат Binance USDⓈ-M
+            case BINANCE -> new BinanceLike(Exchange.BINANCE, baseUrl);
+            case ASTER -> new BinanceLike(Exchange.ASTER, baseUrl);            // формат Binance USDⓈ-M
             case GATE -> new Gate(baseUrl);
             case KUCOIN -> new Kucoin(baseUrl);
             case MEXC -> new Mexc(baseUrl);
@@ -98,12 +98,12 @@ public abstract class FundingSource {
     // ------------------------------------------------------------------ биржи
 
     /** Binance USDⓈ-M: GET /fapi/v1/premiumIndex (все символы) + /fapi/v1/fundingInfo (нестандартные периоды). */
-    static final class Binance extends FundingSource {
+    static final class BinanceLike extends FundingSource {
         /** Символы с периодом не 8 ч; читается раз в час. */
         private volatile Map<String, Double> intervals = Map.of();
         /** Когда читались периоды. */
         private long intervalsAt;
-        Binance(Exchange ex, String baseUrl) { super(ex.id(), baseUrl); }
+        BinanceLike(Exchange ex, String baseUrl) { super(ex.id(), baseUrl); }
 
         @Override public Map<String, Funding> fetch(Collection<String> symbols) throws Exception {
             long now = System.currentTimeMillis();

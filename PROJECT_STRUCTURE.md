@@ -53,7 +53,7 @@ hft-trader/
 │   │                                 # WsSettings — параметры соединения по биржам (предел сообщения, таймауты, жизнь соединения)
 │   ├── crypto/                       # Keccak, Hex, EvmCrypto/Web3jCrypto (Hyperliquid, Uniswap)
 │   ├── model/                        # Tick, OrderRequest, OrderResult, OrderEnums
-│   └── util/                         # Signer/Hmac, Numbers, BoundedMap, MsgPack
+│   └── util/                         # Signer/Hmac, Numbers, BoundedMap
 ├── src/main/resources/
 │   └── logback.xml
 ├── src/test/java/                    # проверки-раннеры с main(): *Check.java (без JUnit)

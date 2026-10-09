@@ -36,9 +36,9 @@ public final class Dialects {
     /** Диалект биржи с её параметрами (для Uniswap — пулы из uniPools). */
     public static BookDialect forExchange(String id, com.hft.config.ExchangeConfig cfg) {
         if (cfg.params().isPerp()) {
-            if (Exchange.BINANCE.is(id)) return new Aster("/fapi/v1/depth");
+            if (Exchange.BINANCE.is(id)) return new BinanceLike("/fapi/v1/depth");
             if (Exchange.OKX.is(id)) return new Okx(true, cfg.restUrl());
-            if (Exchange.ASTER.is(id)) return new Aster("/fapi/v1/depth");
+            if (Exchange.ASTER.is(id)) return new BinanceLike("/fapi/v1/depth");
             if (Exchange.GATE.is(id)) return new GateFutures(cfg.restUrl());
             if (Exchange.KUCOIN.is(id)) return new KucoinFutures(cfg.restUrl());
             if (Exchange.MEXC.is(id)) return new MexcFutures(cfg.restUrl());
@@ -50,7 +50,7 @@ public final class Dialects {
     /** Диалект REST-стакана биржи (без параметров: для Uniswap пулы пусты). */
     public static BookDialect forExchange(String id) {
         return switch (Exchange.find(id).orElse(null)) {
-            case BINANCE -> new Aster("/api/v3/depth");          // спот Binance: тот же формат, что у Aster
+            case BINANCE -> new BinanceLike("/api/v3/depth");          // спот Binance: тот же формат, что у Aster
             case BYBIT -> new Bybit(false);
             case OKX -> new Okx(false, "");
             case MEXC -> new Mexc();
@@ -58,7 +58,7 @@ public final class Dialects {
             case HYPERLIQUID -> new Hyperliquid();
             case UNISWAPV2 -> new UniswapV2("");
             case KUCOIN -> new Kucoin();
-            case ASTER -> new Aster("/api/v3/depth");
+            case ASTER -> new BinanceLike("/api/v3/depth");
             case null, default -> throw new IllegalArgumentException("Нет диалекта для биржи: " + id);
         };
     }
@@ -225,10 +225,10 @@ public final class Dialects {
     }
 
     /** Aster спот: GET /api/v3/depth?symbol=BTCUSDT&limit=20 -> {lastUpdateId,E?,bids,asks} (формат Binance) */
-    static final class Aster implements BookDialect {
+    static final class BinanceLike implements BookDialect {
         /** Путь стакана: /api/v3/depth (Aster) или /fapi/v1/depth (Binance USDⓈ-M). */
         private final String path;
-        Aster(String path) { this.path = path; }
+        BinanceLike(String path) { this.path = path; }
         /** Запрос стакана символа. */
         public HttpRequest request(String b, String s, int d) {
             int limit = d <= 5 ? 5 : d <= 10 ? 10 : d <= 20 ? 20 : d <= 50 ? 50 : 100;

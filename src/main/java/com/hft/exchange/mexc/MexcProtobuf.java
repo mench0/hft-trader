@@ -1,4 +1,4 @@
-package com.hft.util;
+package com.hft.exchange.mexc;
 
 import java.nio.charset.StandardCharsets;
 
@@ -8,13 +8,13 @@ import java.nio.charset.StandardCharsets;
  * и простота важнее скорости (горячий путь стакана разбирается в MexcWsDialect без аллокаций).
  *
  * <pre>
- * Protobuf.Reader r = new Protobuf.Reader(bytes, 0, bytes.length);
+ * MexcProtobuf.Reader r = new MexcProtobuf.Reader(bytes, 0, bytes.length);
  * while (r.next()) switch (r.field()) { case 3 -> sym = r.string(); case 304 -> body = r.message(); default -> r.skip(); }
  * </pre>
  */
-public final class Protobuf {
+public final class MexcProtobuf {
 
-    private Protobuf() {}
+    private MexcProtobuf() {}
 
     /** Последовательный читатель полей одного сообщения. */
     public static final class Reader {
