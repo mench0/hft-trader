@@ -193,6 +193,24 @@ public class WsFeedCheck {
       ck("hybrid not given up", !h.hasGivenUp());
       h.stop();
     }
+    // WS сдался (сервер долго недоступен) — остаёмся на REST, а через wsRetry WS запускается заново
+    try (var srv = new MiniWsServer()) {
+      srv.accepting = false;
+      srv.onText = (c, t) -> { if (t.contains("\"subscribe\"")) c.text("{\"arg\":{\"channel\":\"books\",\"instId\":\"BTC-USDT\"},\"action\":\"snapshot\",\"data\":[{\"asks\":[[\"101\",\"1\"]],\"bids\":[[\"99\",\"1\"]],\"ts\":\"3\"}]}"); };
+      var info = ExchangeCatalog.find("okx").get();
+      var cfg = new ExchangeConfig("okx", false, rest, srv.url(), 5000, List.of("BTCUSDT"), 20, 100);
+      var m = new MarketDataStore(20, 100); m.register("BTCUSDT");
+      var h = new HybridBookFeed(info, cfg, WsDialects.forExchange("okx").get(), Dialects.forExchange("okx"), m, (sy,px,q,bm,ts,rn) -> {}, s -> {}, () -> {})
+          .grace(200).wsRetry(1500);
+      h.ws().tune(5000, 50).limits(2, 5, 5);
+      h.start();
+      var b = m.book("BTCUSDT");
+      ck("ws gave up -> REST", await(() -> h.ws().hasGivenUp() && near(b.bestBid(), 199), 15000));
+      srv.accepting = true;
+      ck("ws retried after give-up and back", await(() -> near(b.bestBid(), 99) && h.isRealtime(), 15000));
+      ck("feed itself not given up", !h.hasGivenUp());
+      h.stop();
+    }
     http.stop(0);
 
     // ───── каталог/диалекты

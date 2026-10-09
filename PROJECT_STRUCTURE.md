@@ -21,16 +21,16 @@ hft-trader/
 │   │   ├── ExchangeGateway.java      # общий контракт биржи
 │   │   ├── ExchangeFactory.java      # id биржи -> реализация
 │   │   ├── catalog/                  # ExchangeCatalog/ExchangeInfo: список бирж, комиссии, лимиты, статус адаптера
-│   │   ├── binance/, bybit/          # нативные адаптеры (свой WS-фид на Netty + REST);
+│   │   ├── binance/, bybit/          # REST-клиенты и свои WS-фиды на Netty (класс биржи — общий SignedCexExchange);
 │   │   │                             # BinanceFuturesClient — USDⓈ-M (fapi, ws-fapi, listenKey);
 │   │   │                             # фьючерсы остальных: GateFuturesClient, KucoinFuturesClient, MexcFuturesClient,
 │   │   │                             # Aster — тот же AsterRestClient с /fapi/v3
 │   │   ├── okx/, gate/, mexc/, kucoin/, aster/, hyperliquid/, uniswapv2/
 │   │   │                             # REST-клиенты на общем скелете SignedCexClient
-│   │   └── generic/                  # SignedCexExchange, ContractSizes (размер контракта перпов), фиды стакана:
+│   │   └── generic/                  # SignedCexExchange (класс биржи для всех), NettyBookFeed, ContractSizes (размер контракта перпов), фиды стакана:
 │   │                                 # WsBookFeed, PollingBookFeed, HybridBookFeed; диалекты
 │   │                                 # Dialects (REST) и WsDialects (WS), LocalBook, FastJson
-│   ├── rest/                         # SignedCexClient, BinanceRestClient, RateBudget/RateLimits/PacedLimiter,
+│   ├── rest/                         # TradingClient (общий контракт клиента), SignedCexClient, BinanceRestClient, RateBudget/RateLimits/PacedLimiter,
 │   │                                 # WsRpcChannel (ордера по WS), WsSender, ExchangeOrderApi
 │   ├── engine/                       # ядро исполнения: TickPipeline (Disruptor), MarketDataHandler, OrderService
 │   ├── strategy/                     # все стратегии — спот и перпы вместе:
@@ -66,7 +66,7 @@ hft-trader/
 
 | Биржа | Рынки | Реализация | Режим по умолчанию |
 |---|---|---|---|
-| Binance, Bybit | spot, perp | BinanceExchange, BybitExchange; перпы Binance — SignedCexExchange + BinanceFuturesClient | LIVE при ключах и `live=true` |
+| Binance, Bybit | spot, perp | SignedCexExchange + BinanceRestClient / BybitRestClient и Netty-фид; перпы Binance — BinanceFuturesClient | LIVE при ключах и `live=true` |
 | OKX, Gate, MEXC, KuCoin, Aster | spot, perp | SignedCexExchange + свой RestClient (фьючерсы — Gate/Kucoin/MexcFuturesClient, OKX SWAP, Aster `/fapi/v3`) | PAPER, LIVE не проверен |
 | Hyperliquid | perp | SignedCexExchange + HyperliquidRestClient | PAPER, LIVE не проверен |
 | Uniswap V2 | spot | SignedCexExchange + UniswapV2Client | PAPER, LIVE не проверен |

@@ -15,7 +15,8 @@ import com.hft.perp.PerpAccount;
 import com.hft.store.PositionStore;
 import com.hft.risk.RiskManager;
 import com.hft.rest.ExchangeOrderApi;
-import com.hft.rest.SignedCexClient;
+import com.hft.rest.TradingClient;
+import com.hft.net.AbstractWsFeed;
 import com.hft.store.BalanceStore;
 import com.hft.store.MarketDataStore;
 import com.hft.store.SymbolFilters;
@@ -27,9 +28,9 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Биржа на клиенте {@link SignedCexClient} (OKX, Gate, MEXC, KuCoin, Aster, Hyperliquid, Uniswap V2):
+ * Биржа целиком — класс для всех бирж (Binance, Bybit, OKX, Gate, MEXC, KuCoin, Aster, Hyperliquid, Uniswap V2):
  * свои хранилища, клиент, риск-менеджер, сервис ордеров, конвейер тиков и фид.
- * Биржи отличаются только клиентом — он передаётся фабрикой.
+ * Биржи отличаются клиентом ({@link TradingClient}) и, у Binance и Bybit, своим Netty-фидом — их передаёт фабрика.
  * LIVE включается только при ID_API_KEY/_SECRET и ID_LIVE=true, иначе — бумажный движок на живых данных.
  */
 public final class SignedCexExchange implements ExchangeGateway, RequestStatsSource {
@@ -54,10 +55,17 @@ public final class SignedCexExchange implements ExchangeGateway, RequestStatsSou
     @FunctionalInterface
     public interface ClientFactory {
         /** Клиент биржи для режима LIVE. */
-        SignedCexClient create(ExchangeConfig config, Credentials credentials, SymbolFilters filters);
+        TradingClient create(ExchangeConfig config, Credentials credentials, SymbolFilters filters);
     }
 
-    private final SignedCexClient rest;               // null в режиме PAPER
+    /** Создаёт свой Netty-фид биржи (Binance, Bybit) вместо общего WS+REST. */
+    @FunctionalInterface
+    public interface FeedFactory {
+        /** Фид, публикующий тики в конвейер. */
+        AbstractWsFeed create(ExchangeConfig config, MarketDataStore market, TickPipeline pipeline);
+    }
+
+    private final TradingClient rest;               // null в режиме PAPER
     private final PaperOrderApi paper;         // null в режиме LIVE
     /** Проверки риска перед ордером. */
     private final RiskManager risk;
@@ -85,6 +93,18 @@ public final class SignedCexExchange implements ExchangeGateway, RequestStatsSou
      * @param clientFactory создаёт REST-клиент для LIVE
      */
     public SignedCexExchange(String id, ExchangeConfig config, TradingSettings settings, ClientFactory clientFactory) {
+        this(id, config, settings, clientFactory, null);
+    }
+
+    /**
+     * @param id биржа из каталога
+     * @param config подключение и параметры
+     * @param settings параметры биржи
+     * @param clientFactory создаёт REST-клиент для LIVE
+     * @param feedFactory свой Netty-фид биржи; null — общий фид (WS по диалекту, REST — запасной)
+     */
+    public SignedCexExchange(String id, ExchangeConfig config, TradingSettings settings,
+                             ClientFactory clientFactory, FeedFactory feedFactory) {
         this.info = ExchangeCatalog.find(id).orElseThrow();
         this.config = config;
         this.credentials = Credentials.fromEnv(info.id());
@@ -114,7 +134,10 @@ public final class SignedCexExchange implements ExchangeGateway, RequestStatsSou
         this.dataHandler = new MarketDataHandler(market);
         this.strategy = new StrategySet(market, orderService, info.id(), settings);
         this.pipeline = new TickPipeline(dataHandler, strategy.handlers());
-        this.feed = ExchangeSupport.newFeed(info, config, market, pipeline, paper, this::onFeedGaveUp);
+        this.feed = feedFactory == null
+                ? ExchangeSupport.newFeed(info, config, market, pipeline, paper, this::onFeedGaveUp)
+                : nettyFeed(feedFactory.create(config, market, pipeline)
+                        .tune(config.params().wsStaleMs(), config.params().wsReconnectBaseMs()), paper);
         strategy.setRealtimeSource(feed::isRealtime);          // на REST-запасе новых входов нет
 
         if (!credentials.isPresent()) {
@@ -131,6 +154,7 @@ public final class SignedCexExchange implements ExchangeGateway, RequestStatsSou
     @Override
     public void start() throws Exception {
         if (rest != null) {
+            rest.syncTime();                        // Binance проверяет время подписи
             try {                                   // сначала сокеты: стартовые запросы пойдут по ним, REST — запасной
                 rest.startStreams(balances);
                 rest.awaitStreams(4000);
@@ -208,6 +232,19 @@ public final class SignedCexExchange implements ExchangeGateway, RequestStatsSou
         try { rest.loadBalances(balances); }
         catch (Exception e) { log.warn("[{}] Не удалось обновить балансы: {}", info.id(), e.getMessage()); }
         if (perp != null) perp.syncPositions();
+    }
+
+    /** Синхронизировать часы с биржей (вызывается планировщиком; в бумажном режиме — ничего). */
+    public void syncTime() {
+        if (rest == null) return;
+        try { rest.syncTime(); }
+        catch (Exception e) { log.warn("[{}] Не удалось синхронизировать часы: {}", info.id(), e.getMessage()); }
+    }
+
+    /** Свой фид биржи; в бумажном режиме каждое обновление стакана сводит заявки. */
+    private static BookFeed nettyFeed(AbstractWsFeed ws, PaperOrderApi paper) {
+        if (paper != null) ws.onBook(paper::settle);
+        return new NettyBookFeed(ws);
     }
 
     /** Фьючерсный счёт; null — спот. */

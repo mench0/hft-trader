@@ -16,7 +16,8 @@ import java.util.function.Consumer;
  * тратит лимит запросов; если WS оборвался и не вернулся за {@code graceMs} (2 с) или сдался — опрос включается
  * (переключение по событию от WS, без ожидания таймера); пока данные идут с опроса, {@link #isRealtime()} = false
  * и стратегия новых позиций не открывает,
- * при возвращении WS снова выключается. Торговля останавливается (onGiveUp) только когда
+ * при возвращении WS снова выключается. Сдавшийся WS запускается заново раз в {@code wsRetryMs} (60 с):
+ * короткий сбой биржи не оставляет бота на REST-опросе до перезапуска. Торговля останавливается (onGiveUp) только когда
  * сдался и запасной канал: пока хоть один даёт данные, стратегия работает.
  */
 public final class HybridBookFeed implements BookFeed {
@@ -36,6 +37,10 @@ public final class HybridBookFeed implements BookFeed {
     private volatile boolean running;
     /** С какого момента WS не работает (0 — работает). */
     private volatile long wsDownSince;
+    /** Как часто пробовать заново сдавшийся WS, мс. */
+    private volatile long wsRetryMs = 60_000;
+    /** Когда WS сдался (0 — не сдавался или уже перезапущен). */
+    private volatile long wsGaveUpAt;
     /** Поток, переключающий WS и опрос. */
     private Thread supervisor;
 
@@ -60,11 +65,14 @@ public final class HybridBookFeed implements BookFeed {
     /** Разбудить супервизор. */
     private void wake() { synchronized (signal) { signal.notifyAll(); } }
 
+    /** Как часто пробовать заново сдавшийся WS, мс (тесты). */
+    public HybridBookFeed wsRetry(long ms) { this.wsRetryMs = ms; return this; }
+
     /** Сколько ждать восстановления WS перед включением опроса, мс. */
     public HybridBookFeed grace(long ms) { this.graceMs = ms; return this; }
 
     /** WebSocket-половина (для настройки таймаутов). */
-    WsBookFeed ws() { return ws; }
+    public WsBookFeed ws() { return ws; }
 
     /** REST-половина (для настройки паузы после 429). */
     PollingBookFeed poll() { return poll; }
@@ -97,6 +105,15 @@ public final class HybridBookFeed implements BookFeed {
                 long now = System.currentTimeMillis();
                 if (ws.isConnected()) wsDownSince = 0;
                 else if (wsDownSince == 0) wsDownSince = now;
+                if (ws.hasGivenUp()) {
+                    if (wsGaveUpAt == 0) wsGaveUpAt = now;
+                    else if (now - wsGaveUpAt >= wsRetryMs) {      // пробуем WS заново, опрос пока работает
+                        log.info("[{}] WS: новая попытка после остановки", info.id());
+                        wsGaveUpAt = 0;
+                        ws.stop();
+                        ws.start();
+                    }
+                } else wsGaveUpAt = 0;
                 boolean needPoll = ws.hasGivenUp() || (wsDownSince != 0 && now - wsDownSince >= graceMs);
                 if (needPoll && !pollingOn) {
                     log.warn("[{}] WS недоступен — включаю REST-опрос", info.id());

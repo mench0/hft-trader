@@ -125,7 +125,10 @@ public final class BinanceMarketDataFeed extends AbstractWsFeed {
                 pipeline.publish(msgSymbol, tradePrice, tradeQty, buyerIsMaker, tradeTime, receivedNanos);
             } else if (hasBook) {
                 OrderBook book = store.book(msgSymbol);
-                if (book != null) book.applySnapshot(bidPrices, bidQtys, bn, askPrices, askQtys, an, updateId, System.currentTimeMillis());
+                if (book != null) {
+                    book.applySnapshot(bidPrices, bidQtys, bn, askPrices, askQtys, an, updateId, System.currentTimeMillis());
+                    onBook.accept(msgSymbol);
+                }
             }
             parseLatency.recordSince(receivedNanos);
         } catch (Exception e) {

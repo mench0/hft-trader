@@ -16,8 +16,11 @@ public class MiniWsServer implements Closeable {
   public final java.util.concurrent.atomic.AtomicInteger pongs = new java.util.concurrent.atomic.AtomicInteger();
   public volatile boolean accepting = true;
 
-  public MiniWsServer() throws IOException {
-    ss = new ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"));
+  public MiniWsServer() throws IOException { this(0); }
+
+  /** Сервер на заданном порту (0 — любой свободный). */
+  public MiniWsServer(int port) throws IOException {
+    ss = new ServerSocket(); ss.setReuseAddress(true); ss.bind(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), port), 50);
     Thread t = new Thread(() -> { while (!ss.isClosed()) { try { Socket s = ss.accept(); new Thread(() -> serve(s)).start(); } catch (IOException e) { return; } } });
     t.setDaemon(true); t.start();
   }
