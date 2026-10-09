@@ -48,10 +48,10 @@ import java.util.function.Supplier;
  * Риски: разница ставок может смениться раньше, чем окупятся 4 комиссии тейкера; при сильном движении
  * цены нога с плечом может быть ликвидирована раньше, чем вы вмешаетесь, — держите плечо низким.
  */
-public final class FundingArbitrage {
+public final class FundingArbitrageStrategy {
 
     /** Логгер. */
-    private static final Logger log = LoggerFactory.getLogger(FundingArbitrage.class);
+    private static final Logger log = LoggerFactory.getLogger(FundingArbitrageStrategy.class);
 
     /** Нога биржи: шлюз и символ на нём. */
     record Venue(ExchangeGateway gw, String symbol) {
@@ -97,7 +97,7 @@ public final class FundingArbitrage {
      * @param tradingEnabled включена ли торговля на бирже (по id)
      * @param takerFeePercent комиссия тейкера биржи, % (по id)
      */
-    public FundingArbitrage(Supplier<GlobalParams> params, Supplier<Collection<ExchangeGateway>> gateways,
+    public FundingArbitrageStrategy(Supplier<GlobalParams> params, Supplier<Collection<ExchangeGateway>> gateways,
                             java.util.function.Predicate<String> tradingEnabled,
                             java.util.function.ToDoubleFunction<String> takerFeePercent) {
         this.params = params;

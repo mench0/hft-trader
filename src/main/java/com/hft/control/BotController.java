@@ -366,20 +366,20 @@ public final class BotController {
     public Map<String, ExchangeGateway> active() { return Map.copyOf(active); }
 
     /** Funding-арбитраж между биржами (работает, пока запущен бот). */
-    private volatile com.hft.strategy.FundingArbitrage fundingArb;
+    private volatile com.hft.strategy.FundingArbitrageStrategy fundingArb;
 
     /** Funding-арбитраж; null — бот не запущен. */
-    public com.hft.strategy.FundingArbitrage fundingArb() { return fundingArb; }
+    public com.hft.strategy.FundingArbitrageStrategy fundingArb() { return fundingArb; }
 
     /** Ценовой арбитраж перпов и cash-and-carry (работают, пока запущен бот). */
-    private volatile com.hft.strategy.PerpPriceArbitrage perpArb;
-    private volatile com.hft.strategy.FundingCarry carry;
+    private volatile com.hft.strategy.PerpPriceArbitrageStrategy perpArb;
+    private volatile com.hft.strategy.FundingCarryStrategy carry;
 
     /** Ценовой арбитраж перпов; null — бот не запущен. */
-    public com.hft.strategy.PerpPriceArbitrage perpArb() { return perpArb; }
+    public com.hft.strategy.PerpPriceArbitrageStrategy perpArb() { return perpArb; }
 
     /** Cash-and-carry; null — бот не запущен. */
-    public com.hft.strategy.FundingCarry carry() { return carry; }
+    public com.hft.strategy.FundingCarryStrategy carry() { return carry; }
 
     /** Подключить все выбранные биржи с их текущими параметрами. */
     public synchronized void start() throws Exception {
@@ -408,11 +408,11 @@ public final class BotController {
         running.set(true);
         java.util.function.Predicate<String> trading = id -> { TradingSettings ts = settings.get(id); return ts != null && ts.get().tradingEnabled(); };
         java.util.function.ToDoubleFunction<String> fee = id -> { TradingSettings ts = settings.get(id); return ts != null ? ts.get().takerFeePercent() : 0.1; };
-        fundingArb = new com.hft.strategy.FundingArbitrage(() -> global, () -> List.copyOf(active.values()), trading, fee);
+        fundingArb = new com.hft.strategy.FundingArbitrageStrategy(() -> global, () -> List.copyOf(active.values()), trading, fee);
         fundingArb.start();
-        perpArb = new com.hft.strategy.PerpPriceArbitrage(() -> global, () -> List.copyOf(active.values()), trading, fee);
+        perpArb = new com.hft.strategy.PerpPriceArbitrageStrategy(() -> global, () -> List.copyOf(active.values()), trading, fee);
         perpArb.start();
-        carry = new com.hft.strategy.FundingCarry(() -> global, () -> List.copyOf(active.values()), trading, fee);
+        carry = new com.hft.strategy.FundingCarryStrategy(() -> global, () -> List.copyOf(active.values()), trading, fee);
         carry.start();
         log.info("Бот запущен. Активные биржи: {}", active.keySet());
     }
@@ -420,7 +420,7 @@ public final class BotController {
     /** Отключить все биржи; выбор и параметры сохраняются. */
     public synchronized void stop() {
         if (!running.get()) return;
-        com.hft.strategy.FundingArbitrage fa = fundingArb;
+        com.hft.strategy.FundingArbitrageStrategy fa = fundingArb;
         fundingArb = null;
         if (fa != null) fa.stop();                           // пары закрываются, пока биржи ещё подключены
         var pa = perpArb; perpArb = null;

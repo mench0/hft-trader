@@ -4,7 +4,7 @@ import com.hft.config.GlobalParams;
 import com.hft.exchange.ExchangeGateway;
 import com.hft.model.OrderEnums.Side;
 import com.hft.model.OrderResult;
-import com.hft.strategy.FundingArbitrage.Venue;
+import com.hft.strategy.FundingArbitrageStrategy.Venue;
 import com.hft.store.OrderBook;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -52,10 +52,10 @@ import java.util.function.ToDoubleFunction;
  * мелочь на фоне минут удержания. Монеты сопоставляются по базовой валюте (USDT- и USDC-перпы — одна монета).
  * Такие расхождения выбирают участники с меньшей задержкой: на ликвидных монетах сделок будет мало.
  */
-public final class PerpPriceArbitrage {
+public final class PerpPriceArbitrageStrategy {
 
     /** Логгер. */
-    private static final Logger log = LoggerFactory.getLogger(PerpPriceArbitrage.class);
+    private static final Logger log = LoggerFactory.getLogger(PerpPriceArbitrageStrategy.class);
 
     /** Открытая пара: шорт на дорогой бирже, лонг на дешёвой. */
     record Pair(String coin, Venue shortLeg, Venue longLeg, double qty, double shortEntry, double longEntry,
@@ -97,7 +97,7 @@ public final class PerpPriceArbitrage {
      * @param tradingEnabled включена ли торговля на бирже (по id)
      * @param takerFeePercent комиссия тейкера биржи, % (по id)
      */
-    public PerpPriceArbitrage(Supplier<GlobalParams> params, Supplier<Collection<ExchangeGateway>> gateways,
+    public PerpPriceArbitrageStrategy(Supplier<GlobalParams> params, Supplier<Collection<ExchangeGateway>> gateways,
                               Predicate<String> tradingEnabled, ToDoubleFunction<String> takerFeePercent) {
         this.params = params;
         this.gateways = gateways;
@@ -163,7 +163,7 @@ public final class PerpPriceArbitrage {
         for (ExchangeGateway gw : gateways.get()) {
             if (gw.perp() == null) continue;
             for (String s : gw.marketData().symbols()) {
-                String coin = FundingArbitrage.coin(s);
+                String coin = FundingArbitrageStrategy.coin(s);
                 if (!filter.isEmpty() && !filter.contains(s) && !filter.contains(coin)) continue;
                 OrderBook b = gw.marketData().book(s);
                 if (b == null || !b.isReady() || b.ageMs() > g.perpArbMaxBookAgeMs()) continue;   // старый стакан — не сравниваем
@@ -218,7 +218,7 @@ public final class PerpPriceArbitrage {
     /** Открыть пару: обе ноги параллельно; одна не исполнилась — вторая закрывается. */
     private void open(Opportunity o, GlobalParams g) {
         double qty = Math.min(g.perpArbOrderQuote() / o.mid(), o.maxQty());
-        qty = FundingArbitrage.commonQty(o.shortLeg(), o.longLeg(), qty);
+        qty = FundingArbitrageStrategy.commonQty(o.shortLeg(), o.longLeg(), qty);
         if (qty <= 0) return;
         final double q = qty;
         log.info("[perp-arb] {}: продаю {} / покупаю {}, спред {}%, ожидаемо {}% после комиссий, объём {}", o.coin(),

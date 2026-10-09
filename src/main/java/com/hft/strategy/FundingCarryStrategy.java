@@ -4,7 +4,7 @@ import com.hft.config.GlobalParams;
 import com.hft.exchange.ExchangeGateway;
 import com.hft.model.OrderEnums.Side;
 import com.hft.model.OrderResult;
-import com.hft.strategy.FundingArbitrage.Venue;
+import com.hft.strategy.FundingArbitrageStrategy.Venue;
 import com.hft.store.BalanceStore;
 import com.hft.store.FundingStore.Funding;
 import org.slf4j.Logger;
@@ -46,10 +46,10 @@ import java.util.function.ToDoubleFunction;
  *
  * Нужны деньги на обеих биржах: на споте — вся сумма покупки, на перпе — маржа шорта (сумма / плечо).
  */
-public final class FundingCarry {
+public final class FundingCarryStrategy {
 
     /** Логгер. */
-    private static final Logger log = LoggerFactory.getLogger(FundingCarry.class);
+    private static final Logger log = LoggerFactory.getLogger(FundingCarryStrategy.class);
 
     /** Открытая позиция: спот куплен, перп зашорчен. */
     record Carry(String coin, Venue spot, Venue perp, double spotQty, double perpQty, double spotEntry, double perpEntry,
@@ -83,7 +83,7 @@ public final class FundingCarry {
      * @param tradingEnabled включена ли торговля на бирже (по id)
      * @param takerFeePercent комиссия тейкера биржи, % (по id)
      */
-    public FundingCarry(Supplier<GlobalParams> params, Supplier<Collection<ExchangeGateway>> gateways,
+    public FundingCarryStrategy(Supplier<GlobalParams> params, Supplier<Collection<ExchangeGateway>> gateways,
                         Predicate<String> tradingEnabled, ToDoubleFunction<String> takerFeePercent) {
         this.params = params;
         this.gateways = gateways;
@@ -153,7 +153,7 @@ public final class FundingCarry {
         Map<String, Venue> spot = new TreeMap<>();
         for (ExchangeGateway gw : gateways.get()) {
             for (String s : gw.marketData().symbols()) {
-                String coin = FundingArbitrage.coin(s);
+                String coin = FundingArbitrageStrategy.coin(s);
                 if (!filter.isEmpty() && !filter.contains(s) && !filter.contains(coin)) continue;
                 Venue v = new Venue(gw, s);
                 if (gw.perp() == null) {

@@ -481,9 +481,9 @@ curl "localhost:8080/funding"                                                  #
 | Возврат к среднему (`MeanReversionStrategy`) | одна биржа | только лонг | лонг и шорт | `meanReversionEnabled` |
 | Статистический арбитраж (`StatArbStrategy`) | одна биржа | покупка дешёвой ноги | лонг дешёвой + шорт дорогой | `statArbEnabled` |
 | Треугольный арбитраж (`TriangularArbStrategy`) | одна биржа | да | нет | `triangularEnabled` |
-| Funding-арбитраж (`FundingArbitrage`) | две биржи | — | шорт там, где ставка выше, лонг — где ниже | `fundingArbEnabled` |
-| Ценовой арбитраж перпов (`PerpPriceArbitrage`) | две биржи | — | продать дороже, купить дешевле | `perpArbEnabled` |
-| Cash-and-carry (`FundingCarry`) | две биржи | лонг спота | шорт перпа | `carryEnabled` |
+| Funding-арбитраж (`FundingArbitrageStrategy`) | две биржи | — | шорт там, где ставка выше, лонг — где ниже | `fundingArbEnabled` |
+| Ценовой арбитраж перпов (`PerpPriceArbitrageStrategy`) | две биржи | — | продать дороже, купить дешевле | `perpArbEnabled` |
+| Cash-and-carry (`FundingCarryStrategy`) | две биржи | лонг спота | шорт перпа | `carryEnabled` |
 
 Стратегии одной биржи — параметры биржи (`/exchange/params`), межбиржевые — настройки процесса (`/settings`).
 
@@ -839,6 +839,8 @@ KuCoin в режиме UTA торгует через `uta.order` / `uta.cancel` 
   Сдавшийся WS-стакан запускается заново раз в минуту; WS-канал ордеров после отказов логина пробует снова через 10 минут.
   Во всех WS-клиентах пауза переподключения со случайным разбросом ±20 %. Проверка `ReconnectCheck`.
 
+- **2026-10:** межбиржевые стратегии названы единообразно: `FundingArbitrageStrategy`, `PerpPriceArbitrageStrategy`, `FundingCarryStrategy`.
+
 - **2026-10:** `SignedCexClient` переименован в `SignedClient` — базовый класс подписанных клиентов, включая DEX.
 
 - **2026-10:** `SignedCexExchange` переименован в `GeneralExchange` — это класс для всех бирж, включая DEX (Hyperliquid, Uniswap V2).
@@ -869,8 +871,8 @@ KuCoin в режиме UTA торгует через `uta.order` / `uta.cancel` 
 - **2026-10:** рефакторинг: все стратегии — спотовые, фьючерсные и межбиржевые — в одном пакете `com.hft.strategy`;
   в `engine` осталось ядро исполнения (конвейер, OrderService), в `perp` — фьючерсный счёт и ставки funding.
 
-- **2026-10:** две новые межбиржевые стратегии: ценовой арбитраж перпов (`PerpPriceArbitrage`) и cash-and-carry —
-  спот + шорт перпа (`FundingCarry`); эндпоинт `GET /arbitrage`.
+- **2026-10:** две новые межбиржевые стратегии: ценовой арбитраж перпов (`PerpPriceArbitrageStrategy`) и cash-and-carry —
+  спот + шорт перпа (`FundingCarryStrategy`); эндпоинт `GET /arbitrage`.
 
 - **2026-10:** полный учёт издержек: комиссия списывается из локального баланса сразу после боевой сделки (спот — из
   полученной валюты, фьючерсы — из USDT); новый параметр `tradeCostQuote` (газ Uniswap и др.); возврат к среднему и

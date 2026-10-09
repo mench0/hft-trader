@@ -36,8 +36,8 @@ hft-trader/
 │   ├── strategy/                     # все стратегии — спот и перпы вместе:
 │   │                                 #   одна биржа (на тиках, StrategySet): MeanReversionStrategy (спот: лонг; перп: лонг и шорт),
 │   │                                 #   StatArbStrategy (спот: дешёвая нога; перп: пара лонг/шорт), TriangularArbStrategy (только спот);
-│   │                                 #   между биржами (по таймеру, BotController): FundingArbitrage, PerpPriceArbitrage (перп/перп),
-│   │                                 #   FundingCarry (спот + шорт перпа); база Strategy, OrderExecutor
+│   │                                 #   между биржами (по таймеру, BotController): FundingArbitrageStrategy, PerpPriceArbitrageStrategy (перп/перп),
+│   │                                 #   FundingCarryStrategy (спот + шорт перпа); база Strategy, OrderExecutor
 │   ├── risk/RiskManager.java         # проверки перед ордером, дневной лимит, kill switch
 │   ├── paper/PaperOrderApi.java      # бумажное исполнение против живого стакана (спот и перпы)
 │   ├── perp/                         # фьючерсный счёт: PerpAccount (позиции, плечо, опрос funding),
