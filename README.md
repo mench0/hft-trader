@@ -224,6 +224,44 @@ cp .env.example .env && chmod 600 .env   # заполнить нужные кл�
 ./run.sh
 ```
 
+Пример заполненного `.env` (ключи вымышленные): Binance — реальные ордера на тестовой сети, Bybit — бумажная
+торговля на живых данных основной сети, OKX — ключи заданы, режим берётся из админки, Hyperliquid — тестовая сеть.
+Биржи, которые не нужны, можно не перечислять.
+
+```bash
+# ───── Админка
+ADMIN_PORT=8080
+ADMIN_TOKEN=7f3c9a1e5b2d4f60a8c1e3b5d7f9a2c4e6b8d0f1a3c5e7b9d2f4a6c8e0b1d3f5   # пусто — сгенерируется
+ADMIN_BIND=127.0.0.1                      # только этот компьютер; снаружи — ssh -L 8080:localhost:8080
+# ADMIN_CORS_ORIGINS=https://admin.example.com   # если админка открыта не с localhost и не из файла
+STATE_DB=data/state.db
+
+# ───── Binance: реальные ордера, но на тестовой сети (ключи с testnet.binance.vision)
+BINANCE_TESTNET=true
+BINANCE_LIVE=true
+BINANCE_API_KEY=vmPUZE6mv9SD5VNHk4HlWFsOr6aKE2zvsw0MuIgwCIPy6utIco14y7Ju91duEh8A
+BINANCE_API_SECRET=NhqPtmdSJYdKjVHjA7PZj4Mge3R5YNiP1e3UZjInClVN65XAbvqqM6A7H5fATj0j
+
+# ───── Bybit: без ключей — бумажная торговля на живых данных основной сети
+BYBIT_TESTNET=false
+BYBIT_LIVE=false
+
+# ───── OKX: ключи есть, режим (testnet/live) задаётся в админке
+OKX_API_KEY=3f6a2b1c-8d4e-4f5a-9b6c-7d8e9f0a1b2c
+OKX_API_SECRET=A1B2C3D4E5F60718293A4B5C6D7E8F90
+OKX_PASSPHRASE=my-okx-passphrase
+
+# ───── Hyperliquid: тестовая сеть; KEY — адрес основного аккаунта, SECRET — ключ agent-кошелька без права вывода
+HYPERLIQUID_TESTNET=true
+HYPERLIQUID_LIVE=true
+HYPERLIQUID_API_KEY=0x1234567890abcdef1234567890abcdef12345678
+HYPERLIQUID_API_SECRET=0x4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318
+```
+
+Правила для ключей: только право торговли, **без вывода средств**, с привязкой к IP сервера; файл — `chmod 600`,
+в git не попадает (`.gitignore`). Тикеры, стратегии и рынок (`market=spot`/`perp`) в `.env` не задаются — их выбирают
+в админке.
+
 - Бот сам читает `.env` из рабочей папки (другой путь — `ENV_FILE=/путь/.env`), `source` не нужен.
 - Файл перечитывается при изменении: новые ключи бирж применяются при следующем
   `/control/start` («Остановить» → «Поднять соединения»), перезапуск процесса не нужен.

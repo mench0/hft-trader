@@ -669,7 +669,7 @@ public final class AdminServer {
 
     /** Переменные, которые читает бот: ключи бирж, их фразы, админка, база. */
     private List<String> knownEnvKeys() {
-        List<String> keys = new java.util.ArrayList<>(List.of("ADMIN_TOKEN", "ADMIN_PORT", "ADMIN_ENABLED", "STATE_DB"));
+        List<String> keys = new java.util.ArrayList<>(List.of("ADMIN_TOKEN", "ADMIN_PORT", "ADMIN_ENABLED", "ADMIN_BIND", "ADMIN_CORS_ORIGINS", "STATE_DB"));
         for (String id : controller.supportedExchanges()) {
             String p = Exchange.of(id).envPrefix();
             keys.add(p + "_API_KEY");
@@ -739,7 +739,7 @@ public final class AdminServer {
 
     /** Секреты не показываются: только первые символы ключа; порт и флаги — как есть. */
     private static String mask(String key, String v) {
-        if (key.equals("ADMIN_PORT") || key.equals("ADMIN_ENABLED") || key.equals("STATE_DB")
+        if (key.equals("ADMIN_PORT") || key.equals("ADMIN_ENABLED") || key.equals("ADMIN_BIND") || key.equals("ADMIN_CORS_ORIGINS") || key.equals("STATE_DB")
                 || key.endsWith("_TESTNET") || key.endsWith("_LIVE")) return v;
         if (key.endsWith("_API_KEY")) return v.substring(0, Math.min(4, v.length())) + "…";
         return "••••••";
