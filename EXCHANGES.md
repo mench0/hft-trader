@@ -64,7 +64,7 @@ Uniswap V2 (AMM-пулы обмена — фьючерсов не бывает):
 ## По биржам
 
 ### Binance — спот
-- **Стакан:** WS `<symbol>@depth20@100ms` и сделки `<symbol>@trade` (свой фид на Netty).
+- **Стакан:** WS `/stream`, `<symbol>@depth20@100ms` (общий фид, REST-запас `/api/v3/depth`).
 - **Ордера:** WebSocket API `wss://ws-api.binance.com/ws-api/v3` — `order.place`, `order.cancel`,
   `openOrders.cancelAll`, `order.status`. Каждый запрос подписан ключом (HMAC-SHA256).
 - **Исполнения и баланс:** на том же сокете, подписка `userDataStream.subscribe.signature`:
@@ -73,7 +73,7 @@ Uniswap V2 (AMM-пулы обмена — фьючерсов не бывает):
 - **Ключи:** `BINANCE_API_KEY`, `BINANCE_API_SECRET`.
 
 ### Bybit — спот (UNIFIED)
-- **Стакан:** WS `orderbook.50.<symbol>` и `publicTrade.<symbol>` (свой фид на Netty).
+- **Стакан:** WS `orderbook.50.<symbol>` — снимок и изменения, пинг раз в 20 с (общий фид, REST-запас `/v5/market/orderbook`).
 - **Ордера:** торговый сокет `wss://stream.bybit.com/v5/trade` — `order.create`, `order.cancel`.
 - **Исполнения и баланс:** приватный сокет `/v5/private` — потоки `order` и `wallet`.
 - **REST:** правила, баланс на старте, **отмена всех ордеров символа** (в торговом WS такой команды нет).

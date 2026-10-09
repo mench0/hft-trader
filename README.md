@@ -8,7 +8,7 @@
 
 | Слой | Библиотека | Зачем именно она |
 |---|---|---|
-| Сеть | Netty 4.1 | Прямой контроль над event loop, буферами и поведением при разрыве. WebSocket написан на голом Netty, без обёрток |
+| WebSocket | `java.net.http.WebSocket` (JDK) | Один клиент для всех бирж: стакан, ордера, приватные потоки; свой контроль тишины, переподключения и REST-запас |
 | Конвейер | LMAX Disruptor 4 | Кольцевой буфер без блокировок. Объекты `Tick` выделяются один раз и переиспользуются — в горячем пути нет работы для GC |
 | Коллекции | Agrona | Структуры без боксинга от авторов Aeron |
 | Метрики | HdrHistogram | Перцентили p50/p99/p999. Среднее время скрывает всплески |
@@ -20,12 +20,12 @@
 ## Путь данных
 
 ```
-Binance WebSocket
-      │  один комбинированный стрим на все символы
-      │  @trade (сделки) + @depth20@100ms (стакан)
-      ▼
- MarketDataFeed (Netty)          метка времени ставится до разбора JSON
+WebSocket биржи (Binance: /stream, <symbol>@depth20@100ms на все символы)
       │
+      ▼
+ HybridBookFeed = WsBookFeed + REST-запас      разбор по формату биржи (WsDialects), потоково, без дерева JSON
+      │                                         тик — середина стакана после каждого обновления
+      ▼
       ▼
  TickPipeline (Disruptor)        кольцо на 4096 переиспользуемых Tick
       │
@@ -758,7 +758,7 @@ Hyperliquid, Uniswap V2-пулы (LIVE не проверен). В каталог
 
 | Биржа | Клиент | Фид стакана | Режим |
 |---|---|---|---|
-| Binance (спот), Bybit (спот и linear) | BinanceRestClient, BybitRestClient | свой Netty-фид (`BinanceMarketDataFeed`, `BybitMarketDataFeed`) | LIVE при ключах и `live=true` |
+| Binance (спот), Bybit (спот и linear) | BinanceRestClient, BybitRestClient | общий WS + REST-запас | LIVE при ключах и `live=true` |
 | Binance USDⓈ-M, OKX, MEXC, Gate, KuCoin, Aster | BinanceFuturesClient, OkxRestClient, Mexc/Gate/Kucoin RestClient и FuturesClient, AsterRestClient (общий скелет SignedClient) | общий WS + REST-запас | PAPER по умолчанию, LIVE не проверен |
 | Hyperliquid, Uniswap V2 | HyperliquidRestClient (EIP-712), UniswapV2Client (свопы через Router02) | общий WS + REST-запас | PAPER по умолчанию, LIVE не проверен |
 
@@ -773,10 +773,9 @@ LIVE для любой биржи включается двумя условия
 - Криптография (secp256k1, keccak, подпись транзакций) — библиотека web3j из pom.xml (класс `Web3jCrypto`); ни её, ни Maven в песочнице не было,
   поэтому `Web3jCrypto` — единственный непроверенный компилятором файл. Остальной код проверен тестами с подменой крипто-слоя.
 
-## WebSocket-стаканы для остальных бирж
+## WebSocket-стаканы
 
-OKX, Gate, KuCoin, Aster, MEXC и Hyperliquid получают стакан по WebSocket (`WsBookFeed`, WebSocket из JDK,
-без Netty). Форматы подписок и сообщений описаны в `WsDialects` и записаны **по памяти** — против живых
+Все биржи получают стакан одним фидом (`HybridBookFeed`: `WsBookFeed` на WebSocket из JDK плюс REST-запас). Форматы подписок и сообщений описаны в `WsDialects` и записаны **по памяти** — против живых
 серверов они не проверялись (сеть сборки закрыта). Перед реальными деньгами запустите бота в paper-режиме
 и убедитесь по `/exchanges/request-stats`, что `ws.messages` и `ws.bookUpdates` растут, а `parseErrors` = 0.
 
@@ -824,7 +823,7 @@ OKX, Gate, KuCoin, Aster, MEXC и Hyperliquid получают стакан по
 
 ## Устройство классов бирж
 
-`GeneralExchange` — класс для всех бирж (отличаются клиентом и, у Binance и Bybit, своим Netty-фидом из `ExchangeFactory`):
+`GeneralExchange` — класс для всех бирж (отличаются клиентом из `ExchangeFactory` и форматом стакана из `WsDialects`/`Dialects`):
 свои `MarketDataStore`, `BalanceStore`, `SymbolFilters`,
 REST-клиент, `RiskManager`, `OrderService`, конвейер `TickPipeline` (Disruptor) и фид, явные `start()`/`stop()`.
 Общие мелочи (режим LIVE/PAPER, стартовый бумажный баланс, сборка WS+REST-фида, остановка при потере данных) — в `ExchangeSupport`.
@@ -868,6 +867,12 @@ KuCoin в режиме UTA торгует через `uta.order` / `uta.cancel` 
 Форматы публичных API записаны по памяти и проверены только на фейковом сервере; ошибка одной биржи видна в статусе и не мешает остальным.
 
 ## История изменений
+
+- **2026-10:** один фид стакана для всех бирж. Netty-фиды Binance-спота и Bybit удалены (`BinanceMarketDataFeed`,
+  `BybitMarketDataFeed`, `AbstractWsFeed`, `NettyBookFeed`), зависимость Netty убрана: их стакан идёт через `WsDialects`
+  (Binance — `depth20@100ms` на `/stream`, Bybit — `orderbook.50` спот и linear, снимок и изменения, пинг) с REST-запасом
+  (`/api/v3/depth`, `/v5/market/orderbook`). Binance и Bybit получили то же, что остальные биржи: переход на REST при обрыве,
+  «сдался → торговля остановлена», метрики разбора. Тик — середина стакана после обновления (раньше у них — цена сделки).
 
 - **2026-10:** отказ своего ограничителя запросов — своя ошибка `LocalThrottleException` вместо `ApiException(429, "LOCAL")`:
   в логах и ответах видно, что лимит свой, а не биржи; ордер отклоняется, торговля останавливается (kill switch).

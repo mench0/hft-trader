@@ -215,7 +215,7 @@ public class WsFeedCheck {
 
     // ───── каталог/диалекты
     ck("mexc has ws dialect (protobuf)", WsDialects.forExchange("mexc").isPresent() && WsDialects.forExchange("mexc").get().parsesBinary());
-    ck("binance no generic ws dialect", WsDialects.forExchange("binance").isEmpty());
+    ck("binance and bybit use generic ws dialect", WsDialects.forExchange("binance").isPresent() && WsDialects.forExchange("bybit").isPresent());
     for (String id : List.of("okx","gate","hyperliquid")) ck("dialect "+id, WsDialects.forExchange(id).isPresent());
     ck("okx venue", WsDialects.forExchange("okx").get().venueSymbol("BTCUSDT").equals("BTC-USDT"));
     ck("hl venue", WsDialects.forExchange("hyperliquid").get().venueSymbol("BTCUSDC").equals("BTC"));

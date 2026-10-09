@@ -14,7 +14,6 @@
         <maven.compiler.target>21</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
-        <netty.version>4.1.111.Final</netty.version>
         <jackson.version>2.17.2</jackson.version>
         <slf4j.version>2.0.13</slf4j.version>
         <logback.version>1.5.6</logback.version>
@@ -23,15 +22,6 @@
     </properties>
 
     <dependencies>
-        <!-- ===== СЕТЬ ===== -->
-        <!-- Netty: асинхронный I/O, WebSocket без сторонних обёрток.
-             Полный контроль над event loop и буферами. -->
-        <dependency>
-            <groupId>io.netty</groupId>
-            <artifactId>netty-all</artifactId>
-            <version>${netty.version}</version>
-        </dependency>
-
         <!-- ===== СЕРИАЛИЗАЦИЯ ===== -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
