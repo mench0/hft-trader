@@ -714,15 +714,17 @@ Hyperliquid, Uniswap V2-пулы (LIVE не проверен). В каталог
 Пулы Uniswap V2: параметр биржи `uniPools="WETHUSDC=0xPAIR:true:18:6"` (пара:base это token0:dec base:dec quote).
 Виртуальный баланс: параметр биржи `paperStartBalance` (по умолчанию 1000).
 
-## Структура бирж (как BinanceExchange)
+## Структура бирж
 
-| Биржа | Класс биржи | REST-клиент | Режим |
+Все биржи — один класс `SignedCexExchange`; отличаются клиентом (`TradingClient`) и фидом стакана, которые задаёт `ExchangeFactory`.
+
+| Биржа | Клиент | Фид стакана | Режим |
 |---|---|---|---|
-| Binance, Bybit | BinanceExchange, BybitExchange | свои клиенты + WS | LIVE (проверено раньше только чтением) |
-| OKX, MEXC, Gate, KuCoin, Aster | SignedCexExchange (общий класс, биржа задаётся клиентом в ExchangeFactory) | OkxRestClient, MexcRestClient, GateRestClient, KucoinRestClient, AsterRestClient (общий скелет SignedCexClient) | PAPER по умолчанию, LIVE не проверен |
-| Hyperliquid, Uniswap V2 | HyperliquidExchange, UniswapV2Exchange | HyperliquidRestClient (EIP-712 через web3j), UniswapV2Client (свопы через Router02) | PAPER по умолчанию, LIVE не проверен и не собирался с настоящим web3j |
+| Binance (спот), Bybit (спот и linear) | BinanceRestClient, BybitRestClient | свой Netty-фид (`BinanceMarketDataFeed`, `BybitMarketDataFeed`) | LIVE при ключах и `live=true` |
+| Binance USDⓈ-M, OKX, MEXC, Gate, KuCoin, Aster | BinanceFuturesClient, OkxRestClient, Mexc/Gate/Kucoin RestClient и FuturesClient, AsterRestClient (общий скелет SignedCexClient) | общий WS + REST-запас | PAPER по умолчанию, LIVE не проверен |
+| Hyperliquid, Uniswap V2 | HyperliquidRestClient (EIP-712), UniswapV2Client (свопы через Router02) | общий WS + REST-запас | PAPER по умолчанию, LIVE не проверен |
 
-LIVE для OKX/MEXC/Gate/KuCoin/Aster включается двумя условиями сразу: `<ID>_API_KEY` + `<ID>_API_SECRET`
+LIVE для любой биржи включается двумя условиями сразу: `<ID>_API_KEY` + `<ID>_API_SECRET`
 (у OKX и KuCoin ещё `<ID>_PASSPHRASE`) и параметр биржи `live=true` в админке. Иначе биржа работает в PAPER и реальных ордеров не шлёт.
 Если правила торговли не загрузились, LIVE-старт отменяется. Тесты: src/test/java (простые runner-классы).
 
@@ -784,11 +786,11 @@ OKX, Gate, KuCoin, Aster, MEXC и Hyperliquid получают стакан по
 
 ## Устройство классов бирж
 
-`SignedCexExchange` (OKX, Gate, MEXC, KuCoin, Aster, Hyperliquid, Uniswap V2 — отличаются только REST-клиентом из `ExchangeFactory`)
-собран так же, как `BybitExchange`: свои `MarketDataStore`, `BalanceStore`, `SymbolFilters`,
+`SignedCexExchange` — класс для всех бирж (отличаются клиентом и, у Binance и Bybit, своим Netty-фидом из `ExchangeFactory`):
+свои `MarketDataStore`, `BalanceStore`, `SymbolFilters`,
 REST-клиент, `RiskManager`, `OrderService`, конвейер `TickPipeline` (Disruptor) и фид, явные `start()`/`stop()`.
 Общие мелочи (режим LIVE/PAPER, стартовый бумажный баланс, сборка WS+REST-фида, остановка при потере данных) — в `ExchangeSupport`.
-`start()` в LIVE: поднять WS-каналы → загрузить правила (без них старт падает) → баланс → конвейер → фид.
+`start()` в LIVE: синхронизировать часы (Binance) → поднять WS-каналы → загрузить правила (без них старт падает) → баланс → конвейер → фид.
 
 WS-ордеров нет в документации MEXC и Aster — у них ордера по REST, а события аккаунта
 идут по приватному потоку через `listenKey` (`UserStream`: ключ по REST перед подключением, продление раз в 25 минут).
@@ -827,6 +829,12 @@ KuCoin в режиме UTA торгует через `uta.order` / `uta.cancel` 
 Форматы публичных API записаны по памяти и проверены только на фейковом сервере; ошибка одной биржи видна в статусе и не мешает остальным.
 
 ## История изменений
+
+- **2026-10:** классы `BinanceExchange` и `BybitExchange` удалены — Binance и Bybit работают через общий `SignedCexExchange`
+  со своими Netty-фидами (`NettyBookFeed`); у всех бирж одна схема старта, остановки и сверки баланса. Бумажный режим
+  Binance и Bybit теперь сводит лимитные заявки по стакану, как у остальных бирж. Netty-фид исправлен: переподключение
+  после обрыва раньше не срабатывало (блокирующее ожидание в потоке Netty), первый неудачный коннект больше не роняет старт,
+  `ws://` работает без TLS.
 
 - **2026-10:** рынок (категория) — enum `Market` (`SPOT`/`PERP`) вместо строки. У каждой биржи в `Exchange` задан
   набор рынков; бот отклоняет настройки с рынком, которого у биржи нет. В JSON и SQLite по-прежнему `"spot"`/`"perp"`.

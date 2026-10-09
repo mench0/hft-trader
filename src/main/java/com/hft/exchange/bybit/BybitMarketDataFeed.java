@@ -219,6 +219,7 @@ public final class BybitMarketDataFeed extends AbstractWsFeed {
         int bn = lb.topBids(bidPrices, bidQtys);
         int an = lb.topAsks(askPrices, askQtys);
         book.applySnapshot(bidPrices, bidQtys, bn, askPrices, askQtys, an, updateId, System.currentTimeMillis());
+        onBook.accept(msgSymbol);
     }
 
     /** Символ подписки, совпадающий с текущей строкой (без создания новой строки). */

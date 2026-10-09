@@ -3,8 +3,10 @@ package com.hft.exchange;
 import com.hft.config.ExchangeConfig;
 import com.hft.config.TradingSettings;
 import com.hft.exchange.aster.AsterRestClient;
-import com.hft.exchange.binance.BinanceExchange;
-import com.hft.exchange.bybit.BybitExchange;
+import com.hft.exchange.binance.BinanceMarketDataFeed;
+import com.hft.exchange.bybit.BybitMarketDataFeed;
+import com.hft.exchange.bybit.BybitRestClient;
+import com.hft.rest.BinanceRestClient;
 import com.hft.exchange.gate.GateRestClient;
 import com.hft.exchange.generic.SignedCexExchange;
 import com.hft.exchange.hyperliquid.HyperliquidRestClient;
@@ -24,8 +26,8 @@ public final class ExchangeFactory {
         return switch (Exchange.find(id).orElse(null)) {
             case BINANCE -> ec.params().isPerp()
                     ? new SignedCexExchange(id, ec, settings, com.hft.exchange.binance.BinanceFuturesClient::new)   // USDⓈ-M
-                    : new BinanceExchange(ec, settings);
-            case BYBIT -> new BybitExchange(ec, settings);
+                    : new SignedCexExchange(id, ec, settings, BinanceRestClient::new, BinanceMarketDataFeed::new);
+            case BYBIT -> new SignedCexExchange(id, ec, settings, BybitRestClient::new, BybitMarketDataFeed::new);   // спот и linear
             case OKX -> new SignedCexExchange(id, ec, settings, OkxRestClient::new);
             case MEXC -> new SignedCexExchange(id, ec, settings, ec.params().isPerp()
                     ? com.hft.exchange.mexc.MexcFuturesClient::new : MexcRestClient::new);        // contract.mexc.com

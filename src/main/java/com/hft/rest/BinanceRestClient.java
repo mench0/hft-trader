@@ -39,7 +39,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * <p>
  * Класс потокобезопасен — HttpClient и Signer можно вызывать из разных потоков.
  */
-public final class BinanceRestClient implements ExchangeOrderApi {
+public final class BinanceRestClient implements TradingClient {
 
     /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(BinanceRestClient.class);

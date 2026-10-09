@@ -35,7 +35,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * ВНИМАНИЕ: наследники написаны по документации бирж без доступа к живым API
  * и не проверены. Подключайте только с минимальной суммой и сначала в тестовой сети.
  */
-public abstract class SignedCexClient implements ExchangeOrderApi {
+public abstract class SignedCexClient implements TradingClient {
 
     /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(SignedCexClient.class);

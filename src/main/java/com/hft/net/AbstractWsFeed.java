@@ -49,8 +49,17 @@ public abstract class AbstractWsFeed {
     /** Текущее соединение. */
     private volatile Channel channel;
 
+    /** Вызывается после обновления стакана символа (бумажный движок сводит заявки); по умолчанию — ничего. */
+    protected volatile java.util.function.Consumer<String> onBook = s -> {};
+
+    /** Задать обработчик обновления стакана. */
+    public void onBook(java.util.function.Consumer<String> handler) { this.onBook = handler; }
+
     /** Полный URL для подключения, включая параметры подписки. Вызывается при каждом (пере)подключении. */
     protected abstract URI buildUri() throws Exception;
+
+    /** Символы, по которым идут данные. */
+    public abstract java.util.List<String> activeSymbols();
 
     /** Разбор одного текстового сообщения. receivedNanos — момент получения, до парсинга. */
     protected abstract void onText(String json, long receivedNanos);
@@ -66,15 +75,21 @@ public abstract class AbstractWsFeed {
             t.setDaemon(true);
             return t;
         });
-        connect();
+        try {
+            connect();
+        } catch (Exception e) {                      // биржа недоступна на старте — не валим старт, переподключаемся
+            log.error("[{}] Подключение не удалось: {}", name(), e.toString());
+            scheduleReconnect();
+        }
     }
 
     /** Установить соединение и WebSocket-рукопожатие (с учётом лимита подключений). */
     private void connect() throws Exception {
         RateBudget.of(name()).acquire(RateBudget.Kind.WS_CONNECT, 1, 60_000);   // лимит подключений на IP
         URI uri = buildUri();
-        int port = uri.getPort() > 0 ? uri.getPort() : 443;
-        SslContext ssl = SslContextBuilder.forClient().build();
+        boolean tls = !"ws".equalsIgnoreCase(uri.getScheme());          // wss — TLS, ws — без (локальные стенды, тесты)
+        int port = uri.getPort() > 0 ? uri.getPort() : tls ? 443 : 80;
+        SslContext ssl = tls ? SslContextBuilder.forClient().build() : null;
 
         WebSocketClientHandshaker handshaker = WebSocketClientHandshakerFactory.newHandshaker(
                 uri, WebSocketVersion.V13, null, true, new DefaultHttpHeaders(), 1 << 20);
@@ -92,7 +107,7 @@ public abstract class AbstractWsFeed {
                     @Override
                     protected void initChannel(Channel ch) {
                         ChannelPipeline p = ch.pipeline();
-                        p.addLast(ssl.newHandler(ch.alloc(), uri.getHost(), port));
+                        if (ssl != null) p.addLast(ssl.newHandler(ch.alloc(), uri.getHost(), port));
                         p.addLast(new HttpClientCodec());
                         p.addLast(new HttpObjectAggregator(1 << 20));
                         p.addLast(WebSocketClientCompressionHandler.INSTANCE);
@@ -115,14 +130,16 @@ public abstract class AbstractWsFeed {
         int attempt = reconnectAttempts.incrementAndGet();
         long delay = Math.min(1000L * (1L << Math.min(attempt, 5)), 30_000L);
         log.warn("[{}] Переподключение через {} мс (попытка {})", name(), delay, attempt);
-        group.schedule(() -> {
+        // connect() ждёт соединения (sync) — в потоке Netty это запрещено, поэтому — отдельный поток
+        group.schedule(() -> Thread.ofVirtual().name(name() + "-reconnect").start(() -> {
+            if (!running.get()) return;
             try {
                 connect();
             } catch (Exception e) {
-                log.error("[{}] Переподключение не удалось: {}", name(), e.getMessage());
+                log.error("[{}] Переподключение не удалось: {}", name(), e.toString());
                 scheduleReconnect();
             }
-        }, delay, TimeUnit.MILLISECONDS);
+        }), delay, TimeUnit.MILLISECONDS);
     }
 
     /** Остановить фид и потоки Netty. */

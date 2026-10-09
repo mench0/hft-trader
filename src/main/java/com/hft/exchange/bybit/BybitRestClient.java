@@ -46,7 +46,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * приватному (/v5/private), см. {@link BybitWs}; REST — запасной канал. Если WS-запрос ушёл,
  * а ответа нет, ордер не повторяется вслепую: его судьба выясняется по orderLinkId через REST.
  */
-public final class BybitRestClient implements ExchangeOrderApi {
+public final class BybitRestClient implements com.hft.rest.TradingClient {
 
     /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(BybitRestClient.class);

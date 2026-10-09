@@ -4,7 +4,7 @@ import com.hft.admin.AdminServer;
 import com.hft.config.AppConfig;
 import com.hft.control.BotController;
 import com.hft.exchange.ExchangeGateway;
-import com.hft.exchange.binance.BinanceExchange;
+import com.hft.exchange.generic.SignedCexExchange;
 import com.hft.persistence.SqliteStateStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -83,7 +83,7 @@ public final class Main {
                 for (ExchangeGateway gw : controller.active().values()) gw.syncBalances();
                 if (now - last[0] >= g.timeSyncMin() * 60_000) {
                     last[0] = now;
-                    for (ExchangeGateway gw : controller.active().values()) if (gw instanceof BinanceExchange be) be.syncTime();
+                    for (ExchangeGateway gw : controller.active().values()) if (gw instanceof SignedCexExchange se) se.syncTime();
                 }
                 if (now - last[1] >= g.statusLogSec() * 1000 && controller.isRunning()) {
                     last[1] = now;
