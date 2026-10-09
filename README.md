@@ -207,7 +207,13 @@ curl -X POST "localhost:8080/trading/start?exchange=binance"
 
 Опасные действия (включение торговли, PANIC, ручной ордер, остановка) спрашивают подтверждение.
 Данные обновляются каждые 3 с (флажок «автообновление»); вкладки с формами сами не перерисовываются.
-Не открывайте порт админки в интернет: доступ — через SSH-туннель или VPN, и обязательно с `ADMIN_TOKEN`.
+Не открывайте порт админки в интернет: доступ — через SSH-туннель или VPN. Защита API:
+- **токен обязателен:** без `X-Admin-Token` (или `Authorization: Bearer`) любой запрос — 401. Не задан `ADMIN_TOKEN` —
+  бот при старте генерирует случайный, записывает в `.env` и сообщает об этом в логе (сам токен в лог не пишется);
+- **адрес:** по умолчанию `ADMIN_BIND=127.0.0.1` — только этот компьютер; `0.0.0.0` — по сети, с предупреждением в логе;
+- **CORS:** читать ответы из браузера могут только страницы админки — `ADMIN_CORS_ORIGINS` или, если не задан,
+  `http://localhost:*`, `http://127.0.0.1:*` и открытый файл; чужой сайт ответов не получит;
+- **адреса бирж** (`restUrl`, `wsUrl`) — только `https://` и `wss://`; `http`/`ws` — только для localhost (своя нода, стенд).
 
 ## Переменные окружения и файл .env
 
@@ -217,6 +223,44 @@ curl -X POST "localhost:8080/trading/start?exchange=binance"
 cp .env.example .env && chmod 600 .env   # заполнить нужные ключи
 ./run.sh
 ```
+
+Пример заполненного `.env` (ключи вымышленные): Binance — реальные ордера на тестовой сети, Bybit — бумажная
+торговля на живых данных основной сети, OKX — ключи заданы, режим берётся из админки, Hyperliquid — тестовая сеть.
+Биржи, которые не нужны, можно не перечислять.
+
+```bash
+# ───── Админка
+ADMIN_PORT=8080
+ADMIN_TOKEN=7f3c9a1e5b2d4f60a8c1e3b5d7f9a2c4e6b8d0f1a3c5e7b9d2f4a6c8e0b1d3f5   # пусто — сгенерируется
+ADMIN_BIND=127.0.0.1                      # только этот компьютер; снаружи — ssh -L 8080:localhost:8080
+# ADMIN_CORS_ORIGINS=https://admin.example.com   # если админка открыта не с localhost и не из файла
+STATE_DB=data/state.db
+
+# ───── Binance: реальные ордера, но на тестовой сети (ключи с testnet.binance.vision)
+BINANCE_TESTNET=true
+BINANCE_LIVE=true
+BINANCE_API_KEY=vmPUZE6mv9SD5VNHk4HlWFsOr6aKE2zvsw0MuIgwCIPy6utIco14y7Ju91duEh8A
+BINANCE_API_SECRET=NhqPtmdSJYdKjVHjA7PZj4Mge3R5YNiP1e3UZjInClVN65XAbvqqM6A7H5fATj0j
+
+# ───── Bybit: без ключей — бумажная торговля на живых данных основной сети
+BYBIT_TESTNET=false
+BYBIT_LIVE=false
+
+# ───── OKX: ключи есть, режим (testnet/live) задаётся в админке
+OKX_API_KEY=3f6a2b1c-8d4e-4f5a-9b6c-7d8e9f0a1b2c
+OKX_API_SECRET=A1B2C3D4E5F60718293A4B5C6D7E8F90
+OKX_PASSPHRASE=my-okx-passphrase
+
+# ───── Hyperliquid: тестовая сеть; KEY — адрес основного аккаунта, SECRET — ключ agent-кошелька без права вывода
+HYPERLIQUID_TESTNET=true
+HYPERLIQUID_LIVE=true
+HYPERLIQUID_API_KEY=0x1234567890abcdef1234567890abcdef12345678
+HYPERLIQUID_API_SECRET=0x4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318
+```
+
+Правила для ключей: только право торговли, **без вывода средств**, с привязкой к IP сервера; файл — `chmod 600`,
+в git не попадает (`.gitignore`). Тикеры, стратегии и рынок (`market=spot`/`perp`) в `.env` не задаются — их выбирают
+в админке.
 
 - Бот сам читает `.env` из рабочей папки (другой путь — `ENV_FILE=/путь/.env`), `source` не нужен.
 - Файл перечитывается при изменении: новые ключи бирж применяются при следующем
@@ -236,9 +280,9 @@ cp .env.example .env && chmod 600 .env   # заполнить нужные кл�
 
 ## Управление на сервере — полный список эндпоинтов
 
-Админка на порту 8080. Если задан `ADMIN_TOKEN`, добавляйте заголовок
-`X-Admin-Token` (или `Authorization: Bearer <токен>`). CORS открыт для всех источников —
-к API можно обращаться и из внешней панели на другом домене.
+Админка на `127.0.0.1:8080` (`ADMIN_BIND`, `ADMIN_PORT`). В каждом запросе — заголовок `X-Admin-Token`
+(или `Authorization: Bearer <токен>`), токен — `ADMIN_TOKEN` из `.env`. Внешняя панель на другом домене —
+её адрес в `ADMIN_CORS_ORIGINS`.
 
 ### Выбор бирж и тикеров (до старта)
 
@@ -357,7 +401,7 @@ curl -X POST "localhost:8080/exchange/params?exchange=bybit&maxPositionQuote=50&
 | Binance | USDⓈ-M | REST `fapi.binance.com`, стакан `fstream`, ордера WebSocket API `ws-fapi`, исполнения/баланс/позиции — поток по listenKey |
 | Bybit | linear | v5 `category=linear`: стакан `/v5/public/linear`, ордера `/v5/trade`, позиции — поток `position` |
 | OKX | SWAP | инструменты `BTC-USDT-SWAP`, `tdMode=cross`, объём в контрактах (`ctVal`) пересчитывается в монеты; позиции — канал `positions` |
-| Hyperliquid | только перпы | то же, что и раньше; плечо — действие `updateLeverage`, позиции — `clearinghouseState` |
+| Hyperliquid | перпы (по умолчанию) и спот | плечо — действие `updateLeverage`, позиции — `clearinghouseState`; спот (`market=spot`) — пары из `spotMeta`, символ — имена токенов подряд (`HYPEUSDC`, `UBTCUSDC`), баланс — `spotClearinghouseState` |
 | Gate | USDT-фьючерсы | контракт `BTC_USDT`, объём в контрактах (`quanto_multiplier`); ордера — WS API `futures.order_place`, исполнения/позиции/баланс — WS `futures.*`; стакан — WS `futures.order_book` |
 | KuCoin | Futures | символ `XBTUSDTM`, объём в лотах (`multiplier`); ордера — Pro WS API `futures.order`, исполнения/позиции/кошелёк — приватный WS фьючерсов; стакан — WS `/contractMarket/level2Depth50` |
 | MEXC | Contract | `BTC_USDT`, объём в контрактах (`contractSize`); ордера — REST (WS-ордеров нет), результаты/позиции/баланс — WS `push.personal.*`; стакан — WS `sub.depth.full`. Ордера через API MEXC выдаёт по отдельному доступу |
@@ -634,7 +678,7 @@ scrape_configs:
     scrape_interval: 5s
     static_configs:
       - targets: ['<host-бота>:8080']
-    # Если задан ADMIN_TOKEN, Prometheus поддерживает это штатно:
+    # /metrics тоже требует токен — Prometheus передаёт его штатно:
     authorization:
       credentials: '<тот_же_токен_что_и_ADMIN_TOKEN>'
     # AdminServer принимает токен и как Authorization: Bearer, и как X-Admin-Token
@@ -722,8 +766,8 @@ public final class MyStrategy extends Strategy {
   правильно, риск-менеджер отклоняет что должен
 - На реальных деньгах ставьте `maxPositionQuote` в несколько долларов,
   пока не убедитесь в поведении бота
-- Задайте `ADMIN_TOKEN` — иначе любой, кто достучится до порта, сможет
-  торговать вашими деньгами
+- Храните `ADMIN_TOKEN` (он в `.env`) как пароль: с ним можно торговать вашими деньгами.
+  Не открывайте админку по сети (`ADMIN_BIND=0.0.0.0`) без файрвола или VPN
 - На фьючерсах включите стоп на бирже (`exchangeStopLossPercent`) после проверки в testnet: стоп-лосс бота
   не сработает, если процесс упал или пропала связь
 - Позиции, открытые вручную на тех же фьючерсах, попадают под стоп сторожа (`orphanStopLossPercent`);
@@ -867,6 +911,19 @@ KuCoin в режиме UTA торгует через `uta.order` / `uta.cancel` 
 Форматы публичных API записаны по памяти и проверены только на фейковом сервере; ошибка одной биржи видна в статусе и не мешает остальным.
 
 ## История изменений
+
+- **2026-10:** безопасность админ-API. Токен обязателен (не задан — генерируется и пишется в `.env`), сравнение за
+  постоянное время; админка слушает `127.0.0.1` (`ADMIN_BIND`); CORS — только для своей админки (`ADMIN_CORS_ORIGINS`,
+  по умолчанию localhost и файл) вместо `*`; адреса бирж — только `https`/`wss` (открытые — только localhost),
+  сохранённые параметры с небезопасным адресом не применяются. `/metrics` тоже требует токен. Проверка `AdminSecurityCheck`.
+
+- **2026-10:** спот Hyperliquid (`market=spot`; по умолчанию по-прежнему перпы). Справочник пар `HyperliquidSpotMeta`
+  (`spotMeta`): имя на бирже `PURR/USDC` или `@<индекс>`, номер актива в ордере `10000 + индекс`, шаг объёма — по
+  базовому токену, цена — до 8 знаков; баланс токенов — `spotClearinghouseState`; стакан (WS `l2Book` и REST) по имени
+  пары. Символ — имена токенов подряд: `HYPEUSDC`; биткоин и эфир на споте — обёрнутые `UBTC`, `UETH` (`UBTCUSDC`).
+  Плеча, позиций и стопа на бирже у спота нет. Подбор тикеров для спота Hyperliquid пока не сделан.
+  Заодно: частично исполненный IOC-ордер Hyperliquid сразу считается итоговым (остаток биржа уже сняла);
+  проверки `*Check`, печатавшие `passed=`, теперь при ошибке завершаются с кодом 1.
 
 - **2026-10:** классы, сделанные для одной биржи, названы по ней: `HyperliquidMsgPack` (бывший `util/MsgPack`, теперь
   в `exchange/hyperliquid`), `MexcProtobuf` (бывший `util/Protobuf`, в `exchange/mexc`), `UniswapV2Abi`. Форматы, общие

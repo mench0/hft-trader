@@ -50,8 +50,8 @@ public final class ExchangeCatalog {
                 "Спот: стакан, ордера (WS API), исполнения и балансы по WebSocket, REST — запасной. Комиссия указана по умолчанию, проверьте тариф. Фьючерсы (market=perp): USDT-фьючерсы — стакан, ордера (WS API), исполнения, позиции и баланс по WS.",
                 "wss://api.gateio.ws/ws/v4/", "https://api-testnet.gateapi.io", "wss://ws-testnet.gate.com/v4/ws/spot"));
         add(new ExchangeInfo(Exchange.HYPERLIQUID.id(), "Hyperliquid", Kind.PERP_DEX, Adapter.LIVE_UNVERIFIED,
-                "https://api.hyperliquid.xyz", 5, 0.015, 0.045, "USDC", "BTCUSDC (монета BTC, перп)",
-                "Перпы: стакан, ордера, info-запросы (WS post) и исполнения по WebSocket, REST — запасной. Ордера подписываются agent-ключом (EIP-712) через web3j. HYPERLIQUID_API_KEY = адрес аккаунта, _SECRET = ключ agent-кошелька без права вывода. Лимит адреса: 1 действие на $1 оборота.",
+                "https://api.hyperliquid.xyz", 5, 0.04, 0.07, "USDC", "HYPEUSDC (спот), BTCUSDC (перп)",
+                "Перпы (по умолчанию) и спот (market=spot): стакан, ордера, info-запросы (WS post) и исполнения по WebSocket, REST — запасной. Спот: пары из spotMeta, символ — имена токенов подряд (HYPEUSDC, UBTCUSDC — обёрнутый BTC), баланс — spotClearinghouseState; комиссия спота 0.04/0.07%, перпов 0.015/0.045%. Ордера подписываются agent-ключом (EIP-712) через web3j. HYPERLIQUID_API_KEY = адрес аккаунта, _SECRET = ключ agent-кошелька без права вывода. Лимит адреса: 1 действие на $1 оборота.",
                 "wss://api.hyperliquid.xyz/ws", "https://api.hyperliquid-testnet.xyz", "wss://api.hyperliquid-testnet.xyz/ws"));
         add(new ExchangeInfo(Exchange.KUCOIN.id(), "KuCoin", Kind.CEX_TIER1, Adapter.LIVE_UNVERIFIED,
                 "https://api.kucoin.com", 10, 0.10, 0.10, "USDT", "BTCUSDT",
@@ -118,7 +118,7 @@ public final class ExchangeCatalog {
     /** У биржи есть фьючерсы (market=perp). */
     public static boolean supportsPerp(String id) { return Exchange.find(id).map(Exchange::hasPerp).orElse(false); }
 
-    /** У биржи есть спот (market=spot); Hyperliquid в боте — только перпы. */
+    /** У биржи есть спот (market=spot); Uniswap V2 — только спот. */
     public static boolean supportsSpot(String id) { return Exchange.find(id).map(Exchange::hasSpot).orElse(false); }
 
     /** Все биржи каталога. */

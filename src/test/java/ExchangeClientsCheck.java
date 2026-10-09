@@ -105,6 +105,6 @@ public class ExchangeClientsCheck {
     thrown=false; try{ okx.buyLimit("BTCUSDT", 0.00001, 100, TimeInForce.GTC);}catch(Exception e){thrown=true;}
     ck("validation blocks tiny order", thrown && seen.size()==before);
     srv.stop(0);
-    System.out.println("passed="+pass+" failed="+fail);
+    System.out.println("passed="+pass+" failed="+fail); System.exit(fail==0?0:1);
   }
 }

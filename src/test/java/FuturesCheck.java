@@ -190,13 +190,15 @@ public class FuturesCheck {
     ck("gate perp ok", !throwsIae(() -> validate.invoke(null, "gate", TradingParams.DEFAULTS.with(Map.of("market", "perp", "testnet", "false")))));
     for (var e : com.hft.exchange.Exchange.values())
       ck("catalog perp " + e, com.hft.exchange.catalog.ExchangeCatalog.supportsPerp(e.id()) == e.hasPerp());
-    ck("hyperliquid spot rejected", throwsIae(() -> validate.invoke(null, "hyperliquid", TradingParams.DEFAULTS)));
+    ck("hyperliquid spot ok", !throwsIae(() -> validate.invoke(null, "hyperliquid", TradingParams.DEFAULTS.with(Map.of("market", "spot")))));
+    ck("uniswap perp rejected", throwsIae(() -> validate.invoke(null, "uniswapv2", TradingParams.DEFAULTS.with(Map.of("market", "perp")))));
     ck("bybit spot ok", !throwsIae(() -> validate.invoke(null, "bybit", TradingParams.DEFAULTS.with(Map.of("market", "spot")))));
     ck("market lowercased", TradingParams.DEFAULTS.with(Map.of("market", "PERP")).market() == com.hft.exchange.Market.PERP);
     ck("schema default spot", !TradingParams.DEFAULTS.isPerp());
     ck("market saved as id", TradingParams.DEFAULTS.with(Map.of("market", "perp")).toStringMap().get("market").equals("perp"));
     ck("market json is id", new com.fasterxml.jackson.databind.ObjectMapper().valueToTree(TradingParams.DEFAULTS).path("market").asText().equals("spot"));
-    ck("exchange markets", com.hft.exchange.Exchange.HYPERLIQUID.markets().equals(java.util.EnumSet.of(com.hft.exchange.Market.PERP))
+    ck("exchange markets", com.hft.exchange.Exchange.HYPERLIQUID.markets().equals(java.util.EnumSet.of(com.hft.exchange.Market.PERP, com.hft.exchange.Market.SPOT))
+        && com.hft.exchange.Exchange.HYPERLIQUID.defaultMarket() == com.hft.exchange.Market.PERP
         && com.hft.exchange.Exchange.UNISWAPV2.defaultMarket() == com.hft.exchange.Market.SPOT && com.hft.exchange.Exchange.GATE.defaultMarket() == com.hft.exchange.Market.PERP);
     ck("unknown market error", throwsIae(() -> com.hft.exchange.Market.of("margin")));
     ck("bad market rejected", throwsIae(() -> TradingParams.DEFAULTS.with(Map.of("market", "margin"))));

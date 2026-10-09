@@ -44,6 +44,7 @@ public final class Dialects {
             if (Exchange.MEXC.is(id)) return new MexcFutures(cfg.restUrl());
             if (Exchange.BYBIT.is(id)) return new Bybit(true);
         }
+        if (Exchange.HYPERLIQUID.is(id) && !cfg.params().isPerp()) return new Hyperliquid(true, cfg.restUrl());
         return Exchange.UNISWAPV2.is(id) ? new UniswapV2(cfg.params().uniPools()) : forExchange(id);
     }
 
@@ -55,7 +56,7 @@ public final class Dialects {
             case OKX -> new Okx(false, "");
             case MEXC -> new Mexc();
             case GATE -> new Gate();
-            case HYPERLIQUID -> new Hyperliquid();
+            case HYPERLIQUID -> new Hyperliquid(false, "");
             case UNISWAPV2 -> new UniswapV2("");
             case KUCOIN -> new Kucoin();
             case ASTER -> new BinanceLike("/api/v3/depth");
@@ -280,9 +281,15 @@ public final class Dialects {
 
     /** POST /info {"type":"l2Book","coin":"BTC"} -> {time, levels:[[bids],[asks]]}, уровни {px,sz,n} */
     static final class Hyperliquid implements BookDialect {
+        /** Спот: стакан по имени пары из spotMeta (PURR/USDC, @107); иначе перп — по монете. */
+        private final boolean spot;
+        /** REST для справочника спотовых пар. */
+        private final String restUrl;
+        Hyperliquid(boolean spot, String restUrl) { this.spot = spot; this.restUrl = restUrl; }
         /** Запрос стакана символа. */
         public HttpRequest request(String b, String s, int d) {
-            String body = "{\"type\":\"l2Book\",\"coin\":\"" + base(s) + "\"}";
+            String coin = spot ? com.hft.exchange.hyperliquid.HyperliquidSpotMeta.require(restUrl.isBlank() ? b : restUrl, s).coin() : base(s);
+            String body = "{\"type\":\"l2Book\",\"coin\":\"" + coin + "\"}";
             return HttpRequest.newBuilder(URI.create(b + "/info")).timeout(TIMEOUT)
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(body)).build();

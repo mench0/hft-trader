@@ -82,6 +82,6 @@ public class UniswapClientCheck {
     t=false; try{ c.cancelOrder("WETHUSDC", 1);}catch(UnsupportedOperationException e){t=true;} ck("cancel unsupported", t && c.cancelAll("WETHUSDC")==0);
     var bs = new BalanceStore(); c.loadBalances(bs);
     ck("balances", bs.free("ETH")==1.0 && bs.free("USDC")>0 && bs.free("WETH")>0);
-    srv.stop(0); System.out.println("passed="+pass+" failed="+fail);
+    srv.stop(0); System.out.println("passed="+pass+" failed="+fail); System.exit(fail==0?0:1);
   }
 }

@@ -35,7 +35,10 @@ public class HyperliquidClientCheck {
       if (ex.getRequestURI().getPath().equals("/exchange")) resp = exResp[0];
       else { String type = m.readTree(body).path("type").asText(); resp = switch(type) {
         case "meta" -> "{\"universe\":[{\"name\":\"BTC\",\"szDecimals\":5},{\"name\":\"ETH\",\"szDecimals\":4}]}";
-        case "allMids" -> "{\"BTC\":\"50000.0\",\"ETH\":\"2000.0\"}";
+        case "allMids" -> "{\"BTC\":\"50000.0\",\"ETH\":\"2000.0\",\"@107\":\"25.0\",\"PURR/USDC\":\"0.2\"}";
+        case "spotMeta" -> "{\"tokens\":[{\"name\":\"USDC\",\"szDecimals\":8,\"index\":0},{\"name\":\"PURR\",\"szDecimals\":0,\"index\":1},{\"name\":\"HYPE\",\"szDecimals\":2,\"index\":150}],"
+            + "\"universe\":[{\"name\":\"PURR/USDC\",\"tokens\":[1,0],\"index\":0},{\"name\":\"@107\",\"tokens\":[150,0],\"index\":107}]}";
+        case "spotClearinghouseState" -> "{\"balances\":[{\"coin\":\"USDC\",\"token\":0,\"hold\":\"10\",\"total\":\"110\"},{\"coin\":\"HYPE\",\"token\":150,\"hold\":\"0\",\"total\":\"3.5\"}]}";
         case "openOrders" -> "[{\"coin\":\"BTC\",\"oid\":5},{\"coin\":\"ETH\",\"oid\":6}]";
         case "orderStatus" -> "{\"status\":\"order\",\"order\":{\"order\":{\"coin\":\"BTC\",\"side\":\"B\",\"origSz\":\"0.002\",\"sz\":\"0.0005\",\"limitPx\":\"49000\"},\"status\":\"open\"}}";
         case "clearinghouseState" -> "{\"marginSummary\":{\"accountValue\":\"1000\"},\"withdrawable\":\"800\"}";
@@ -43,7 +46,7 @@ public class HyperliquidClientCheck {
       byte[] bt = resp.getBytes(); ex.sendResponseHeaders(200, bt.length); ex.getResponseBody().write(bt); ex.close(); });
     srv.start(); String url="http://127.0.0.1:"+srv.getAddress().getPort();
     var f = new SymbolFilters(); var tc = new TC();
-    var c = new HyperliquidRestClient(new ExchangeConfig("hyperliquid", false,url,"",5000,List.of("BTCUSDC"),20,100),
+    var c = new HyperliquidRestClient(new ExchangeConfig("hyperliquid", false,url,"",5000,List.of("BTCUSDC"),20,100, TradingParams.DEFAULTS.with(Map.of("market","perp"))),
         new Credentials("0xAbC0000000000000000000000000000000000001","key"), f, tc);
     c.loadFilters(List.of("BTCUSDC"));
     ck("filters step", Math.abs(f.get("BTCUSDC").stepSize()-1e-5)<1e-12 && f.get("BTCUSDC").minNotional()==10.0);
@@ -90,6 +93,43 @@ public class HyperliquidClientCheck {
     var bal = new BalanceStore(); c.loadBalances(bal);
     ck("balances", bal.free("USDC")==800 && bal.locked("USDC")==200);
     t=false; try{ c.buyMarket("BTCUSDC", 0.000001);}catch(IllegalArgumentException e){ t=true; } ck("tiny rejected", t);
-    srv.stop(0); System.out.println("passed="+pass+" failed="+fail);
+    // --- спот (market=spot): пары из spotMeta, номер актива 10000 + индекс, цена до 8 знаков, баланс spotClearinghouseState
+    var sf = new SymbolFilters(); var stc = new TC();
+    var spotCfg = new ExchangeConfig("hyperliquid", false, url, "", 5000, List.of("HYPEUSDC", "PURRUSDC"), 20, 100,
+        TradingParams.DEFAULTS.with(Map.of("market", "spot")));
+    var sc = new HyperliquidRestClient(spotCfg, new Credentials("0xAbC0000000000000000000000000000000000001","key"), sf, stc);
+    ck("spot client is not perp", !sc.isPerp());
+    sc.loadFilters(List.of("HYPEUSDC", "PURRUSDC"));
+    ck("spot filters from token szDecimals", Math.abs(sf.get("HYPEUSDC").stepSize()-0.01)<1e-12 && sf.get("PURRUSDC").stepSize()==1.0);
+    ck("spot meta: @107 and canonical PURR/USDC", HyperliquidSpotMeta.require(url, "HYPEUSDC").coin().equals("@107")
+        && HyperliquidSpotMeta.require(url, "HYPEUSDC").asset()==10107 && HyperliquidSpotMeta.require(url, "PURRUSDC").coin().equals("PURR/USDC")
+        && HyperliquidSpotMeta.require(url, "PURRUSDC").asset()==10000);
+    boolean unknown=false; try { HyperliquidSpotMeta.require(url, "BTCUSDC"); } catch (IllegalArgumentException e) { unknown = e.getMessage().contains("UBTCUSDC"); }
+    ck("spot: unknown pair explains naming", unknown);
+    exResp[0] = "{\"status\":\"ok\",\"response\":{\"type\":\"order\",\"data\":{\"statuses\":[{\"filled\":{\"totalSz\":\"2\",\"avgPx\":\"25.01\",\"oid\":501}}]}}}";
+    r = sc.buyMarket("HYPEUSDC", 2);
+    JsonNode so = m.readTree(bodies.get(bodies.size()-1).substring("/exchange ".length())).path("action").path("orders").get(0);
+    ck("spot order: asset 10107, size, price from @107 mid", r.isFilled() && so.path("a").asInt()==10107 && so.path("s").asText().equals("2")
+        && so.path("p").asText().equals("26.25") && so.path("t").path("limit").path("tif").asText().equals("Ioc"));
+    exResp[0] = "{\"status\":\"ok\",\"response\":{\"type\":\"order\",\"data\":{\"statuses\":[{\"resting\":{\"oid\":502}}]}}}";
+    sc.buyLimit("PURRUSDC", 100, 0.123456789, TimeInForce.GTC);
+    so = m.readTree(bodies.get(bodies.size()-1).substring("/exchange ".length())).path("action").path("orders").get(0);
+    ck("spot price: 5 significant, up to 8 decimals", so.path("a").asInt()==10000 && so.path("p").asText().equals("0.12346"));
+    ck("spot price rule vs perp", HyperliquidRestClient.formatPrice(0.0000123456, 0, 8).equals("0.00001235") && HyperliquidRestClient.formatPrice(0.0000123456, 0).equals("0.000012"));
+    var sb = new BalanceStore(); sc.loadBalances(sb);
+    ck("spot balances", sb.free("USDC")==100 && sb.locked("USDC")==10 && sb.free("HYPE")==3.5);
+    int before = bodies.size();
+    sc.setLeverage("HYPEUSDC", 3); var sps = new PositionStore(); sc.loadPositions(sps);
+    ck("spot: no leverage/positions requests", bodies.size()==before && sc.placeStopLoss("HYPEUSDC", Side.SELL, 1, 20) == null);
+    // стакан спота: WS-подписка и REST по имени пары
+    var wsd = com.hft.exchange.generic.WsDialects.forExchange("hyperliquid", spotCfg).get();
+    ck("spot ws book by pair name", wsd.venueSymbol("HYPEUSDC").equals("@107") && wsd.subscribe(List.of("@107"), 20).get(0).contains("\"coin\":\"@107\""));
+    var rd = com.hft.exchange.generic.Dialects.forExchange("hyperliquid", spotCfg);
+    ck("spot rest book by pair name", new String(rd.request(url, "PURRUSDC", 20).bodyPublisher().map(bp -> { var sub = new java.util.concurrent.Flow.Subscriber<java.nio.ByteBuffer>() {
+        StringBuilder sbb = new StringBuilder(); public void onSubscribe(java.util.concurrent.Flow.Subscription x){ x.request(Long.MAX_VALUE);} public void onNext(java.nio.ByteBuffer b){ sbb.append(StandardCharsets.UTF_8.decode(b)); }
+        public void onError(Throwable t){} public void onComplete(){} }; bp.subscribe(sub); return sub.sbb.toString(); }).orElse("")).contains("\"coin\":\"PURR/USDC\""));
+    var perpCfg = new ExchangeConfig("hyperliquid", false, url, "", 5000, List.of("BTCUSDC"), 20, 100, TradingParams.DEFAULTS.with(Map.of("market", "perp")));
+    ck("perp ws book still by coin", com.hft.exchange.generic.WsDialects.forExchange("hyperliquid", perpCfg).get().venueSymbol("BTCUSDC").equals("BTC"));
+    srv.stop(0); System.out.println("passed="+pass+" failed="+fail); System.exit(fail==0?0:1);
   }
 }

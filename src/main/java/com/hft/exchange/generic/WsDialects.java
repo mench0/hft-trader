@@ -46,6 +46,7 @@ public final class WsDialects {
                 case null, default: break;                              // Hyperliquid — те же сообщения
             }
         }
+        if (Exchange.HYPERLIQUID.is(id) && !cfg.params().isPerp()) return Optional.of(new Hyperliquid(true, cfg.restUrl()));
         return Exchange.UNISWAPV2.is(id) ? Optional.of(new Uniswap(cfg.params().uniPools())) : forExchange(id);
     }
 
@@ -66,7 +67,7 @@ public final class WsDialects {
             case BYBIT -> Optional.of(new Bybit(false));
             case OKX -> Optional.of(new Okx(false, ""));
             case GATE -> Optional.of(new Gate());
-            case HYPERLIQUID -> Optional.of(new Hyperliquid());
+            case HYPERLIQUID -> Optional.of(new Hyperliquid(false, ""));
             case UNISWAPV2 -> Optional.of(new Uniswap(""));
             case KUCOIN -> Optional.of(new Kucoin(false));
             case ASTER -> Optional.of(new BinanceLike());
@@ -280,12 +281,19 @@ public final class WsDialects {
 
     /** Hyperliquid: l2Book (снимки), пинг {"method":"ping"}. */
     static final class Hyperliquid implements WsDialect {
+        /** Спот: стакан по имени пары из spotMeta (PURR/USDC, @107); иначе перп — по монете. */
+        private final boolean spot;
+        /** REST для справочника спотовых пар. */
+        private final String restUrl;
+        Hyperliquid(boolean spot, String restUrl) { this.spot = spot; this.restUrl = restUrl; }
         /** Адрес по умолчанию (основная или тестовая сеть). */
         public String defaultUrl(boolean testnet) {
             return testnet ? "wss://api.hyperliquid-testnet.xyz/ws" : "wss://api.hyperliquid.xyz/ws";
         }
         /** Имя символа на бирже. */
-        public String venueSymbol(String s) { return base(s); }
+        public String venueSymbol(String s) {
+            return spot ? com.hft.exchange.hyperliquid.HyperliquidSpotMeta.require(restUrl, s).coin() : base(s);
+        }
         /** Сообщения подписки на стаканы символов. */
         public List<String> subscribe(List<String> v, int d) { return op("subscribe", v); }
         /** Сообщения подписки на стаканы символов. */

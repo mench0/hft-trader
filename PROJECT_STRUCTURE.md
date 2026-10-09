@@ -71,7 +71,7 @@ hft-trader/
 |---|---|---|---|
 | Binance, Bybit | spot, perp | GeneralExchange + BinanceRestClient / BybitRestClient; перпы Binance — BinanceFuturesClient | LIVE при ключах и `live=true` |
 | OKX, Gate, MEXC, KuCoin, Aster | spot, perp | GeneralExchange + свой RestClient (фьючерсы — Gate/Kucoin/MexcFuturesClient, OKX SWAP, Aster `/fapi/v3`) | PAPER, LIVE не проверен |
-| Hyperliquid | perp | GeneralExchange + HyperliquidRestClient | PAPER, LIVE не проверен |
+| Hyperliquid | perp, spot | GeneralExchange + HyperliquidRestClient (спот — пары из HyperliquidSpotMeta) | PAPER, LIVE не проверен |
 | Uniswap V2 | spot | GeneralExchange + UniswapV2Client | PAPER, LIVE не проверен |
 
 Полный список с комиссиями — `GET /exchanges/catalog` или вкладка «Биржи» в админке.

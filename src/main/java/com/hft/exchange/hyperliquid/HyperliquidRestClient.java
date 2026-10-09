@@ -72,6 +72,10 @@ public final class HyperliquidRestClient extends SignedClient {
     private final Map<String, Integer> assetIndex = new ConcurrentHashMap<>();
     /** Знаков объёма по монете (из meta). */
     private final Map<String, Integer> szDecimals = new ConcurrentHashMap<>();
+    /** Спот (market=spot): пары из spotMeta, номер актива 10000 + индекс; иначе перпы. */
+    private final boolean spot;
+    /** Адрес REST для справочника спотовых пар. */
+    private final String restBase;
 
     /**
      * @param config подключение и параметры биржи
@@ -93,10 +97,14 @@ public final class HyperliquidRestClient extends SignedClient {
         this.crypto = crypto;
         this.account = credentials.isPresent() ? credentials.apiKey().toLowerCase() : "";
         this.source = config.testnet() ? "b" : "a";
+        this.spot = !config.params().isPerp();
+        this.restBase = config.restUrl();
     }
 
-    /** Монета символа (BTC в BTCUSDC). */
-    private static String coin(String symbol) { return BalanceStore.baseAsset(symbol); }
+    /** Имя на бирже: перп — монета (BTC в BTCUSDC), спот — пара из spotMeta (PURR/USDC, @107). */
+    private String coin(String symbol) {
+        return spot ? HyperliquidSpotMeta.require(restBase, symbol).coin() : BalanceStore.baseAsset(symbol);
+    }
 
     // ------------------------------------------------------------ подпись
 
@@ -219,25 +227,34 @@ public final class HyperliquidRestClient extends SignedClient {
 
     // ------------------------------------------------------------ форматирование
 
-    /** Цена по правилам Hyperliquid: ≤5 значащих цифр и ≤ (6 - szDecimals) знаков после запятой; целые не режем. */
-    public static String formatPrice(double px, int szDec) {
+    /** Цена по правилам Hyperliquid: ≤5 значащих цифр и ≤ (6 - szDecimals) знаков после запятой (перпы); целые не режем. */
+    public static String formatPrice(double px, int szDec) { return formatPrice(px, szDec, 6); }
+
+    /** Цена: ≤5 значащих цифр и ≤ (maxDecimals - szDecimals) знаков; maxDecimals — 6 на перпах, 8 на споте. */
+    public static String formatPrice(double px, int szDec, int maxDecimals) {
         BigDecimal exact = BigDecimal.valueOf(px);
         BigDecimal bd = exact.round(new MathContext(5, RoundingMode.HALF_UP));
         if (exact.compareTo(BigDecimal.valueOf(100_000)) >= 0) bd = exact.setScale(0, RoundingMode.HALF_UP);
-        int maxScale = Math.max(0, 6 - szDec);
+        int maxScale = Math.max(0, maxDecimals - szDec);
         if (bd.scale() > maxScale) bd = bd.setScale(maxScale, RoundingMode.HALF_UP);
         return bd.stripTrailingZeros().toPlainString();
     }
 
-    /** Номер актива символа; неизвестный — IllegalArgumentException. */
+    /** Цена символа по правилам рынка (спот — до 8 знаков, перпы — до 6). */
+    private String px(double price, String symbol) { return formatPrice(price, szDec(symbol), spot ? 8 : 6); }
+
+    /** Номер актива символа: перп — индекс из meta, спот — 10000 + индекс пары; неизвестный — исключение. */
     private int asset(String symbol) {
+        if (spot) return HyperliquidSpotMeta.require(restBase, symbol).asset();
         Integer i = assetIndex.get(coin(symbol));
         if (i == null) throw new IllegalStateException("Hyperliquid: неизвестная монета " + coin(symbol) + " (вызовите loadFilters)");
         return i;
     }
 
     /** Знаков объёма по монете (из meta). */
-    private int szDec(String symbol) { return szDecimals.getOrDefault(coin(symbol), 4); }
+    private int szDec(String symbol) {
+        return spot ? HyperliquidSpotMeta.require(restBase, symbol).szDecimals() : szDecimals.getOrDefault(coin(symbol), 4);
+    }
 
     /** Середина по allMids (для цены IOC «рыночного» ордера). */
     private double mid(String symbol) throws Exception {
@@ -269,7 +286,7 @@ public final class HyperliquidRestClient extends SignedClient {
         Map<String, Object> order = new LinkedHashMap<>();
         order.put("a", asset(o.symbol()));
         order.put("b", buy);
-        order.put("p", formatPrice(px, sd));
+        order.put("p", px(px, o.symbol()));
         order.put("s", szStr);
         order.put("r", o.reduceOnly());
         order.put("t", Map.of("limit", Map.of("tif", tif)));
@@ -286,7 +303,8 @@ public final class HyperliquidRestClient extends SignedClient {
         if (st.has("filled")) {
             JsonNode f = st.get("filled");
             double exec = d(f, "totalSz");
-            String status = exec >= req * 0.9999 ? "FILLED" : "PARTIALLY_FILLED";
+            // IOC исполнился частично — остаток биржа уже сняла: итог окончательный (дочитывать статус не нужно)
+            String status = exec >= req * 0.9999 ? "FILLED" : tif.equals("Ioc") ? "CANCELED" : "PARTIALLY_FILLED";
             return new OrderResult(registerId(f.path("oid").asText()), o.clientId(), o.symbol(), o.side(), status,
                     req, exec, d(f, "avgPx"), 0);
         }
@@ -303,17 +321,18 @@ public final class HyperliquidRestClient extends SignedClient {
      */
     @Override
     public String placeStopLoss(String symbol, Side side, double qty, double stopPrice) throws Exception {
+        if (spot) return null;                               // стоп на бирже — только для позиций перпов
         int sd = szDec(symbol);
         boolean buy = side == Side.BUY;
         double band = config.params().marketPriceBandPercent() / 100.0;
         Map<String, Object> trigger = new LinkedHashMap<>();
         trigger.put("isMarket", true);
-        trigger.put("triggerPx", formatPrice(stopPrice, sd));
+        trigger.put("triggerPx", px(stopPrice, symbol));
         trigger.put("tpsl", "sl");
         Map<String, Object> order = new LinkedHashMap<>();
         order.put("a", asset(symbol));
         order.put("b", buy);
-        order.put("p", formatPrice(stopPrice * (buy ? 1 + band : 1 - band), sd));
+        order.put("p", px(stopPrice * (buy ? 1 + band : 1 - band), symbol));
         order.put("s", com.hft.util.Numbers.plain(qty, sd));
         order.put("r", true);
         order.put("t", Map.of("trigger", trigger));
@@ -446,7 +465,8 @@ public final class HyperliquidRestClient extends SignedClient {
         if (v.isObject() && v.has("type") && v.has("data")) v = v.get("data");
         if (type.equals("allMids") && v.has("mids")) v = v.get("mids");
         return switch (type) {
-            case "meta" -> v.has("universe") ? v : null;
+            case "meta", "spotMeta" -> v.has("universe") ? v : null;
+            case "spotClearinghouseState" -> v.has("balances") ? v : null;
             case "allMids" -> v.isObject() ? v : null;
             case "clearinghouseState" -> v.has("marginSummary") ? v : null;
             case "openOrders" -> v.isArray() ? v : null;
@@ -455,9 +475,12 @@ public final class HyperliquidRestClient extends SignedClient {
         };
     }
 
-    /** Наш символ по монете (из выбранных). */
+    /** Наш символ по монете (перп) или имени пары (спот: PURR/USDC, @107) из выбранных. */
     private String symbolFor(String coin) {
-        for (String s : config.symbols()) if (coin(s).equals(coin)) return s.toUpperCase();
+        for (String s : config.symbols()) {
+            try { if (coin(s).equals(coin)) return s.toUpperCase(); }
+            catch (IllegalArgumentException ignored) { /* пары нет на споте */ }
+        }
         return coin;
     }
 
@@ -543,6 +566,7 @@ public final class HyperliquidRestClient extends SignedClient {
     /** Загрузить правила торговли символов (шаги объёма и цены, минимальная сумма). */
     @Override
     public void loadFilters(Iterable<String> symbols) throws Exception {
+        if (spot) { loadSpotFilters(symbols); return; }
         JsonNode universe = infoOf("meta").path("universe");
         for (int i = 0; i < universe.size(); i++) {
             assetIndex.put(universe.get(i).path("name").asText(), i);
@@ -561,13 +585,30 @@ public final class HyperliquidRestClient extends SignedClient {
         log.info("[hyperliquid] правила загружены для {} символов", loaded);
     }
 
-    /** Hyperliquid — только перпы. */
+    /** Спот: пары из spotMeta; шаг объёма — szDecimals базового токена, минимальный ордер — 10 USDC, как на перпах. */
+    private void loadSpotFilters(Iterable<String> symbols) throws Exception {
+        HyperliquidSpotMeta.put(restBase, infoOf("spotMeta"));
+        int loaded = 0;
+        for (String s : symbols) {
+            var p = HyperliquidSpotMeta.find(restBase, s);
+            if (p.isEmpty()) { log.warn("[hyperliquid] спот: нет пары {} — символ пропущен", s); continue; }
+            int sd = p.get().szDecimals();
+            filters.put(s.toUpperCase(), new SymbolFilters.Filter(Math.pow(10, -sd), Double.MAX_VALUE,
+                    Math.pow(10, -sd), 0, 0, 1e-9, 10.0));
+            loaded++;
+        }
+        if (loaded == 0) throw new IllegalStateException("Hyperliquid spot: пары не найдены для " + symbols + " (например HYPEUSDC, UBTCUSDC)");
+        log.info("[hyperliquid] спот: правила загружены для {} пар", loaded);
+    }
+
+    /** market=perp — перпы, market=spot — спот. */
     @Override
-    public boolean isPerp() { return true; }
+    public boolean isPerp() { return !spot; }
 
     /** Плечо монеты (кросс-маржа): действие updateLeverage. */
     @Override
     public void setLeverage(String symbol, int leverage) throws Exception {
+        if (spot) return;
         Map<String, Object> action = new LinkedHashMap<>();
         action.put("type", "updateLeverage");
         action.put("asset", asset(symbol));
@@ -580,6 +621,7 @@ public final class HyperliquidRestClient extends SignedClient {
     /** Открытые позиции из clearinghouseState (assetPositions[].position: coin, szi, entryPx). */
     @Override
     public void loadPositions(com.hft.store.PositionStore store) throws Exception {
+        if (spot) return;
         JsonNode r = infoOf("clearinghouseState", "user", account);
         Map<String, String> byCoin = new java.util.HashMap<>();
         for (String s : config.symbols()) byCoin.put(coin(s), s.toUpperCase());
@@ -598,6 +640,14 @@ public final class HyperliquidRestClient extends SignedClient {
     /** Загрузить балансы. */
     @Override
     public void loadBalances(BalanceStore store) throws Exception {
+        if (spot) {                                          // спот: токены, total включает заблокированное в ордерах (hold)
+            for (JsonNode b : infoOf("spotClearinghouseState", "user", account).path("balances")) {
+                double total = d(b, "total"), hold = d(b, "hold");
+                store.set(b.path("coin").asText().toUpperCase(), Math.max(0, total - hold), hold);
+            }
+            store.markSynced();
+            return;
+        }
         JsonNode r = infoOf("clearinghouseState", "user", account);
         double value = d(r.path("marginSummary"), "accountValue");
         double withdrawable = d(r, "withdrawable");

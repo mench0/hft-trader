@@ -97,6 +97,6 @@ public class PaperExchangeCheck {
     mode[0]=429; int before = hits[0]; Thread.sleep(2500);
     ck("pause on 429", hits[0] - before <= 2 && (Long)feed.stats().get("rateLimited") >= 1);
     feed.stop(); srv.stop(0);
-    System.out.println("passed="+pass+" failed="+fail+" hits="+hits[0]+" stats="+feed.stats());
+    System.out.println("passed="+pass+" failed="+fail+" hits="+hits[0]+" stats="+feed.stats()); System.exit(fail==0?0:1);
   }
 }
