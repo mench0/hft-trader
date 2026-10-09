@@ -42,6 +42,8 @@ public final class WsRpcChannel {
     private static final Logger log = LoggerFactory.getLogger(WsRpcChannel.class);
     /** Отказов логина подряд, после которых канал выключается (ключи, скорее всего, неверны). */
     private static final int MAX_LOGIN_FAILURES = 5;
+    /** Через сколько отключённый канал пробует снова (ключи могли исправить, сбой биржи — пройти), мс. */
+    private volatile long disabledRetryMs = 10 * 60_000;
 
     /** Что за сообщение: подтверждение логина, ответ на запрос, событие, служебное. */
     public enum Kind { LOGIN_OK, REPLY, EVENT, IGNORE }
@@ -226,10 +228,24 @@ public final class WsRpcChannel {
 
     // ---------------------------------------------------------------- цикл
 
-    /** Подключаться и переподключаться с нарастающей паузой. */
+    /** Как часто отключённый канал пробует снова, мс (тесты). */
+    public WsRpcChannel disabledRetry(long ms) { this.disabledRetryMs = ms; return this; }
+
+    /**
+     * Подключаться и переподключаться с нарастающей паузой. После {@value #MAX_LOGIN_FAILURES} отказов логина
+     * канал отключается (ордера — по REST), но через {@code disabledRetryMs} пробует снова.
+     */
     private void loop() {
         int failures = 0;
-        while (running && !disabled) {
+        while (running) {
+            if (disabled) {
+                try { Thread.sleep(disabledRetryMs); } catch (InterruptedException e) { return; }
+                if (!running) return;
+                log.info("[{}] WS-канал: новая попытка после отключения", name);
+                disabled = false;
+                loginFailures = 0;
+                failures = 0;
+            }
             long start = System.currentTimeMillis();
             try {
                 serve();
@@ -242,10 +258,13 @@ public final class WsRpcChannel {
             connected = false;
             loggedIn = false;
             failPending("соединение потеряно");
-            if (!running || disabled) return;
+            if (!running) return;
+            if (disabled) continue;
             failures = System.currentTimeMillis() - start > 60_000 ? 1 : failures + 1;   // долгая сессия — сбрасываем счётчик
             reconnects.incrementAndGet();
-            try { Thread.sleep(Math.min(30_000, baseBackoffMs << Math.min(failures, 10))); } catch (InterruptedException e) { return; }
+            long pause = (long) (Math.min(30_000, baseBackoffMs << Math.min(failures, 10))
+                    * (0.8 + 0.4 * java.util.concurrent.ThreadLocalRandom.current().nextDouble()));   // ±20 %: сокеты не ломятся разом
+            try { Thread.sleep(pause); } catch (InterruptedException e) { return; }
         }
     }
 

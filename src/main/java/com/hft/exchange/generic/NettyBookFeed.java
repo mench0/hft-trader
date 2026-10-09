@@ -2,13 +2,13 @@ package com.hft.exchange.generic;
 
 import com.hft.net.AbstractWsFeed;
 
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
  * Свой Netty-фид биржи (Binance, Bybit — {@link AbstractWsFeed}) в виде {@link BookFeed} для {@link SignedCexExchange}.
- * REST-запаса у такого фида нет: он сам переподключается с нарастающей паузой и не сдаётся.
+ * REST-запаса у такого фида нет: он сам переподключается с нарастающей паузой и не сдаётся;
+ * пока данных нет или они старше wsStaleMs, {@link #isRealtime()} = false и стратегии не открывают позиции.
  */
 public final class NettyBookFeed implements BookFeed {
 
@@ -32,6 +32,8 @@ public final class NettyBookFeed implements BookFeed {
     @Override public List<String> activeSymbols() { return ws.activeSymbols(); }
     /** Соединение живо. */
     @Override public boolean isConnected() { return ws.isConnected(); }
+    /** Данные свежие — можно открывать позиции. */
+    @Override public boolean isRealtime() { return ws.isRealtime(); }
     /** Не сдаётся: переподключается сам. */
     @Override public boolean hasGivenUp() { return false; }
     /** Получено сообщений. */
@@ -40,10 +42,7 @@ public final class NettyBookFeed implements BookFeed {
     /** Метрики для админки. */
     @Override
     public Map<String, Object> stats() {
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("ws", ws.isConnected());
-        m.put("messages", ws.messageCount());
-        return m;
+        return ws.connectionStats();
     }
 
     /** Исходный фид (для тестов). */

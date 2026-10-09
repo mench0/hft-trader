@@ -261,7 +261,8 @@ public final class WsBookFeed implements BookFeed {
             if (!running) return;
             if (++failures >= maxFailures) { giveUp(); return; }
             reconnects.incrementAndGet();
-            long pause = Math.min(30_000, baseBackoffMs << Math.min(failures, 10));
+            long pause = (long) (Math.min(30_000, baseBackoffMs << Math.min(failures, 10))
+                    * (0.8 + 0.4 * java.util.concurrent.ThreadLocalRandom.current().nextDouble()));   // ±20 %: сокеты не ломятся разом
             try { Thread.sleep(pause); } catch (InterruptedException e) { return; }
         }
     }

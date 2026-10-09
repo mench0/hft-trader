@@ -88,9 +88,14 @@ public final class BybitMarketDataFeed extends AbstractWsFeed {
         return new URI(config.wsUrl());
     }
 
+    /** Bybit закрывает соединение без пинга: {"op":"ping"} раз в 20 с. */
+    @Override
+    protected String heartbeat() { return "{\"op\":\"ping\"}"; }
+
     /** После рукопожатия — подписаться на сделки и стаканы. */
     @Override
     protected void onHandshakeComplete(Channel channel) {
+        localBooks.clear();                               // новое соединение — стаканы строятся заново со снимка
         StringBuilder args = new StringBuilder();
         for (String s : activeSymbols) {
             if (args.length() > 0) args.append(',');

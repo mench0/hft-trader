@@ -136,7 +136,8 @@ public final class SignedCexExchange implements ExchangeGateway, RequestStatsSou
         this.pipeline = new TickPipeline(dataHandler, strategy.handlers());
         this.feed = feedFactory == null
                 ? ExchangeSupport.newFeed(info, config, market, pipeline, paper, this::onFeedGaveUp)
-                : nettyFeed(feedFactory.create(config, market, pipeline), paper);
+                : nettyFeed(feedFactory.create(config, market, pipeline)
+                        .tune(config.params().wsStaleMs(), config.params().wsReconnectBaseMs()), paper);
         strategy.setRealtimeSource(feed::isRealtime);          // на REST-запасе новых входов нет
 
         if (!credentials.isPresent()) {
