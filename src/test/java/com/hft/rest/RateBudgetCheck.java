@@ -75,7 +75,7 @@ public class RateBudgetCheck {
     ck("public requests of the same exchange wait too", local(() -> { try { mexc.acquire(Kind.PUBLIC, 1, 100); } catch (InterruptedException e) {} }));
     srv.stop(0);
 
-    // ---- свой лимит — своя ошибка (не HTTP 429) и без kill switch; настоящий 429 биржи — kill switch
+    // ---- свой лимит — своя ошибка (не HTTP 429), ордер отклонён, kill switch; настоящий 429 биржи — тоже kill switch
     var settings = new com.hft.config.TradingSettings(com.hft.config.TradingParams.DEFAULTS.with(Map.of("tradingEnabled", "true", "maxSlippagePercent", "100")));
     var m = new com.hft.store.MarketDataStore(5, 10); m.register("BTCUSDT");
     long now = System.currentTimeMillis();
@@ -90,8 +90,9 @@ public class RateBudgetCheck {
     var os = new com.hft.engine.OrderService(api, m, bal, f, risk, settings);
     var res = os.buyMarket("BTCUSDT", 0.1);
     ck("local throttle: own error, order rejected", res.executedQty() == 0 && "REJECTED_LOCAL".equals(res.status()));
-    ck("local throttle: trading not stopped", !risk.isStopped());
+    ck("local throttle: trading stopped", risk.isStopped());
     ck("local throttle is not RateLimited/429", !(toThrow[0] instanceof RateLimited) && !(toThrow[0] instanceof ApiException));
+    risk.resumeTrading();
     toThrow[0] = new ApiException(429, "-1003", "Too many requests", true);
     os.buyMarket("BTCUSDT", 0.1);
     ck("exchange 429: trading stopped", risk.isStopped());

@@ -2,8 +2,8 @@ package com.hft.rest;
 
 /**
  * Отказ своего ограничителя запросов — до биржи запрос не дошёл, и это не ответ биржи (не HTTP 429).
- * Не {@link RateLimited}: OrderService отклоняет ордер, но торговлю (kill switch) не останавливает —
- * настоящий лимит биржи приходит её ответом ({@link ApiException} с 429/418/кодом лимита).
+ * Не {@link RateLimited} и не HTTP 429: в логах и ответах видно, что лимит свой, а не биржи.
+ * OrderService отклоняет ордер и останавливает торговлю (kill switch) — как и при ответе биржи о лимите.
  */
 public final class LocalThrottleException extends RuntimeException {
 
