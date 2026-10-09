@@ -305,7 +305,7 @@ public final class WsBookFeed implements BookFeed {
                 long now = System.currentTimeMillis();
                 if (now - lastFrameMs > staleMs) throw new IllegalStateException("тишина " + (now - lastFrameMs) + " мс — переподключаюсь");
                 if (ws.maxLifetimeMs() > 0 && now - connectedAt > ws.maxLifetimeMs()) {
-                    log.info("[{}] WS: плановое переподключение (биржа рвёт соединение через {} ч)", info.id(), (ws.maxLifetimeMs() + 1_800_000) / 3_600_000);
+                    log.info("[{}] WS: плановое переподключение (раз в {} мин)", info.id(), ws.maxLifetimeMs() / 60_000);
                     return true;                               // без ошибки: цикл переподключится сразу
                 }
                 String ping = dialect.pingMessage();

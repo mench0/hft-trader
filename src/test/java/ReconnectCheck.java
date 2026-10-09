@@ -11,7 +11,10 @@ public class ReconnectCheck {
     // ───── параметры соединения по биржам
     var bin = com.hft.net.WsSettings.forExchange("binance");
     ck("settings: binance 24h lifetime, 2 MB", bin.maxLifetimeMs() > 23 * 3_600_000L && bin.maxLifetimeMs() < 24 * 3_600_000L && bin.maxMessageBytes() == 2 << 20);
-    ck("settings: okx no lifetime, 4 MB", com.hft.net.WsSettings.forExchange("okx").maxLifetimeMs() == 0 && com.hft.net.WsSettings.forExchange("okx").maxMessageBytes() == 4 << 20);
+    ck("settings: okx 4 MB", com.hft.net.WsSettings.forExchange("okx").maxMessageBytes() == 4 << 20);
+    boolean same = true;
+    for (var e : com.hft.exchange.Exchange.values()) same &= com.hft.net.WsSettings.forExchange(e.id()).maxLifetimeMs() == bin.maxLifetimeMs();
+    ck("settings: planned reconnect same for all exchanges", same);
     ck("settings: uniswap 16 MB, longer timeouts", com.hft.net.WsSettings.forExchange("uniswapv2").maxMessageBytes() == 16 << 20 && com.hft.net.WsSettings.forExchange("uniswapv2").connectTimeoutMs() == 10_000);
     ck("settings: unknown -> default", com.hft.net.WsSettings.forExchange("rpc-test") == com.hft.net.WsSettings.DEFAULT);
 
