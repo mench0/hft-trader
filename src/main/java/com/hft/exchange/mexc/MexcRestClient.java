@@ -8,7 +8,7 @@ import com.hft.model.OrderEnums.Side;
 import com.hft.model.OrderEnums.Type;
 import com.hft.model.OrderResult;
 import com.hft.rest.ApiException;
-import com.hft.rest.SignedCexClient;
+import com.hft.rest.SignedClient;
 import com.hft.rest.UserStream;
 import com.hft.rest.WsRpcChannel;
 import com.hft.store.BalanceStore;
@@ -35,7 +35,7 @@ import java.util.Map;
  * потоку (listenKey, каналы spot@private.orders.v3.api.pb и spot@private.account.v3.api.pb, protobuf),
  * см. {@link UserStream} и {@link Protobuf}.
  */
-public final class MexcRestClient extends SignedCexClient {
+public final class MexcRestClient extends SignedClient {
 
     /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(MexcRestClient.class);

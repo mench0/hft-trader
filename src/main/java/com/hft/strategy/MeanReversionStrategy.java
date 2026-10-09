@@ -53,6 +53,8 @@ public final class MeanReversionStrategy extends Strategy {
 
     /** Открытые позиции: символ -> детали входа. */
     private final Map<String, Position> positions = new ConcurrentHashMap<>();
+    /** Имя владельца позиций в OrderService. */
+    private static final String OWNER = "mean-reversion";
 
     /** Открытая позиция: цена входа, объём, время открытия, направление (шорт — только на перпах). */
     private record Position(double entryPrice, double quantity, long openedAtMs, boolean isLong) {}
@@ -97,6 +99,7 @@ public final class MeanReversionStrategy extends Strategy {
         Position pos = positions.get(symbol);
 
         TradingParams p = settings.get();
+        if (pos != null) pos = reconcile(symbol, pos);    // позиция могла измениться мимо стратегии
         if (pos == null) {
             checkEntry(symbol, z, book, window, p);
         } else {
@@ -137,14 +140,18 @@ public final class MeanReversionStrategy extends Strategy {
                 symbol, String.format("%.2f", z),
                 String.format("%.2f", imbalance), String.format("%.3f", spread));
 
-        executor.submit(symbol, () -> {
+        if (!orders.claim(symbol, OWNER)) return;         // позицией символа управляет другая стратегия
+        boolean submitted = executor.submit(symbol, () -> {
             OrderResult result = isLong ? orders.buyMarket(symbol, qty) : orders.sellMarket(symbol, qty);
             if (result.executedQty() > 0) {
                 positions.put(symbol, new Position(
                         result.avgPrice(), result.executedQty(), System.currentTimeMillis(), isLong));
                 log.info("Позиция {} открыта: {} {} @ {}", isLong ? "лонг" : "шорт", result.executedQty(), symbol, result.avgPrice());
+            } else {
+                orders.release(symbol, OWNER);
             }
         });
+        if (!submitted) orders.release(symbol, OWNER);
     }
 
     /** Выход: z вернулся, стоп-лосс или таймаут. */
@@ -172,7 +179,7 @@ public final class MeanReversionStrategy extends Strategy {
         if (result.executedQty() <= 0) return;
         double left = pos.quantity() - result.executedQty();
         if (left > pos.quantity() * 1e-6) positions.put(symbol, new Position(pos.entryPrice(), left, pos.openedAtMs(), pos.isLong()));
-        else positions.remove(symbol);
+        else { positions.remove(symbol); orders.release(symbol, OWNER); }
         // комиссия тейкера на обеих ногах — в риск идёт чистый результат, по нему считается дневной лимит убытка
         // в бумаге комиссия уже в цене исполнения — не вычитаем второй раз
         // комиссии входа и выхода (в бумаге — уже в ценах) и фиксированные издержки двух сделок
@@ -181,6 +188,32 @@ public final class MeanReversionStrategy extends Strategy {
         orders.risk().recordPnl(realized);
         log.info("Позиция закрыта: {} {} @ {}, результат {} USDT",
                 result.executedQty(), symbol, result.avgPrice(), String.format("%.4f", realized));
+    }
+
+    /**
+     * Сверить свою позицию с фактической: на перпах — с позицией биржи (ликвидация, ручное закрытие, сработавший
+     * стоп на бирже), на споте — с остатком монеты. Меньше — уменьшить запись, нет или другой знак — забыть.
+     * @return позиция после сверки; null — позиции больше нет
+     */
+    private Position reconcile(String symbol, Position pos) {
+        double actual;
+        if (orders.isPerp()) {
+            double q = orders.positions().qty(symbol);
+            actual = pos.isLong() ? Math.max(0, q) : Math.max(0, -q);
+        } else {
+            actual = orders.balances().total(com.hft.store.BalanceStore.baseAsset(symbol));
+        }
+        if (actual >= pos.quantity() * (1 - 1e-6)) return pos;
+        if (actual <= pos.quantity() * 1e-6) {
+            log.warn("Позиция {} {} закрыта мимо стратегии (ликвидация, стоп на бирже или вручную) — снимаю с учёта", symbol, pos.isLong() ? "лонг" : "шорт");
+            positions.remove(symbol);
+            orders.release(symbol, OWNER);
+            return null;
+        }
+        log.warn("Позиция {} уменьшилась мимо стратегии: {} -> {}", symbol, pos.quantity(), actual);
+        Position fixed = new Position(pos.entryPrice(), actual, pos.openedAtMs(), pos.isLong());
+        positions.put(symbol, fixed);
+        return fixed;
     }
 
     /** Закрыть все позиции — вызывается при остановке бота. */

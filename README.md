@@ -315,6 +315,9 @@ curl -X POST "localhost:8080/exchange/params?exchange=bybit&maxPositionQuote=50&
 |---|---|---|
 | `market` | `perp` у всех бирж с фьючерсами, `spot` у Uniswap V2 | рынок (enum `Market`): `perp` — бессрочные фьючерсы, `spot` — спот; рынок, которого у биржи нет, отклоняется (после перезапуска биржи), см. [Фьючерсы](#фьючерсы-perp-и-funding-арбитраж) |
 | `leverage` | 2 | плечо на фьючерсах, выставляется на бирже при старте |
+| `exchangeStopLossPercent` | 0 | стоп-ордер на самой бирже после каждого входа (перпы), % от цены входа; 0 — выключено, см. [Защита позиций](#защита-позиций) |
+| `guardOrphans` | true | брать под защиту позиции без стратегии (после перезапуска, открытые вручную) |
+| `orphanStopLossPercent` / `orphanMaxHoldMinutes` | 2 / 0 | стоп-лосс таких позиций, %; закрыть через N минут (0 — не закрывать по времени) |
 | `tradingEnabled` | false | торговля на бирже разрешена (также `/trading/start`/`stop`) |
 | `maxPositionQuote` | 100 | максимальный размер ордера в котируемой валюте; на фьючерсах — ещё и предел стоимости позиции |
 | `maxDailyLossQuote` | 50 | дневной лимит убытка, после него kill switch |
@@ -389,6 +392,30 @@ curl "localhost:8080/funding"                                                  #
 **Стратегии на фьючерсах:** возврат к среднему открывает и шорты (z ≥ `entryZ` при перевесе асков); статистический
 арбитраж держит рыночно-нейтральную пару — лонг дешёвой ноги и шорт дорогой на сумму × |β|; треугольный арбитраж —
 только на споте (обмен через три валюты на фьючерсах невозможен).
+
+### Защита позиций
+
+Бот ведёт позицию от входа до выхода: ждёт итог ордера (WS-событие, затем запрос статуса), обновляет позицию
+и баланс по факту исполнения, на каждом тике проверяет тейк-профит, стоп-лосс и таймаут. Дополнительно:
+
+- **Сверка с биржей.** Стратегии сверяют свои позиции с фактическими (на перпах — позиция биржи из приватного
+  потока и сверки раз в `balanceSyncMs`, на споте — остаток монеты). Ликвидация, ручное закрытие, сработавший стоп
+  на бирже: запись уменьшается или снимается, закрывающий ордер не больше фактической позиции, нет бесконечных повторов.
+- **Владельцы позиций.** Стратегия, открывая позицию, берёт символ под управление (`OrderService.claim`), и другая
+  стратегия на нём не входит.
+- **Позиции без стратегии** (`guardOrphans`, перпы). Позиция есть на бирже, а стратегии-владельца нет — осталась после
+  перезапуска бота, открыта вручную или из админки. Сторож позиций (раз в секунду) берёт её под защиту: стоп-лосс
+  `orphanStopLossPercent` от цены входа и, если задан, таймаут `orphanMaxHoldMinutes`. Закрытие — reduceOnly, работает
+  и при остановленной торговле. Ручные позиции на тех же символах тоже попадают под этот стоп — выключается `guardOrphans=false`.
+- **Стоп на бирже** (`exchangeStopLossPercent` > 0, перпы). После каждого исполнения бот ставит на бирже рыночный стоп
+  reduceOnly на весь объём позиции на N % от цены входа против неё (по цене маркировки) — страховка, если бот упадёт или
+  пропадёт связь. Новый стоп ставится до снятия старого; позиция закрылась — стоп снимается; не удалось поставить —
+  повтор через 30 с. Стоп внутри бота (`stopLossPercent`) делайте ближе биржевого — он срабатывает первым.
+  Поддержка: Binance (Algo Order API, запасной — `/fapi/v1/order`), Bybit (`trading-stop`), OKX (`order-algo`), Gate
+  (`price_orders`), KuCoin (стоп-ордер `closeOrder`), Hyperliquid (триггер `sl`), Aster (`STOP_MARKET`); у MEXC Contract
+  — нет (защищает только стоп бота). В бумажном режиме стоп срабатывает по стакану. Формат запросов проверен на
+  поддельном сервере, не на живых биржах — включайте сначала в testnet.
+- Состояние — в `/exchanges/request-stats` (`positionGuard`: позиции без стратегии, стопы на бирже).
 
 ### Funding-арбитраж
 
@@ -481,9 +508,9 @@ curl "localhost:8080/funding"                                                  #
 | Возврат к среднему (`MeanReversionStrategy`) | одна биржа | только лонг | лонг и шорт | `meanReversionEnabled` |
 | Статистический арбитраж (`StatArbStrategy`) | одна биржа | покупка дешёвой ноги | лонг дешёвой + шорт дорогой | `statArbEnabled` |
 | Треугольный арбитраж (`TriangularArbStrategy`) | одна биржа | да | нет | `triangularEnabled` |
-| Funding-арбитраж (`FundingArbitrage`) | две биржи | — | шорт там, где ставка выше, лонг — где ниже | `fundingArbEnabled` |
-| Ценовой арбитраж перпов (`PerpPriceArbitrage`) | две биржи | — | продать дороже, купить дешевле | `perpArbEnabled` |
-| Cash-and-carry (`FundingCarry`) | две биржи | лонг спота | шорт перпа | `carryEnabled` |
+| Funding-арбитраж (`FundingArbitrageStrategy`) | две биржи | — | шорт там, где ставка выше, лонг — где ниже | `fundingArbEnabled` |
+| Ценовой арбитраж перпов (`PerpPriceArbitrageStrategy`) | две биржи | — | продать дороже, купить дешевле | `perpArbEnabled` |
+| Cash-and-carry (`FundingCarryStrategy`) | две биржи | лонг спота | шорт перпа | `carryEnabled` |
 
 Стратегии одной биржи — параметры биржи (`/exchange/params`), межбиржевые — настройки процесса (`/settings`).
 
@@ -636,17 +663,19 @@ scrape_configs:
 ## Как добавить биржу
 
 1. Константа в enum `Exchange`: строковый id и рынки (`Market.SPOT`, `Market.PERP`)
-2. REST-клиент на `SignedCexClient` (подпись, ордера, баланс, правила); для перпов — отдельный клиент фьючерсов
+2. REST-клиент на `SignedClient` (подпись, ордера, баланс, правила); для перпов — отдельный клиент фьючерсов
 3. Диалект стакана в `generic/Dialects` и `generic/WsDialects`; ордера по WS — через `WsRpcChannel`, если биржа умеет
 4. Ветка в `ExchangeFactory`, описание в `ExchangeCatalog`, лимиты в `rest/RateLimits`
-5. Проверка на поддельном сервере в `src/test/java`
+5. Для перпов: `isPerp`, `setLeverage`, `loadPositions`, `reduceMarket`; защитный стоп — `placeStopLoss` / `cancelStopLoss`
+   (не реализован — защищает только стоп бота)
+6. Проверка на поддельном сервере в `src/test/java`
 
 При старте бот проверяет, что каждая биржа enum `Exchange` описана в каталоге; дальше она сама появится
 в `/control/exchanges`, `/exchanges/catalog` и в админке.
 
 ## Своя стратегия
 
-Наследуйтесь от `Strategy` и добавьте в конвейер в `Main`:
+Наследуйтесь от `Strategy` и добавьте в `StrategySet` (там собраны стратегии одной биржи, которые получают тики из конвейера):
 
 ```java
 public final class MyStrategy extends Strategy {
@@ -664,15 +693,17 @@ public final class MyStrategy extends Strategy {
         double z = window.currentZScore();
         double imbalance = book.imbalance(5);
 
-        if (z < -2.0 && imbalance > 0.2) {
-            orders.buyMarket(tick.symbol(), 0.001);
+        // перед входом — взять символ под управление, чтобы другая стратегия и сторож позиций его не трогали
+        if (z < -2.0 && imbalance > 0.2 && orders.claim(tick.symbol(), "моя-стратегия")) {
+            orders.buyMarket(tick.symbol(), 0.001);   // после выхода — orders.release(symbol, "моя-стратегия")
         }
     }
 }
 ```
 
 `MeanReversionStrategy` в проекте — рабочий пример на z-score с
-подтверждением по стакану, стоп-лоссом и таймаутом позиции. Параметры
+подтверждением по стакану, стоп-лоссом, таймаутом позиции и сверкой позиции с биржей.
+Ордера из потока тиков отправляйте через `OrderExecutor`: ждать ответа биржи в конвейере нельзя. Параметры
 подобраны навскидку: перед реальными деньгами их нужно проверять на истории.
 
 ## Что стоит добавить дальше
@@ -690,6 +721,10 @@ public final class MyStrategy extends Strategy {
   пока не убедитесь в поведении бота
 - Задайте `ADMIN_TOKEN` — иначе любой, кто достучится до порта, сможет
   торговать вашими деньгами
+- На фьючерсах включите стоп на бирже (`exchangeStopLossPercent`) после проверки в testnet: стоп-лосс бота
+  не сработает, если процесс упал или пропала связь
+- Позиции, открытые вручную на тех же фьючерсах, попадают под стоп сторожа (`orphanStopLossPercent`);
+  если это не нужно — `guardOrphans=false`
 - Бот пишет `logs/hft-trader.log` и `logs/gc.log` — если начнутся всплески
   задержки, смотрите второй файл
 
@@ -721,7 +756,7 @@ Hyperliquid, Uniswap V2-пулы (LIVE не проверен). В каталог
 | Биржа | Клиент | Фид стакана | Режим |
 |---|---|---|---|
 | Binance (спот), Bybit (спот и linear) | BinanceRestClient, BybitRestClient | свой Netty-фид (`BinanceMarketDataFeed`, `BybitMarketDataFeed`) | LIVE при ключах и `live=true` |
-| Binance USDⓈ-M, OKX, MEXC, Gate, KuCoin, Aster | BinanceFuturesClient, OkxRestClient, Mexc/Gate/Kucoin RestClient и FuturesClient, AsterRestClient (общий скелет SignedCexClient) | общий WS + REST-запас | PAPER по умолчанию, LIVE не проверен |
+| Binance USDⓈ-M, OKX, MEXC, Gate, KuCoin, Aster | BinanceFuturesClient, OkxRestClient, Mexc/Gate/Kucoin RestClient и FuturesClient, AsterRestClient (общий скелет SignedClient) | общий WS + REST-запас | PAPER по умолчанию, LIVE не проверен |
 | Hyperliquid, Uniswap V2 | HyperliquidRestClient (EIP-712), UniswapV2Client (свопы через Router02) | общий WS + REST-запас | PAPER по умолчанию, LIVE не проверен |
 
 LIVE для любой биржи включается двумя условиями сразу: `<ID>_API_KEY` + `<ID>_API_SECRET`
@@ -790,7 +825,8 @@ OKX, Gate, KuCoin, Aster, MEXC и Hyperliquid получают стакан по
 свои `MarketDataStore`, `BalanceStore`, `SymbolFilters`,
 REST-клиент, `RiskManager`, `OrderService`, конвейер `TickPipeline` (Disruptor) и фид, явные `start()`/`stop()`.
 Общие мелочи (режим LIVE/PAPER, стартовый бумажный баланс, сборка WS+REST-фида, остановка при потере данных) — в `ExchangeSupport`.
-`start()` в LIVE: синхронизировать часы (Binance) → поднять WS-каналы → загрузить правила (без них старт падает) → баланс → конвейер → фид.
+`start()` в LIVE: синхронизировать часы (Binance) → поднять WS-каналы → загрузить правила (без них старт падает) → баланс →
+на перпах позиции и плечо (`PerpAccount`) и сторож позиций (`PositionGuard`) → конвейер → фид.
 
 WS-ордеров нет в документации MEXC и Aster — у них ордера по REST, а события аккаунта
 идут по приватному потоку через `listenKey` (`UserStream`: ключ по REST перед подключением, продление раз в 25 минут).
@@ -830,6 +866,10 @@ KuCoin в режиме UTA торгует через `uta.order` / `uta.cancel` 
 
 ## История изменений
 
+- **2026-10:** защита позиций: стратегии сверяют позиции с биржей (ликвидация, ручное закрытие, стоп на бирже),
+  владельцы позиций, сторож позиций без стратегии (`guardOrphans`, `orphanStopLossPercent`, `orphanMaxHoldMinutes`),
+  стоп-ордер на самой бирже (`exchangeStopLossPercent`). Проверка `PositionProtectionCheck`.
+
 - **2026-10:** надёжные переподключения. Netty-фид Binance и Bybit: одна цепочка попыток (раньше обрыв на рукопожатии
   запускал две параллельные, и они множились), таймауты подключения (5 с) и рукопожатия (10 с), отказ рукопожатия
   (403, 429, 5xx) обрабатывается как неудачная попытка, счётчик паузы сбрасывается только после первых данных,
@@ -838,6 +878,10 @@ KuCoin в режиме UTA торгует через `uta.order` / `uta.cancel` 
   сбрасываются при новом соединении, в `/exchanges/request-stats` — `reconnects`, `lastFrameAgeMs`, `lastError`.
   Сдавшийся WS-стакан запускается заново раз в минуту; WS-канал ордеров после отказов логина пробует снова через 10 минут.
   Во всех WS-клиентах пауза переподключения со случайным разбросом ±20 %. Проверка `ReconnectCheck`.
+
+- **2026-10:** межбиржевые стратегии названы единообразно: `FundingArbitrageStrategy`, `PerpPriceArbitrageStrategy`, `FundingCarryStrategy`.
+
+- **2026-10:** `SignedCexClient` переименован в `SignedClient` — базовый класс подписанных клиентов, включая DEX.
 
 - **2026-10:** `SignedCexExchange` переименован в `GeneralExchange` — это класс для всех бирж, включая DEX (Hyperliquid, Uniswap V2).
 
@@ -867,8 +911,8 @@ KuCoin в режиме UTA торгует через `uta.order` / `uta.cancel` 
 - **2026-10:** рефакторинг: все стратегии — спотовые, фьючерсные и межбиржевые — в одном пакете `com.hft.strategy`;
   в `engine` осталось ядро исполнения (конвейер, OrderService), в `perp` — фьючерсный счёт и ставки funding.
 
-- **2026-10:** две новые межбиржевые стратегии: ценовой арбитраж перпов (`PerpPriceArbitrage`) и cash-and-carry —
-  спот + шорт перпа (`FundingCarry`); эндпоинт `GET /arbitrage`.
+- **2026-10:** две новые межбиржевые стратегии: ценовой арбитраж перпов (`PerpPriceArbitrageStrategy`) и cash-and-carry —
+  спот + шорт перпа (`FundingCarryStrategy`); эндпоинт `GET /arbitrage`.
 
 - **2026-10:** полный учёт издержек: комиссия списывается из локального баланса сразу после боевой сделки (спот — из
   полученной валюты, фьючерсы — из USDT); новый параметр `tradeCostQuote` (газ Uniswap и др.); возврат к среднему и

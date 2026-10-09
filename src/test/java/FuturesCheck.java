@@ -208,7 +208,7 @@ public class FuturesCheck {
     x.perp.onFunding("SOLUSDT", new Funding(0.0010, 8, t + 3_600_000, 100, t));      // 0.10% за 8 ч
     y.perp.onFunding("SOLUSDC", new Funding(0.00001, 1, t + 3_600_000, 100, t));     // 0.008% за 8 ч
     GlobalParams[] gp = { GlobalParams.DEFAULTS.with(Map.of("fundingArbEnabled", "true", "fundingArbOrderQuote", "100")) };
-    var arb = new FundingArbitrage(() -> gp[0], () -> List.of(x, y), id -> true, id -> 0.05);
+    var arb = new FundingArbitrageStrategy(() -> gp[0], () -> List.of(x, y), id -> true, id -> 0.05);
     arb.tick(t);
     ck("arb opened pair", arb.openPairs() == 1);
     ck("short on high rate", x.pos.qty("SOLUSDT") < 0 && y.pos.qty("SOLUSDC") > 0 && near(-x.pos.qty("SOLUSDT"), y.pos.qty("SOLUSDC")));
@@ -222,18 +222,18 @@ public class FuturesCheck {
     x.perp.onFunding("SOLUSDT", new Funding(0.0010, 8, t + 3_600_000, 100, t));
     arb.tick(t);
     ck("basis too wide - no entry", arb.openPairs() == 0);
-    var noTrade = new FundingArbitrage(() -> GlobalParams.DEFAULTS.with(Map.of("fundingArbEnabled", "true")), () -> List.of(x, y), id -> false, id -> 0.05);
+    var noTrade = new FundingArbitrageStrategy(() -> GlobalParams.DEFAULTS.with(Map.of("fundingArbEnabled", "true")), () -> List.of(x, y), id -> false, id -> 0.05);
     noTrade.tick(t);
     ck("trading disabled - no entry", noTrade.openPairs() == 0);
     // комиссии: разница 0.092%/8ч, круг 4 × 1% = 4% не окупается за 6 периодов — входа нет
-    var costly = new FundingArbitrage(() -> GlobalParams.DEFAULTS.with(Map.of("fundingArbEnabled", "true", "fundingArbOrderQuote", "100")),
+    var costly = new FundingArbitrageStrategy(() -> GlobalParams.DEFAULTS.with(Map.of("fundingArbEnabled", "true", "fundingArbOrderQuote", "100")),
         () -> List.of(x, y), id -> true, id -> 1.0);
     costly.tick(t);
     ck("fees not covered - no entry", costly.openPairs() == 0);
     @SuppressWarnings("unchecked") var opp = ((List<Map<String,Object>>) costly.stats().get("opportunities")).get(0);
     ck("round trip fee in stats", near((Double) opp.get("roundTripFeePercent"), 4.0) && Boolean.FALSE.equals(opp.get("enough")));
     // та же разница при комиссиях 0.05%: круг 0.2% окупается за ~2.2 периода — вход есть
-    var cheap = new FundingArbitrage(() -> GlobalParams.DEFAULTS.with(Map.of("fundingArbEnabled", "true", "fundingArbOrderQuote", "100")),
+    var cheap = new FundingArbitrageStrategy(() -> GlobalParams.DEFAULTS.with(Map.of("fundingArbEnabled", "true", "fundingArbOrderQuote", "100")),
         () -> List.of(x, y), id -> true, id -> 0.05);
     cheap.tick(t);
     ck("fees covered - entry", cheap.openPairs() == 1);
@@ -244,7 +244,7 @@ public class FuturesCheck {
     Map<String,String> big = Map.of("tradingEnabled", "true", "maxPositionQuote", "1000");
     Gw pa = new Gw("binance", "ETHUSDT", 101, 101.1, big);
     Gw pb = new Gw("bybit", "ETHUSDT", 99.9, 100, big);
-    var parb = new PerpPriceArbitrage(() -> GlobalParams.DEFAULTS.with(Map.of("perpArbEnabled", "true", "perpArbOrderQuote", "100")),
+    var parb = new PerpPriceArbitrageStrategy(() -> GlobalParams.DEFAULTS.with(Map.of("perpArbEnabled", "true", "perpArbOrderQuote", "100")),
         () -> List.of(pa, pb), id -> true, id -> 0.05);
     parb.tick(System.currentTimeMillis());
     ck("perp arb opened", parb.openPairs() == 1 && pa.pos.qty("ETHUSDT") < 0 && pb.pos.qty("ETHUSDT") > 0
@@ -268,7 +268,7 @@ public class FuturesCheck {
     long tt = System.currentTimeMillis();
     pp.perp.onFunding("ADAUSDT", new Funding(0.0005, 8, tt + 3_600_000, 1.0, tt));   // 0.05% за 8 ч
     GlobalParams[] cg = { GlobalParams.DEFAULTS.with(Map.of("carryEnabled", "true", "carryOrderQuote", "50")) };
-    var carry = new FundingCarry(() -> cg[0], () -> List.of(sp, pp), id -> true, id -> 0.05);
+    var carry = new FundingCarryStrategy(() -> cg[0], () -> List.of(sp, pp), id -> true, id -> 0.05);
     carry.tick(tt);
     ck("carry opened", carry.openPositions() == 1 && sp.bal.free("ADA") > 0 && pp.pos.qty("ADAUSDT") < 0
         && near(sp.bal.free("ADA"), -pp.pos.qty("ADAUSDT")));
@@ -276,7 +276,7 @@ public class FuturesCheck {
     carry.tick(tt);
     ck("carry closed on rate drop", carry.openPositions() == 0 && pp.pos.get("ADAUSDT").isFlat() && sp.bal.free("ADA") < 1e-6);
     pp.perp.onFunding("ADAUSDT", new Funding(0.00002, 8, tt + 3_600_000, 1.0, tt));  // 0.002%: комиссии 0.2% не окупятся
-    var c2 = new FundingCarry(() -> GlobalParams.DEFAULTS.with(Map.of("carryEnabled", "true", "carryMinRatePercent", "0.001")), () -> List.of(sp, pp), id -> true, id -> 0.05);
+    var c2 = new FundingCarryStrategy(() -> GlobalParams.DEFAULTS.with(Map.of("carryEnabled", "true", "carryMinRatePercent", "0.001")), () -> List.of(sp, pp), id -> true, id -> 0.05);
     c2.tick(tt);
     ck("carry: fees not covered - no entry", c2.openPositions() == 0);
     ck("carry exit < min enforced", throwsIae(() -> GlobalParams.DEFAULTS.with(Map.of("carryExitRatePercent", "0.05"))));

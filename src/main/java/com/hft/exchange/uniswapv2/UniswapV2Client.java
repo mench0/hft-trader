@@ -12,7 +12,7 @@ import com.hft.model.OrderEnums.TimeInForce;
 import com.hft.model.OrderEnums.Type;
 import com.hft.model.OrderResult;
 import com.hft.rest.ApiException;
-import com.hft.rest.SignedCexClient;
+import com.hft.rest.SignedClient;
 import com.hft.rest.WsRpcChannel;
 import com.hft.store.BalanceStore;
 import com.hft.store.SymbolFilters;
@@ -47,7 +47,7 @@ import java.util.Map;
  * Символ WETHUSDC: base — WETH, quote — USDC. Газ платится в ETH — следите за его балансом.
  * Цена исполнения учитывает комиссию пула 0.3% автоматически (она внутри getAmountsOut).
  */
-public final class UniswapV2Client extends SignedCexClient {
+public final class UniswapV2Client extends SignedClient {
 
     /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(UniswapV2Client.class);

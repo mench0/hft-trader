@@ -48,10 +48,10 @@ import java.util.function.Supplier;
  * Риски: разница ставок может смениться раньше, чем окупятся 4 комиссии тейкера; при сильном движении
  * цены нога с плечом может быть ликвидирована раньше, чем вы вмешаетесь, — держите плечо низким.
  */
-public final class FundingArbitrage {
+public final class FundingArbitrageStrategy {
 
     /** Логгер. */
-    private static final Logger log = LoggerFactory.getLogger(FundingArbitrage.class);
+    private static final Logger log = LoggerFactory.getLogger(FundingArbitrageStrategy.class);
 
     /** Нога биржи: шлюз и символ на нём. */
     record Venue(ExchangeGateway gw, String symbol) {
@@ -63,7 +63,27 @@ public final class FundingArbitrage {
         double mid() { OrderBook b = gw.marketData().book(symbol); return b == null || !b.isReady() ? Double.NaN : b.midPrice(); }
         /** Имя для логов. */
         String name() { return gw.id() + ":" + symbol; }
+        /** Взять позицию символа под управление стратегии owner; false — ею управляет другая. */
+        boolean claim(String owner) { return orders().claim(symbol, owner); }
+        /** Отпустить позицию символа. */
+        void release(String owner) { orders().release(symbol, owner); }
+        /** Фактический лонг на бирже (перп), 0 — нет. */
+        double longQty() { return Math.max(0, orders().positions().qty(symbol)); }
+        /** Фактический шорт на бирже (перп), 0 — нет. */
+        double shortQty() { return Math.max(0, -orders().positions().qty(symbol)); }
+        /** Взять под управление обе ноги или ни одной. */
+        static boolean claimBoth(Venue a, Venue b, String owner) {
+            if (!a.claim(owner)) return false;
+            if (!b.claim(owner)) { a.release(owner); return false; }
+            return true;
+        }
     }
+
+    /** Имя владельца позиций в OrderService. */
+    private static final String OWNER = "funding-arb";
+
+    /** Пустой результат: ногу закрывать не нужно (позиции уже нет). */
+    static OrderResult none(String symbol, Side side) { return new OrderResult(0, "", symbol, side, "SKIPPED", 0, 0, 0, 0); }
 
     /** Открытая пара: шорт там, где ставка выше, лонг — где ниже. */
     record Pair(String coin, Venue shortLeg, Venue longLeg, double qty, double shortEntry, double longEntry,
@@ -97,7 +117,7 @@ public final class FundingArbitrage {
      * @param tradingEnabled включена ли торговля на бирже (по id)
      * @param takerFeePercent комиссия тейкера биржи, % (по id)
      */
-    public FundingArbitrage(Supplier<GlobalParams> params, Supplier<Collection<ExchangeGateway>> gateways,
+    public FundingArbitrageStrategy(Supplier<GlobalParams> params, Supplier<Collection<ExchangeGateway>> gateways,
                             java.util.function.Predicate<String> tradingEnabled,
                             java.util.function.ToDoubleFunction<String> takerFeePercent) {
         this.params = params;
@@ -208,12 +228,19 @@ public final class FundingArbitrage {
     /** Открыть пару: шорт на бирже с высокой ставкой, затем лонг на исполненный объём. */
     private void open(Opportunity o, GlobalParams g, double mid) {
         double qty = commonQty(o.shortLeg(), o.longLeg(), g.fundingArbOrderQuote() / mid);
-        if (qty <= 0) return;
+        if (qty <= 0 || !Venue.claimBoth(o.shortLeg(), o.longLeg(), OWNER)) return;
+        boolean ok = false;
+        try { ok = openClaimed(o, qty); }
+        finally { if (!ok) { o.shortLeg().release(OWNER); o.longLeg().release(OWNER); } }
+    }
+
+    /** Открыть пару (ноги уже взяты под управление); true — пара открыта. */
+    private boolean openClaimed(Opportunity o, double qty) {
         log.info("[funding-arb] {}: шорт {} ({}%/8ч), лонг {} ({}%/8ч), разница {}%, объём {}", o.coin(),
                 o.shortLeg().name(), pct(o.shortLeg().funding().ratePer8h()), o.longLeg().name(), pct(o.longLeg().funding().ratePer8h()),
                 String.format("%.4f", o.diffPercent()), qty);
         OrderResult s = o.shortLeg().orders().sellMarket(o.shortLeg().symbol(), qty);
-        if (s.executedQty() <= 0) { failed.incrementAndGet(); return; }
+        if (s.executedQty() <= 0) { failed.incrementAndGet(); return false; }
         double lq = commonQty(o.shortLeg(), o.longLeg(), s.executedQty());
         OrderResult l = lq > 0 ? o.longLeg().orders().buyMarket(o.longLeg().symbol(), lq) : null;
         if (l == null || l.executedQty() <= 0) {
@@ -226,7 +253,7 @@ public final class FundingArbitrage {
                 o.shortLeg().gw().risk().recordPnl(r);
                 pricePnl += r;
             }
-            return;
+            return false;
         }
         double extra = s.executedQty() - l.executedQty();                 // объёмы ног разошлись — лишнее закрыть
         if (extra > 1e-12) {
@@ -241,13 +268,16 @@ public final class FundingArbitrage {
         pairs.put(o.coin(), new Pair(o.coin(), o.shortLeg(), o.longLeg(), l.executedQty(), s.avgPrice(), l.avgPrice(),
                 o.diffPercent(), System.currentTimeMillis()));
         opened.incrementAndGet();
+        return true;
     }
 
     /** Закрыть обе ноги reduceOnly-ордерами; результат по ценам — в дневной PnL бирж. */
     private void close(Pair p, String why) {
         log.info("[funding-arb] {}: закрываю ({}) — шорт {}, лонг {}", p.coin(), why, p.shortLeg().name(), p.longLeg().name());
-        OrderResult s = p.shortLeg().orders().reduceMarket(p.shortLeg().symbol(), Side.BUY, p.qty());
-        OrderResult l = p.longLeg().orders().reduceMarket(p.longLeg().symbol(), Side.SELL, p.qty());
+        // закрываем не больше фактической позиции: ногу могли ликвидировать или закрыть стопом на бирже
+        double sq = Math.min(p.qty(), p.shortLeg().shortQty()), lq = Math.min(p.qty(), p.longLeg().longQty());
+        OrderResult s = sq > 0 ? p.shortLeg().orders().reduceMarket(p.shortLeg().symbol(), Side.BUY, sq) : none(p.shortLeg().symbol(), Side.BUY);
+        OrderResult l = lq > 0 ? p.longLeg().orders().reduceMarket(p.longLeg().symbol(), Side.SELL, lq) : none(p.longLeg().symbol(), Side.SELL);
         double pnl = 0;
         if (s.executedQty() > 0) {                       // комиссии входа и выхода этой ноги
             double r = (p.shortEntry() - s.avgPrice()) * s.executedQty()
@@ -261,13 +291,15 @@ public final class FundingArbitrage {
             p.longLeg().gw().risk().recordPnl(r);
             pnl += r;
         }
-        double leftS = p.qty() - s.executedQty(), leftL = p.qty() - l.executedQty();
+        double leftS = Math.min(p.qty(), p.shortLeg().shortQty()), leftL = Math.min(p.qty(), p.longLeg().longQty());
         if (leftS > p.qty() * 1e-6 || leftL > p.qty() * 1e-6) {
             log.error("[funding-arb] {}: не всё закрылось (шорт осталось {}, лонг {}) — повторю на следующем цикле", p.coin(), leftS, leftL);
             pairs.put(p.coin(), new Pair(p.coin(), p.shortLeg(), p.longLeg(), Math.max(leftS, leftL), p.shortEntry(), p.longEntry(),
                     p.entryDiffPercent(), p.openedAtMs()));
         } else {
             pairs.remove(p.coin());
+            p.shortLeg().release(OWNER);
+            p.longLeg().release(OWNER);
             closed.incrementAndGet();
         }
         pricePnl += pnl;

@@ -74,6 +74,8 @@ public final class GeneralExchange implements ExchangeGateway, RequestStatsSourc
 
     /** Фьючерсный счёт; null — спот. */
     private final PerpAccount perp;
+    /** Сторож позиций и стопов на бирже (перпы); null — спот. */
+    private final com.hft.perp.PositionGuard guard;
 
     /** Первая стадия конвейера: запись тиков в память. */
     private final MarketDataHandler dataHandler;
@@ -130,6 +132,7 @@ public final class GeneralExchange implements ExchangeGateway, RequestStatsSourc
         this.risk = new RiskManager(settings, market, info.id());
         this.orderService = new OrderService(api, market, balances, filters, risk, settings, positions);
         this.perp = isPerp ? new PerpAccount(info.id(), config, market, balances, positions, api, !live) : null;
+        this.guard = isPerp ? new com.hft.perp.PositionGuard(info.id(), positions, orderService, market, settings) : null;
 
         this.dataHandler = new MarketDataHandler(market);
         this.strategy = new StrategySet(market, orderService, info.id(), settings);
@@ -170,6 +173,7 @@ public final class GeneralExchange implements ExchangeGateway, RequestStatsSourc
             ExchangeSupport.seedPaperBalances(balances, config);
         }
         if (perp != null) perp.start();
+        if (guard != null) guard.start();                // после загрузки позиций: «ничьи» сразу под защиту
         pipeline.start();
         feed.start();
         log.info("[{}] Биржа запущена ({}, {}), символы: {}", info.id(), rest != null ? "LIVE" : "PAPER",
@@ -180,6 +184,7 @@ public final class GeneralExchange implements ExchangeGateway, RequestStatsSourc
     @Override
     public void stop() {
         strategy.disable();
+        if (guard != null) guard.stop();
         if (perp != null) perp.stop();
         if (rest != null) rest.stopStreams();
         feed.stop();
@@ -247,6 +252,9 @@ public final class GeneralExchange implements ExchangeGateway, RequestStatsSourc
         return new NettyBookFeed(ws);
     }
 
+    /** Сторож позиций; null — спот. */
+    public com.hft.perp.PositionGuard guard() { return guard; }
+
     /** Фьючерсный счёт; null — спот. */
     @Override
     public PerpAccount perp() { return perp; }
@@ -265,6 +273,7 @@ public final class GeneralExchange implements ExchangeGateway, RequestStatsSourc
         m.put("marketData", feed.stats());
         m.put("realtime", feed.isRealtime());
         m.put("strategies", strategy.stats());
+        if (guard != null) m.put("positionGuard", guard.stats());
         if (rest != null) m.put("orders", rest.stats());
         return m;
     }

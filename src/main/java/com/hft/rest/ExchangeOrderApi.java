@@ -61,4 +61,15 @@ public interface ExchangeOrderApi {
 
     /** Загрузить открытые позиции с биржи (перпы). */
     default void loadPositions(PositionStore store) throws Exception {}
+
+    /**
+     * Защитный стоп на бирже (перпы): когда цена маркировки дойдёт до {@code stopPrice}, биржа сама закроет позицию
+     * рыночным reduceOnly-ордером. {@code side} — сторона закрывающего ордера (SELL закрывает лонг, BUY — шорт),
+     * {@code qty} — объём позиции в монетах.
+     * @return id стопа на бирже (для отмены); null — биржа или клиент стопы не поддерживают
+     */
+    default String placeStopLoss(String symbol, Side side, double qty, double stopPrice) throws Exception { return null; }
+
+    /** Снять защитный стоп, поставленный {@link #placeStopLoss}. */
+    default void cancelStopLoss(String symbol, String stopId) throws Exception {}
 }

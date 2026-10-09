@@ -1,6 +1,6 @@
 import com.hft.config.*;
 import com.hft.exchange.gate.GateRestClient;
-import com.hft.rest.SignedCexClient;
+import com.hft.rest.SignedClient;
 import com.hft.store.SymbolFilters;
 import com.hft.util.BoundedMap;
 import java.lang.reflect.*;
@@ -18,11 +18,11 @@ public class MemoryBoundsCheck {
 
     var c = new GateRestClient(new ExchangeConfig("gate", false, "http://127.0.0.1:9", "", 5000, List.of("BTCUSDT"), 20, 100),
         new Credentials("KEY", "SECRET"), new SymbolFilters());
-    Method reg = SignedCexClient.class.getDeclaredMethod("registerId", String.class); reg.setAccessible(true);
-    Method ven = SignedCexClient.class.getDeclaredMethod("venueId", long.class); ven.setAccessible(true);
-    Field fl = SignedCexClient.class.getDeclaredField("toLong"); fl.setAccessible(true);
-    Field fv = SignedCexClient.class.getDeclaredField("toVenue"); fv.setAccessible(true);
-    Field fmax = SignedCexClient.class.getDeclaredField("MAX_TRACKED_ORDERS"); fmax.setAccessible(true);
+    Method reg = SignedClient.class.getDeclaredMethod("registerId", String.class); reg.setAccessible(true);
+    Method ven = SignedClient.class.getDeclaredMethod("venueId", long.class); ven.setAccessible(true);
+    Field fl = SignedClient.class.getDeclaredField("toLong"); fl.setAccessible(true);
+    Field fv = SignedClient.class.getDeclaredField("toVenue"); fv.setAccessible(true);
+    Field fmax = SignedClient.class.getDeclaredField("MAX_TRACKED_ORDERS"); fmax.setAccessible(true);
     int max = fmax.getInt(null);
     long first = (long) reg.invoke(c, "uuid-0");
     long last = 0;
@@ -33,7 +33,7 @@ public class MemoryBoundsCheck {
     ck("evicted id no longer resolves to a stale venue id", !ven.invoke(c, first).equals("uuid-0"));
     ck("numeric venue ids are not stored", (long) reg.invoke(c, "123456") == 123456L && ((Map<?, ?>) fl.get(c)).size() == max);
 
-    Field fs = SignedCexClient.class.getDeclaredField("streamed"); fs.setAccessible(true);
+    Field fs = SignedClient.class.getDeclaredField("streamed"); fs.setAccessible(true);
     @SuppressWarnings("unchecked") Map<Long, Object> streamed = (Map<Long, Object>) fs.get(c);
     for (long i = 0; i < max * 2L; i++) streamed.put(i, null);
     ck("streamed order states bounded", streamed.size() == max);

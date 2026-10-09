@@ -235,6 +235,8 @@ public final class StatArbStrategy extends Strategy {
     /** Вход или выход по паре по z-score и корреляции. */
     private void decide(Pair pr, TradingParams p, long now) {
         Position pos = positions.get(pr.name());
+        if (pos != null && orders.isPerp() && !executor.isBusy(pos.symbol())
+                && (pos.hedgeSymbol() == null || !executor.isBusy(pos.hedgeSymbol()))) pos = reconcile(pr.name(), pos);
         double z = pr.z;
         if (pos == null) {
             if (!realtime.getAsBoolean() || pr.corr < p.statArbMinCorrelation() || Math.abs(z) < p.statArbEntryZ()) return;
@@ -259,9 +261,11 @@ public final class StatArbStrategy extends Strategy {
             double hedgeQty = hedge == null ? 0 : p.statArbOrderQuote() * beta / hedgeBid;
             log.info("[{}] вход {}: z={} β={} корр={} — покупаю {}{}", name(), pr.name(), fmt(z), fmt(pr.beta), fmt(pr.corr), sym,
                     hedge == null ? "" : ", шорт " + hedge);
-            executor.submit(sym, () -> {
+            if (!orders.claim(sym, OWNER)) return;                     // ногой управляет другая стратегия
+            if (hedge != null && !orders.claim(hedge, OWNER)) { orders.release(sym, OWNER); return; }
+            boolean submitted = executor.submit(sym, () -> {
                 OrderResult r = orders.buyMarket(sym, qty);
-                if (r.executedQty() <= 0) return;
+                if (r.executedQty() <= 0) { releaseLegs(sym, hedge); return; }
                 long at = System.currentTimeMillis();
                 if (hedge == null) {
                     positions.put(pr.name(), new Position(sym, longA, r.executedQty(), r.avgPrice(), at));
@@ -271,10 +275,12 @@ public final class StatArbStrategy extends Strategy {
                 if (h.executedQty() <= 0) {                                     // вторая нога не встала — без хеджа не держим
                     log.warn("[{}] {}: шорт {} не исполнился — закрываю лонг {}", name(), pr.name(), hedge, sym);
                     orders.reduceMarket(sym, com.hft.model.OrderEnums.Side.SELL, r.executedQty());
+                    releaseLegs(sym, hedge);
                     return;
                 }
                 positions.put(pr.name(), new Position(sym, longA, r.executedQty(), r.avgPrice(), at, hedge, h.executedQty(), h.avgPrice()));
             });
+            if (!submitted) releaseLegs(sym, hedge);
             return;
         }
         boolean reverted = pos.longA() ? z >= -p.statArbExitZ() : z <= p.statArbExitZ();
@@ -285,7 +291,40 @@ public final class StatArbStrategy extends Strategy {
         String why = stop ? "стоп (спред разошёлся)" : reverted ? "спред вернулся" : "таймаут";
         log.info("[{}] выход {} ({}): z={}", name(), pr.name(), why, fmt(z));
         if (stop) stops.incrementAndGet();
-        executor.submit(pos.symbol(), () -> close(pr.name(), pos));
+        Position cur = pos;
+        executor.submit(cur.symbol(), () -> close(pr.name(), cur));
+    }
+
+    /** Имя владельца позиций в OrderService. */
+    private static final String OWNER = "stat-arb";
+
+    /** Отпустить ноги пары (hedge может быть null). */
+    private void releaseLegs(String sym, String hedge) {
+        orders.release(sym, OWNER);
+        if (hedge != null) orders.release(hedge, OWNER);
+    }
+
+    /**
+     * Перпы: сверить ноги пары с позициями биржи (ликвидация, сработавший стоп на бирже, ручное закрытие).
+     * Нога меньше — уменьшить, обеих ног нет — забыть пару.
+     */
+    private Position reconcile(String pairName, Position pos) {
+        double longQty = Math.min(pos.qty(), Math.max(0, orders.positions().qty(pos.symbol())));
+        double hedgeQty = pos.hedgeSymbol() == null ? 0 : Math.min(pos.hedgeQty(), Math.max(0, -orders.positions().qty(pos.hedgeSymbol())));
+        boolean same = longQty >= pos.qty() * (1 - 1e-6) && (pos.hedgeSymbol() == null || hedgeQty >= pos.hedgeQty() * (1 - 1e-6));
+        if (same) return pos;
+        if (longQty <= pos.qty() * 1e-6 && hedgeQty <= Math.max(pos.hedgeQty(), 1e-12) * 1e-6) {
+            log.warn("[{}] {}: позиции пары закрыты мимо стратегии — снимаю с учёта", name(), pairName);
+            positions.remove(pairName);
+            releaseLegs(pos.symbol(), pos.hedgeSymbol());
+            return null;
+        }
+        log.warn("[{}] {}: ноги изменились мимо стратегии: лонг {} -> {}, шорт {} -> {}", name(), pairName, pos.qty(), longQty, pos.hedgeQty(), hedgeQty);
+        Position fixed = new Position(pos.symbol(), pos.longA(), longQty, pos.entryPrice(), pos.openedAtMs(),
+                hedgeQty > 0 ? pos.hedgeSymbol() : null, hedgeQty, pos.hedgeEntry());
+        positions.put(pairName, fixed);
+        if (hedgeQty <= 0 && pos.hedgeSymbol() != null) orders.release(pos.hedgeSymbol(), OWNER);
+        return fixed;
     }
 
     /** Символ уже занят другой парой — не входим, чтобы не путать позиции. */
@@ -316,7 +355,7 @@ public final class StatArbStrategy extends Strategy {
         if (pos.qty() <= 0) {                                       // лонг уже закрыт раньше, оставался только хедж
             orders.risk().recordPnl(hedgePnl);
             totalPnl += hedgePnl;
-            if (pos.hedgeSymbol() == null) { positions.remove(pairName); trades.incrementAndGet(); }
+            if (pos.hedgeSymbol() == null) { positions.remove(pairName); trades.incrementAndGet(); releaseLegs(pos.symbol(), null); }
             else positions.put(pairName, pos);
             return;
         }
@@ -334,7 +373,7 @@ public final class StatArbStrategy extends Strategy {
         if (left > pos.qty() * 1e-6 || pos.hedgeSymbol() != null)
             positions.put(pairName, new Position(pos.symbol(), pos.longA(), Math.max(0, left), pos.entryPrice(), pos.openedAtMs(),
                     pos.hedgeSymbol(), pos.hedgeQty(), pos.hedgeEntry()));
-        else positions.remove(pairName);
+        else { positions.remove(pairName); releaseLegs(pos.symbol(), null); }
         log.info("[{}] {} закрыта: {} {} @ {}, результат {}", name(), pairName, r.executedQty(), pos.symbol(), r.avgPrice(), String.format("%.4f", pnl));
     }
 

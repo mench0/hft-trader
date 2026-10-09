@@ -9,7 +9,7 @@ import com.hft.model.OrderEnums.Side;
 import com.hft.model.OrderEnums.Type;
 import com.hft.model.OrderResult;
 import com.hft.rest.ApiException;
-import com.hft.rest.SignedCexClient;
+import com.hft.rest.SignedClient;
 import com.hft.rest.WsRpcChannel;
 import com.hft.rest.WsRpcChannel.Msg;
 import com.hft.store.BalanceStore;
@@ -33,7 +33,7 @@ import java.util.concurrent.atomic.AtomicLong;
  *  - своё поле text должно начинаться с «t-»;
  *  - ошибки приходят как {label, message}.
  */
-public final class GateRestClient extends SignedCexClient {
+public final class GateRestClient extends SignedClient {
 
     /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(GateRestClient.class);

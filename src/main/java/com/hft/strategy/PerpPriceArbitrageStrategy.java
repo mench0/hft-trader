@@ -4,7 +4,7 @@ import com.hft.config.GlobalParams;
 import com.hft.exchange.ExchangeGateway;
 import com.hft.model.OrderEnums.Side;
 import com.hft.model.OrderResult;
-import com.hft.strategy.FundingArbitrage.Venue;
+import com.hft.strategy.FundingArbitrageStrategy.Venue;
 import com.hft.store.OrderBook;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -52,10 +52,10 @@ import java.util.function.ToDoubleFunction;
  * мелочь на фоне минут удержания. Монеты сопоставляются по базовой валюте (USDT- и USDC-перпы — одна монета).
  * Такие расхождения выбирают участники с меньшей задержкой: на ликвидных монетах сделок будет мало.
  */
-public final class PerpPriceArbitrage {
+public final class PerpPriceArbitrageStrategy {
 
     /** Логгер. */
-    private static final Logger log = LoggerFactory.getLogger(PerpPriceArbitrage.class);
+    private static final Logger log = LoggerFactory.getLogger(PerpPriceArbitrageStrategy.class);
 
     /** Открытая пара: шорт на дорогой бирже, лонг на дешёвой. */
     record Pair(String coin, Venue shortLeg, Venue longLeg, double qty, double shortEntry, double longEntry,
@@ -97,7 +97,7 @@ public final class PerpPriceArbitrage {
      * @param tradingEnabled включена ли торговля на бирже (по id)
      * @param takerFeePercent комиссия тейкера биржи, % (по id)
      */
-    public PerpPriceArbitrage(Supplier<GlobalParams> params, Supplier<Collection<ExchangeGateway>> gateways,
+    public PerpPriceArbitrageStrategy(Supplier<GlobalParams> params, Supplier<Collection<ExchangeGateway>> gateways,
                               Predicate<String> tradingEnabled, ToDoubleFunction<String> takerFeePercent) {
         this.params = params;
         this.gateways = gateways;
@@ -163,7 +163,7 @@ public final class PerpPriceArbitrage {
         for (ExchangeGateway gw : gateways.get()) {
             if (gw.perp() == null) continue;
             for (String s : gw.marketData().symbols()) {
-                String coin = FundingArbitrage.coin(s);
+                String coin = FundingArbitrageStrategy.coin(s);
                 if (!filter.isEmpty() && !filter.contains(s) && !filter.contains(coin)) continue;
                 OrderBook b = gw.marketData().book(s);
                 if (b == null || !b.isReady() || b.ageMs() > g.perpArbMaxBookAgeMs()) continue;   // старый стакан — не сравниваем
@@ -218,8 +218,18 @@ public final class PerpPriceArbitrage {
     /** Открыть пару: обе ноги параллельно; одна не исполнилась — вторая закрывается. */
     private void open(Opportunity o, GlobalParams g) {
         double qty = Math.min(g.perpArbOrderQuote() / o.mid(), o.maxQty());
-        qty = FundingArbitrage.commonQty(o.shortLeg(), o.longLeg(), qty);
-        if (qty <= 0) return;
+        qty = FundingArbitrageStrategy.commonQty(o.shortLeg(), o.longLeg(), qty);
+        if (qty <= 0 || !Venue.claimBoth(o.shortLeg(), o.longLeg(), OWNER)) return;
+        boolean ok = false;
+        try { ok = openClaimed(o, qty); }
+        finally { if (!ok) { o.shortLeg().release(OWNER); o.longLeg().release(OWNER); } }
+    }
+
+    /** Имя владельца позиций в OrderService. */
+    private static final String OWNER = "perp-arb";
+
+    /** Открыть пару (ноги уже взяты под управление); true — пара открыта. */
+    private boolean openClaimed(Opportunity o, double qty) {
         final double q = qty;
         log.info("[perp-arb] {}: продаю {} / покупаю {}, спред {}%, ожидаемо {}% после комиссий, объём {}", o.coin(),
                 o.shortLeg().name(), o.longLeg().name(), fmt(o.spreadPercent()), fmt(o.expectedPercent()), q);
@@ -232,7 +242,7 @@ public final class PerpPriceArbitrage {
             if (sq > 0) unwind(o.shortLeg(), Side.BUY, sq, s.avgPrice(), true);
             if (lq > 0) unwind(o.longLeg(), Side.SELL, lq, l.avgPrice(), false);
             log.warn("[perp-arb] {}: нога не исполнилась (шорт {}, лонг {}) — откатил", o.coin(), sq, lq);
-            return;
+            return false;
         }
         double common = Math.min(sq, lq);                               // объёмы разошлись — лишнее закрыть
         if (sq - common > 1e-12) unwind(o.shortLeg(), Side.BUY, sq - common, s.avgPrice(), true);
@@ -241,6 +251,7 @@ public final class PerpPriceArbitrage {
         pairs.put(o.coin(), new Pair(o.coin(), o.shortLeg(), o.longLeg(), common, s.avgPrice(), l.avgPrice(),
                 (s.avgPrice() - l.avgPrice()) / mid * 100, System.currentTimeMillis()));
         opened.incrementAndGet();
+        return true;
     }
 
     /** Закрыть часть одной ноги и учесть результат с комиссиями. */
@@ -256,8 +267,12 @@ public final class PerpPriceArbitrage {
     /** Закрыть обе ноги параллельно reduceOnly-ордерами; результат после комиссий — в дневной PnL бирж. */
     private void close(Pair p, String why) {
         log.info("[perp-arb] {}: закрываю ({})", p.coin(), why);
-        var fs = CompletableFuture.supplyAsync(() -> p.shortLeg().orders().reduceMarket(p.shortLeg().symbol(), Side.BUY, p.qty()), legs);
-        var fl = CompletableFuture.supplyAsync(() -> p.longLeg().orders().reduceMarket(p.longLeg().symbol(), Side.SELL, p.qty()), legs);
+        // закрываем не больше фактической позиции: ногу могли ликвидировать или закрыть стопом на бирже
+        double sq = Math.min(p.qty(), p.shortLeg().shortQty()), lq = Math.min(p.qty(), p.longLeg().longQty());
+        var fs = CompletableFuture.supplyAsync(() -> sq > 0 ? p.shortLeg().orders().reduceMarket(p.shortLeg().symbol(), Side.BUY, sq)
+                : FundingArbitrageStrategy.none(p.shortLeg().symbol(), Side.BUY), legs);
+        var fl = CompletableFuture.supplyAsync(() -> lq > 0 ? p.longLeg().orders().reduceMarket(p.longLeg().symbol(), Side.SELL, lq)
+                : FundingArbitrageStrategy.none(p.longLeg().symbol(), Side.SELL), legs);
         OrderResult s = fs.join(), l = fl.join();
         double r = 0;
         if (s.executedQty() > 0) {
@@ -273,13 +288,15 @@ public final class PerpPriceArbitrage {
             r += x;
         }
         pnl += r;
-        double leftS = p.qty() - s.executedQty(), leftL = p.qty() - l.executedQty();
+        double leftS = Math.min(p.qty(), p.shortLeg().shortQty()), leftL = Math.min(p.qty(), p.longLeg().longQty());
         if (leftS > p.qty() * 1e-6 || leftL > p.qty() * 1e-6) {
             log.error("[perp-arb] {}: не всё закрылось (шорт {}, лонг {}) — повторю на следующем цикле", p.coin(), leftS, leftL);
             pairs.put(p.coin(), new Pair(p.coin(), p.shortLeg(), p.longLeg(), Math.max(leftS, leftL), p.shortEntry(), p.longEntry(),
                     p.entrySpreadPercent(), p.openedAtMs()));
         } else {
             pairs.remove(p.coin());
+            p.shortLeg().release(OWNER);
+            p.longLeg().release(OWNER);
             closed.incrementAndGet();
         }
     }

@@ -10,7 +10,7 @@ import com.hft.model.OrderEnums.Side;
 import com.hft.model.OrderEnums.Type;
 import com.hft.model.OrderResult;
 import com.hft.rest.ApiException;
-import com.hft.rest.SignedCexClient;
+import com.hft.rest.SignedClient;
 import com.hft.store.BalanceStore;
 import com.hft.store.PositionStore;
 import com.hft.store.SymbolFilters;
@@ -44,7 +44,7 @@ import java.util.concurrent.atomic.AtomicLong;
  *   <li>WS-запрос ушёл, ответа нет — ордер ищется по REST по своему id ({@code t-…}), вслепую не повторяется.</li>
  * </ul>
  */
-public final class GateFuturesClient extends SignedCexClient {
+public final class GateFuturesClient extends SignedClient {
 
     /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(GateFuturesClient.class);
@@ -152,6 +152,30 @@ public final class GateFuturesClient extends SignedCexClient {
             seen.add(sym);
         }
         for (String s : store.snapshot().keySet()) if (!seen.contains(s)) store.set(s, 0, 0);
+    }
+
+    // ------------------------------------------------------------ защитный стоп
+
+    /**
+     * Стоп на бирже: ценовой триггер {@code /price_orders} по цене маркировки (price_type 1),
+     * исполнение — рыночное закрытие всей позиции (size 0, close, reduce_only). Лонг — при цене ≤ стопа (rule 2), шорт — ≥ (rule 1).
+     */
+    @Override
+    public String placeStopLoss(String symbol, Side side, double qty, double stopPrice) throws Exception {
+        ObjectNode b = mapper.createObjectNode();
+        b.putObject("initial").put("contract", contract(symbol)).put("size", 0).put("price", "0")
+                .put("tif", "ioc").put("close", true).put("reduce_only", true);
+        b.putObject("trigger").put("strategy_type", 0).put("price_type", 1)
+                .put("price", plain(stopPrice, filters.priceScale(symbol))).put("rule", side == Side.SELL ? 2 : 1);
+        String id = signed("POST", SETTLE + "/price_orders", "", b.toString(), true).path("id").asText("");
+        if (id.isEmpty()) throw new ApiException(200, "NO_ID", "нет id у стопа", false);
+        return id;
+    }
+
+    /** Снять стоп. */
+    @Override
+    public void cancelStopLoss(String symbol, String stopId) throws Exception {
+        signed("DELETE", SETTLE + "/price_orders/" + stopId, "", "", true);
     }
 
     // ------------------------------------------------------------ ордера

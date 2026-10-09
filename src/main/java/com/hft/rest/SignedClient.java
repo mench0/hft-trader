@@ -35,10 +35,10 @@ import java.util.concurrent.atomic.AtomicLong;
  * ВНИМАНИЕ: наследники написаны по документации бирж без доступа к живым API
  * и не проверены. Подключайте только с минимальной суммой и сначала в тестовой сети.
  */
-public abstract class SignedCexClient implements TradingClient {
+public abstract class SignedClient implements TradingClient {
 
     /** Логгер. */
-    private static final Logger log = LoggerFactory.getLogger(SignedCexClient.class);
+    private static final Logger log = LoggerFactory.getLogger(SignedClient.class);
 
     /** Параметры одного ордера, уже округлённые и проверенные. */
     protected record Order(String symbol, Side side, Type type, TimeInForce tif,
@@ -104,7 +104,7 @@ public abstract class SignedCexClient implements TradingClient {
      * @param credentials ключи
      * @param filters правила символов
      */
-    protected SignedCexClient(String exchangeId, ExchangeConfig config, Credentials credentials, SymbolFilters filters) {
+    protected SignedClient(String exchangeId, ExchangeConfig config, Credentials credentials, SymbolFilters filters) {
         this.exchangeId = exchangeId;
         this.config = config;
         this.baseUrl = config.restUrl();

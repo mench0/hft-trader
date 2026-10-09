@@ -17,7 +17,8 @@
 | Hyperliquid | `exchange/hyperliquid/HyperliquidRestClient` | `HYPERLIQUID_API_KEY` (адрес), `HYPERLIQUID_API_SECRET` (agent-ключ) |
 | Uniswap V2 | `exchange/uniswapv2/UniswapV2Client` | `UNISWAPV2_API_KEY`, `UNISWAPV2_API_SECRET` |
 
-Все клиенты, кроме Binance и Bybit, наследуют `SignedCexClient`: общие HTTP-клиент, подпись,
+Все клиенты реализуют `TradingClient` (ордера плюс правила, баланс, приватные WS-каналы, метрики) — с ним работает
+`GeneralExchange`. Все, кроме Binance (спот) и Bybit, наследуют `SignedClient`: общие HTTP-клиент, подпись,
 бюджет запросов (`RateBudget`, 80% официальных лимитов из `RateLimits`), разделение лимитеров ордеров
 и фоновых запросов, сопоставление строковых id ордеров с числовыми (`BoundedMap`).
 Реальные ордера уходят только при ключах **и** параметре биржи `live=true`; иначе — `PaperOrderApi`
@@ -36,10 +37,13 @@
 | `isPerp()` | клиент торгует фьючерсами (`market=perp`) |
 | `reduceMarket(symbol, side, qty)` | закрывающий рыночный ордер: на фьючерсах — reduceOnly, на споте — обычный |
 | `setLeverage(symbol, leverage)`, `loadPositions(store)` | плечо и открытые позиции (фьючерсы) |
+| `placeStopLoss(symbol, side, qty, stopPrice)`, `cancelStopLoss(symbol, id)` | защитный стоп на бирже (фьючерсы): рыночный reduceOnly по цене маркировки; `null` — не поддерживается (MEXC) |
 
 На фьючерсах объём — тоже в монетах базовой валюты (у OKX клиент сам пересчитывает его в контракты по `ctVal`).
 Клиенты фьючерсов: `BinanceFuturesClient` (USDⓈ-M), `BybitRestClient` с `category=linear`,
-`OkxRestClient` с инструментами `-SWAP`, `HyperliquidRestClient`.
+`OkxRestClient` с инструментами `-SWAP`, `GateFuturesClient`, `KucoinFuturesClient`, `MexcFuturesClient`,
+`AsterRestClient` с `/fapi/v3`, `HyperliquidRestClient`. Стоп на бирже ставит не стратегия, а `OrderService.syncStop`
+после каждого исполнения (параметр `exchangeStopLossPercent`).
 
 ## Ручные ордера через админку
 
@@ -59,6 +63,8 @@ curl -H "$H" -X POST "localhost:8080/cancel-all?exchange=binance&symbol=BTCUSDT"
 
 На фьючерсах `side=SELL` открывает или увеличивает шорт, а «весь баланс» — это свободная маржа × `leverage`.
 Закрыть позицию — `POST /positions/close?exchange=bybit&symbol=BTCUSDT` (reduceOnly, `symbol=all` — все).
+Позицию, открытую вручную, сторож берёт под защиту как позицию без стратегии (`guardOrphans`, `orphanStopLossPercent`),
+а при `exchangeStopLossPercent` > 0 на бирже ставится и защитный стоп.
 
 Ответ: `orderId`, `статус`, `исполнено`, `средняя_цена`. Ордера проходят те же риск-проверки, что и
 ордера стратегий (`RiskManager`: размер позиции, дневной убыток, частота, возраст данных).

@@ -10,7 +10,7 @@ import com.hft.model.OrderEnums.Side;
 import com.hft.model.OrderEnums.Type;
 import com.hft.model.OrderResult;
 import com.hft.rest.ApiException;
-import com.hft.rest.SignedCexClient;
+import com.hft.rest.SignedClient;
 import com.hft.rest.WsRpcChannel;
 import com.hft.rest.WsRpcChannel.Msg;
 import com.hft.store.BalanceStore;
@@ -39,7 +39,7 @@ import java.time.format.DateTimeFormatter;
  *  - IOC/FOK — это отдельные ordType, а не timeInForce;
  *  - testnet=true включает демо-торговлю заголовком x-simulated-trading.
  */
-public final class OkxRestClient extends SignedCexClient {
+public final class OkxRestClient extends SignedClient {
 
     /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(OkxRestClient.class);
@@ -412,6 +412,32 @@ public final class OkxRestClient extends SignedCexClient {
         ObjectNode b = mapper.createObjectNode().put("instId", instId(symbol)).put("lever", Integer.toString(leverage)).put("mgnMode", "cross");
         signed("POST", "/api/v5/account/set-leverage", b.toString(), false);
         log.info("[okx] плечо {}x для {}", leverage, symbol);
+    }
+
+    /**
+     * Стоп на бирже (SWAP): алго-ордер conditional, closeFraction=1 — закрыть всю позицию,
+     * срабатывание по цене маркировки, исполнение рыночное (slOrdPx=-1).
+     */
+    @Override
+    public String placeStopLoss(String symbol, Side side, double qty, double stopPrice) throws Exception {
+        if (!swap) return null;
+        ObjectNode b = mapper.createObjectNode()
+                .put("instId", instId(symbol)).put("tdMode", "cross")
+                .put("side", side == Side.BUY ? "buy" : "sell")
+                .put("ordType", "conditional").put("closeFraction", "1").put("reduceOnly", true)
+                .put("slTriggerPx", plain(stopPrice, filters.priceScale(symbol)))
+                .put("slTriggerPxType", "mark").put("slOrdPx", "-1");
+        String id = signed("POST", "/api/v5/trade/order-algo", b.toString(), true).path("data").path(0).path("algoId").asText("");
+        if (id.isEmpty()) throw new ApiException(200, "NO_ID", "нет algoId у стопа", false);
+        return id;
+    }
+
+    /** Снять стоп: cancel-algos. */
+    @Override
+    public void cancelStopLoss(String symbol, String stopId) throws Exception {
+        ArrayNode a = mapper.createArrayNode();
+        a.addObject().put("instId", instId(symbol)).put("algoId", stopId);
+        signed("POST", "/api/v5/trade/cancel-algos", a.toString(), true);
     }
 
     /** Открытые позиции SWAP (режим net), объём — в базовой валюте. */
