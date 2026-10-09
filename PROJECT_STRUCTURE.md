@@ -49,7 +49,8 @@ hft-trader/
 │   ├── store/                        # MarketDataStore, OrderBook (StampedLock), PriceWindow, BalanceStore, SymbolFilters,
 │   │                                 # PositionStore (позиции перпов), FundingStore (ставки funding)
 │   ├── metrics/                      # Latency (HdrHistogram), PrometheusExporter (/metrics)
-│   ├── net/WsClient.java             # WebSocket-клиент на Netty для всех бирж (epoll/NIO, предел сообщения, таймауты)
+│   ├── net/                          # WsClient — WebSocket-клиент на Netty для всех бирж (epoll/NIO);
+│   │                                 # WsSettings — параметры соединения по биржам (предел сообщения, таймауты, жизнь соединения)
 │   ├── crypto/                       # Keccak, Hex, EvmCrypto/Web3jCrypto (Hyperliquid, Uniswap)
 │   ├── model/                        # Tick, OrderRequest, OrderResult, OrderEnums
 │   └── util/                         # Signer/Hmac, Numbers, BoundedMap, MsgPack

@@ -52,6 +52,8 @@ public final class WsBookFeed implements BookFeed {
     private final ExchangeInfo info;
     /** Подключение и параметры биржи. */
     private final ExchangeConfig cfg;
+    /** Параметры соединения биржи (предел сообщения, таймауты, плановое переподключение). */
+    private final com.hft.net.WsSettings ws;
     /** Формат WebSocket биржи. */
     private final WsDialect dialect;
     /** Куда записываются стаканы. */
@@ -136,6 +138,7 @@ public final class WsBookFeed implements BookFeed {
                       TickSink onTick, Consumer<String> onBook, Runnable onGiveUp) {
         this.info = info;
         this.cfg = cfg;
+        this.ws = com.hft.net.WsSettings.forExchange(info.id());
         this.dialect = dialect;
         this.market = market;
         this.onTick = onTick;
@@ -243,8 +246,9 @@ public final class WsBookFeed implements BookFeed {
     /** Подключаться и переподключаться с нарастающей паузой; после feedMaxFailures неудач — сдаться. */
     private void loop() {
         while (running) {
+            boolean planned = false;
             try {
-                connectAndServe();
+                planned = connectAndServe();
             } catch (InterruptedException e) {
                 return;
             } catch (Exception e) {
@@ -254,6 +258,7 @@ public final class WsBookFeed implements BookFeed {
             open = false;
             fireState();
             if (!running) return;
+            if (planned) { reconnects.incrementAndGet(); continue; }   // плановое — сразу, без паузы и без счёта неудач
             if (++failures >= maxFailures) { giveUp(); return; }
             reconnects.incrementAndGet();
             long pause = (long) (Math.min(30_000, baseBackoffMs << Math.min(failures, 10))
@@ -262,14 +267,18 @@ public final class WsBookFeed implements BookFeed {
         }
     }
 
-    /** Одно соединение: адрес (с токеном, если нужен), подписка, пинг, контроль тишины. */
-    private void connectAndServe() throws Exception {
+    /**
+     * Одно соединение: адрес (с токеном, если нужен), подписка, пинг, контроль тишины.
+     * @return true — плановое переподключение (жизнь соединения у биржи ограничена); обрыв и ошибки — исключение
+     */
+    private boolean connectAndServe() throws Exception {
         CompletableFuture<Void> closed = new CompletableFuture<>();
         Listener listener = new Listener(closed);
         RateBudget budget = RateBudget.of(info.id());
         budget.acquire(RateBudget.Kind.WS_CONNECT, 1, 60_000);   // лимит подключений на IP
         WsClient.Connection w = WsClient.connect(
-                URI.create(dialect.connectUrl(url(), cfg.restUrl().isBlank() ? info.restUrl() : cfg.restUrl())), listener);
+                URI.create(dialect.connectUrl(url(), cfg.restUrl().isBlank() ? info.restUrl() : cfg.restUrl())), listener, ws);
+        long connectedAt = System.currentTimeMillis();
         socket = w;
         WsSender snd = new WsSender(w, 1000);
         sender = snd;
@@ -295,12 +304,17 @@ public final class WsBookFeed implements BookFeed {
                 try { closed.get(500, TimeUnit.MILLISECONDS); } catch (java.util.concurrent.TimeoutException ignored) {}
                 long now = System.currentTimeMillis();
                 if (now - lastFrameMs > staleMs) throw new IllegalStateException("тишина " + (now - lastFrameMs) + " мс — переподключаюсь");
+                if (ws.maxLifetimeMs() > 0 && now - connectedAt > ws.maxLifetimeMs()) {
+                    log.info("[{}] WS: плановое переподключение (биржа рвёт соединение через {} ч)", info.id(), (ws.maxLifetimeMs() + 1_800_000) / 3_600_000);
+                    return true;                               // без ошибки: цикл переподключится сразу
+                }
                 String ping = dialect.pingMessage();
                 if (ping != null && now - lastPing >= dialect.pingIntervalMs()) { lastPing = now; snd.send(ping); }
             }
             if (closed.isCompletedExceptionally()) closed.get();
             if (abortRequested) throw new IllegalStateException("повторные ошибки разбора — соединение сброшено");
             if (running) throw new IllegalStateException("сервер закрыл соединение");
+            return false;
         } finally {
             open = false;
             w.abort();

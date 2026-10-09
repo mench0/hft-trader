@@ -36,9 +36,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  *   <li>одна общая группа потоков на процесс (нативный epoll в Linux, иначе NIO), TCP_NODELAY;</li>
  *   <li>текст сообщения декодируется из буфера Netty в переиспользуемый {@code char[]} соединения — без строки
  *       на каждое сообщение; фрагменты склеиваются {@link WebSocketFrameAggregator};</li>
- *   <li>предел размера сообщения ({@link #MAX_MESSAGE} байт): больше — соединение рвётся, память не съедается;
+ *   <li>параметры соединения у каждой биржи свои ({@link WsSettings}): предел размера сообщения (больше — соединение
+ *       рвётся, память не съедается), таймауты подключения и рукопожатия, плановое переподключение;
  *       сжатие (permessage-deflate) не запрашивается — нет «бомб» распаковки;</li>
- *   <li>таймауты подключения (5 с) и рукопожатия (10 с); на ping сервера — pong с тем же содержимым.</li>
+ *   <li>на ping сервера — pong с тем же содержимым.</li>
  * </ul>
  * Обработчики {@link Listener} вызываются в потоке Netty: блокировать в них нельзя.
  */
@@ -47,12 +48,8 @@ public final class WsClient {
     /** Логгер. */
     private static final Logger log = LoggerFactory.getLogger(WsClient.class);
 
-    /** Предел размера одного сообщения, байт. */
-    public static final int MAX_MESSAGE = 8 << 20;
-    /** Таймаут TCP-подключения, мс. */
-    private static final int CONNECT_TIMEOUT_MS = 5_000;
-    /** Таймаут рукопожатия WebSocket, мс. */
-    private static final long HANDSHAKE_TIMEOUT_MS = 10_000;
+    /** Предел размера сообщения по умолчанию, байт. */
+    public static final int MAX_MESSAGE = WsSettings.DEFAULT.maxMessageBytes();
 
     /** Утилитный класс — экземпляры не создаются. */
     private WsClient() {}
@@ -112,41 +109,48 @@ public final class WsClient {
      * Подключиться и пройти рукопожатие. Вызывать не из потока Netty (ждёт результата).
      * @throws Exception не подключилось, рукопожатие отклонено (403, 429…) или не уложилось во время
      */
-    public static Connection connect(URI uri, Listener listener) throws Exception {
+    public static Connection connect(URI uri, Listener listener) throws Exception { return connect(uri, listener, WsSettings.DEFAULT); }
+
+    /**
+     * Подключиться с параметрами биржи и пройти рукопожатие. Вызывать не из потока Netty (ждёт результата).
+     * @throws Exception не подключилось, рукопожатие отклонено (403, 429…) или не уложилось во время
+     */
+    public static Connection connect(URI uri, Listener listener, WsSettings st) throws Exception {
+        int maxMessage = st.maxMessageBytes();
         String scheme = uri.getScheme() == null ? "wss" : uri.getScheme().toLowerCase();
         boolean tls = !scheme.equals("ws");
         String host = uri.getHost();
         int port = uri.getPort() > 0 ? uri.getPort() : tls ? 443 : 80;
         SslContext ssl = tls ? SslContextBuilder.forClient().build() : null;
         WebSocketClientHandshaker hs = WebSocketClientHandshakerFactory.newHandshaker(
-                uri, WebSocketVersion.V13, null, false, new DefaultHttpHeaders(), MAX_MESSAGE);
-        Handler h = new Handler(hs, listener);
+                uri, WebSocketVersion.V13, null, false, new DefaultHttpHeaders(), maxMessage);
+        Handler h = new Handler(hs, listener, maxMessage);
 
         Bootstrap b = new Bootstrap().group(GROUP)
                 .channel(EPOLL ? EpollSocketChannel.class : NioSocketChannel.class)
                 .option(ChannelOption.TCP_NODELAY, true)
                 .option(ChannelOption.SO_KEEPALIVE, true)
-                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, CONNECT_TIMEOUT_MS)
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, st.connectTimeoutMs())
                 .handler(new ChannelInitializer<Channel>() {
                     @Override protected void initChannel(Channel ch) {
                         ChannelPipeline p = ch.pipeline();
                         if (ssl != null) p.addLast(ssl.newHandler(ch.alloc(), host, port));
                         p.addLast(new HttpClientCodec());
                         p.addLast(new HttpObjectAggregator(65_536));
-                        p.addLast(new WebSocketFrameAggregator(MAX_MESSAGE));
+                        p.addLast(new WebSocketFrameAggregator(maxMessage));
                         p.addLast(h);
                     }
                 });
         ChannelFuture cf = b.connect(host, port);
-        if (!cf.await(CONNECT_TIMEOUT_MS + 1_000L) || !cf.isSuccess()) {
+        if (!cf.await(st.connectTimeoutMs() + 1_000L) || !cf.isSuccess()) {
             cf.channel().close();
             throw new IllegalStateException("TCP " + host + ":" + port + ": " + (cf.cause() != null ? cf.cause() : "таймаут"));
         }
         try {
-            h.handshake.get(HANDSHAKE_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+            h.handshake.get(st.handshakeTimeoutMs(), TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
             cf.channel().close();
-            throw new IllegalStateException("рукопожатие WebSocket: нет ответа за " + HANDSHAKE_TIMEOUT_MS + " мс");
+            throw new IllegalStateException("рукопожатие WebSocket: нет ответа за " + st.handshakeTimeoutMs() + " мс");
         } catch (ExecutionException e) {
             cf.channel().close();
             throw new IllegalStateException("рукопожатие WebSocket: " + e.getCause().getMessage(), e.getCause());
@@ -174,7 +178,10 @@ public final class WsClient {
         private final CharsetDecoder utf8 = StandardCharsets.UTF_8.newDecoder();
         private CharBuffer chars = CharBuffer.allocate(16_384);
 
-        Handler(WebSocketClientHandshaker hs, Listener listener) { this.hs = hs; this.listener = listener; }
+        /** Предел сообщения этого соединения (для буфера текста). */
+        private final int maxMessage;
+
+        Handler(WebSocketClientHandshaker hs, Listener listener, int maxMessage) { this.hs = hs; this.listener = listener; this.maxMessage = maxMessage; }
 
         @Override public void channelActive(ChannelHandlerContext ctx) {
             channel = ctx.channel();
@@ -224,7 +231,7 @@ public final class WsClient {
         private int decode(ByteBuf buf) {
             ByteBuffer in = buf.nioBufferCount() == 1 ? buf.nioBuffer() : ByteBuffer.wrap(io.netty.buffer.ByteBufUtil.getBytes(buf));
             int need = (int) (in.remaining() * 1.1) + 16;
-            if (chars.capacity() < need) chars = CharBuffer.allocate(Math.min(Math.max(need, chars.capacity() * 2), MAX_MESSAGE + 16));
+            if (chars.capacity() < need) chars = CharBuffer.allocate(Math.min(Math.max(need, chars.capacity() * 2), maxMessage + 16));
             chars.clear();
             utf8.reset();
             CoderResult r = utf8.decode(in, chars, true);

@@ -873,6 +873,9 @@ KuCoin в режиме UTA торгует через `uta.order` / `uta.cancel` 
   в переиспользуемый `char[]` без строки на сообщение, склейка фрагментов, предел сообщения 8 МБ (больше — разрыв),
   сжатие не запрашивается, таймауты подключения 5 с и рукопожатия 10 с, pong с содержимым ping. WebSocket из JDK больше
   не используется. Проверка клиента — `ReconnectCheck`.
+  Параметры соединения у каждой биржи свои (`net/WsSettings`): предел сообщения (Binance, Bybit, Gate, KuCoin, MEXC,
+  Aster — 2 МБ, OKX — 4 МБ, Hyperliquid — 8 МБ, нода Uniswap — 16 МБ), таймауты, плановое переподключение за 30 минут
+  до суточного разрыва (Binance, Aster, MEXC, KuCoin). Адрес, подписка, пинг и лимиты подписок — в диалектах бирж.
 
 - **2026-10:** один фид стакана для всех бирж. Отдельные фиды Binance-спота и Bybit удалены (`BinanceMarketDataFeed`,
   `BybitMarketDataFeed`, `AbstractWsFeed`, `NettyBookFeed`): их стакан идёт через `WsDialects`

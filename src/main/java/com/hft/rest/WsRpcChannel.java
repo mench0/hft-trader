@@ -94,6 +94,8 @@ public final class WsRpcChannel {
         public WsUnknownOutcomeException(String m) { super(m, null, false, false); }
     }
 
+    /** Параметры соединения биржи (предел сообщения, таймауты, плановое переподключение). */
+    private final com.hft.net.WsSettings ws;
     /** Биржа (для логов и бюджета лимитов). */
     private final String name;
     /** Протокол биржи. */
@@ -132,6 +134,7 @@ public final class WsRpcChannel {
     public WsRpcChannel(String name, Protocol protocol) {
         this.name = name;
         this.protocol = protocol;
+        this.ws = com.hft.net.WsSettings.forExchange(name);
         this.staleMs = protocol.ping() != null ? Math.max(30_000, protocol.pingIntervalMs() * 3) : 90_000;
     }
 
@@ -268,7 +271,8 @@ public final class WsRpcChannel {
         CompletableFuture<Void> closed = new CompletableFuture<>();
         Listener l = new Listener(closed);
         RateBudget.of(name).acquire(RateBudget.Kind.WS_CONNECT, 1, 60_000);   // лимит подключений на IP
-        WsClient.Connection w = WsClient.connect(URI.create(protocol.url()), l);
+        WsClient.Connection w = WsClient.connect(URI.create(protocol.url()), l, ws);
+        long connectedAt = System.currentTimeMillis();
         socket = w;                                   // очередь отправки создана в onOpen — до первого входящего сообщения
         lastFrameMs = System.currentTimeMillis();
         connected = true;
@@ -284,6 +288,9 @@ public final class WsRpcChannel {
                 long now = System.currentTimeMillis();
                 if (!loggedIn && now > loginDeadline) { noteLoginFailure(); throw new IllegalStateException("нет подтверждения логина"); }
                 if (now - lastFrameMs > staleMs) throw new IllegalStateException("тишина " + (now - lastFrameMs) + " мс");
+                // биржа сама рвёт соединение через сутки — переподключаемся заранее, когда нет запросов в полёте
+                if (ws.maxLifetimeMs() > 0 && now - connectedAt > ws.maxLifetimeMs() && pending.isEmpty())
+                    throw new IllegalStateException("плановое переподключение");
                 String ping = protocol.ping();
                 if (ping != null && now - lastPing >= protocol.pingIntervalMs()) { lastPing = now; sender.send(ping); }
             }

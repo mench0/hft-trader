@@ -8,6 +8,13 @@ public class ReconnectCheck {
   static boolean await(BooleanSupplier c, long ms) throws Exception { long t=System.currentTimeMillis()+ms; while(System.currentTimeMillis()<t){ if(c.getAsBoolean()) return true; Thread.sleep(20);} return c.getAsBoolean(); }
 
   public static void main(String[] a) throws Exception {
+    // ───── параметры соединения по биржам
+    var bin = com.hft.net.WsSettings.forExchange("binance");
+    ck("settings: binance 24h lifetime, 2 MB", bin.maxLifetimeMs() > 23 * 3_600_000L && bin.maxLifetimeMs() < 24 * 3_600_000L && bin.maxMessageBytes() == 2 << 20);
+    ck("settings: okx no lifetime, 4 MB", com.hft.net.WsSettings.forExchange("okx").maxLifetimeMs() == 0 && com.hft.net.WsSettings.forExchange("okx").maxMessageBytes() == 4 << 20);
+    ck("settings: uniswap 16 MB, longer timeouts", com.hft.net.WsSettings.forExchange("uniswapv2").maxMessageBytes() == 16 << 20 && com.hft.net.WsSettings.forExchange("uniswapv2").connectTimeoutMs() == 10_000);
+    ck("settings: unknown -> default", com.hft.net.WsSettings.forExchange("rpc-test") == com.hft.net.WsSettings.DEFAULT);
+
     // ───── WsClient: сообщения, pong на ping, закрытие сервером, abort без onClose, предел размера
     try (var srv = new MiniWsServer()) {
       var texts = new java.util.concurrent.CopyOnWriteArrayList<String>();
@@ -25,8 +32,14 @@ public class ReconnectCheck {
       ck("netty: fragments joined", await(() -> texts.contains("{\"part\":\"склейка фрагментов\"}"), 3000));
       srv.conns.get(0).ping();
       ck("netty: pong on server ping", await(() -> srv.pongs.get() == 1, 3000));
+      // предел сообщения — свой у каждой биржи: соединение с пределом 4 КБ рвётся на сообщении 5 КБ
+      var small = com.hft.net.WsClient.connect(java.net.URI.create(srv.url()), listener, new com.hft.net.WsSettings(4096, 5000, 10000, 0));
+      int before0 = closes.get();
+      srv.conns.get(srv.conns.size() - 1).text("y".repeat(5000));
+      ck("netty: message over exchange limit drops connection", await(() -> !small.isOpen() && closes.get() > before0, 5000));
+      ck("netty: other connection unaffected", conn.isOpen());
       srv.conns.get(0).text("x".repeat(com.hft.net.WsClient.MAX_MESSAGE + 10));
-      ck("netty: oversized message drops connection", await(() -> !conn.isOpen() && closes.get() >= 1, 5000));
+      ck("netty: oversized message drops connection", await(() -> !conn.isOpen() && closes.get() >= 2, 5000));
       int before = closes.get();
       var conn2 = com.hft.net.WsClient.connect(java.net.URI.create(srv.url()), listener);
       conn2.abort();
