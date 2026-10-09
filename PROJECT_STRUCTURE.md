@@ -21,13 +21,13 @@ hft-trader/
 │   │   ├── ExchangeGateway.java      # общий контракт биржи
 │   │   ├── ExchangeFactory.java      # id биржи -> реализация
 │   │   ├── catalog/                  # ExchangeCatalog/ExchangeInfo: список бирж, комиссии, лимиты, статус адаптера
-│   │   ├── binance/, bybit/          # REST-клиенты и свои WS-фиды на Netty (класс биржи — общий GeneralExchange);
+│   │   ├── binance/, bybit/          # REST-клиенты, ордера и приватные потоки (класс биржи — общий GeneralExchange);
 │   │   │                             # BinanceFuturesClient — USDⓈ-M (fapi, ws-fapi, listenKey);
 │   │   │                             # фьючерсы остальных: GateFuturesClient, KucoinFuturesClient, MexcFuturesClient,
 │   │   │                             # Aster — тот же AsterRestClient с /fapi/v3
 │   │   ├── okx/, gate/, mexc/, kucoin/, aster/, hyperliquid/, uniswapv2/
 │   │   │                             # REST-клиенты на общем скелете SignedClient
-│   │   └── generic/                  # GeneralExchange (класс биржи для всех), NettyBookFeed, ContractSizes (размер контракта перпов), фиды стакана:
+│   │   └── generic/                  # GeneralExchange (класс биржи для всех), ContractSizes (размер контракта перпов), фиды стакана:
 │   │                                 # WsBookFeed, PollingBookFeed, HybridBookFeed; диалекты
 │   │                                 # Dialects (REST) и WsDialects (WS), LocalBook, FastJson
 │   ├── rest/                         # TradingClient (общий контракт клиента), SignedClient, BinanceRestClient, RateBudget/RateLimits/PacedLimiter,
@@ -49,7 +49,8 @@ hft-trader/
 │   ├── store/                        # MarketDataStore, OrderBook (StampedLock), PriceWindow, BalanceStore, SymbolFilters,
 │   │                                 # PositionStore (позиции перпов), FundingStore (ставки funding)
 │   ├── metrics/                      # Latency (HdrHistogram), PrometheusExporter (/metrics)
-│   ├── net/AbstractWsFeed.java       # общий Netty WS-клиент для Binance/Bybit (переподключение, контроль тишины, пинги)
+│   ├── net/                          # WsClient — WebSocket-клиент на Netty для всех бирж (epoll/NIO);
+│   │                                 # WsSettings — параметры соединения по биржам (предел сообщения, таймауты, жизнь соединения)
 │   ├── crypto/                       # Keccak, Hex, EvmCrypto/Web3jCrypto (Hyperliquid, Uniswap)
 │   ├── model/                        # Tick, OrderRequest, OrderResult, OrderEnums
 │   └── util/                         # Signer/Hmac, Numbers, BoundedMap, MsgPack
@@ -68,7 +69,7 @@ hft-trader/
 
 | Биржа | Рынки | Реализация | Режим по умолчанию |
 |---|---|---|---|
-| Binance, Bybit | spot, perp | GeneralExchange + BinanceRestClient / BybitRestClient и Netty-фид; перпы Binance — BinanceFuturesClient | LIVE при ключах и `live=true` |
+| Binance, Bybit | spot, perp | GeneralExchange + BinanceRestClient / BybitRestClient; перпы Binance — BinanceFuturesClient | LIVE при ключах и `live=true` |
 | OKX, Gate, MEXC, KuCoin, Aster | spot, perp | GeneralExchange + свой RestClient (фьючерсы — Gate/Kucoin/MexcFuturesClient, OKX SWAP, Aster `/fapi/v3`) | PAPER, LIVE не проверен |
 | Hyperliquid | perp | GeneralExchange + HyperliquidRestClient | PAPER, LIVE не проверен |
 | Uniswap V2 | spot | GeneralExchange + UniswapV2Client | PAPER, LIVE не проверен |

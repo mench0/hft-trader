@@ -42,6 +42,7 @@ public final class Dialects {
             if (Exchange.GATE.is(id)) return new GateFutures(cfg.restUrl());
             if (Exchange.KUCOIN.is(id)) return new KucoinFutures(cfg.restUrl());
             if (Exchange.MEXC.is(id)) return new MexcFutures(cfg.restUrl());
+            if (Exchange.BYBIT.is(id)) return new Bybit(true);
         }
         return Exchange.UNISWAPV2.is(id) ? new UniswapV2(cfg.params().uniPools()) : forExchange(id);
     }
@@ -49,6 +50,8 @@ public final class Dialects {
     /** Диалект REST-стакана биржи (без параметров: для Uniswap пулы пусты). */
     public static BookDialect forExchange(String id) {
         return switch (Exchange.find(id).orElse(null)) {
+            case BINANCE -> new Aster("/api/v3/depth");          // спот Binance: тот же формат, что у Aster
+            case BYBIT -> new Bybit(false);
             case OKX -> new Okx(false, "");
             case MEXC -> new Mexc();
             case GATE -> new Gate();
@@ -237,6 +240,25 @@ public final class Dialects {
             if (r.has("code") && r.path("code").asInt(0) < 0) throw new IllegalStateException("Aster: " + body);
             return book(levels(r.get("bids"), null, null, true, MAX),
                     levels(r.get("asks"), null, null, false, MAX), r.path("E").asLong(System.currentTimeMillis()));
+        }
+    }
+
+    /** GET /v5/market/orderbook?category=spot|linear&amp;symbol=BTCUSDT&amp;limit=50 -> {retCode, result:{b,a,ts}} */
+    static final class Bybit implements BookDialect {
+        /** Фьючерсы linear (иначе спот). */
+        private final boolean linear;
+        Bybit(boolean linear) { this.linear = linear; }
+        /** Запрос стакана символа. */
+        public HttpRequest request(String b, String s, int d) {
+            return get(b + "/v5/market/orderbook?category=" + (linear ? "linear" : "spot") + "&symbol=" + s + "&limit=" + Math.min(Math.max(d, 1), 200));
+        }
+        /** Разобрать ответ в стакан; ошибка биржи — исключение. */
+        public ParsedBook parse(String body, String s) throws Exception {
+            JsonNode r = JSON.readTree(body);
+            if (r.path("retCode").asInt(-1) != 0) throw new IllegalStateException("Bybit: " + body);
+            JsonNode d = r.path("result");
+            return book(levels(d.get("b"), null, null, true, MAX), levels(d.get("a"), null, null, false, MAX),
+                    d.path("ts").asLong(System.currentTimeMillis()));
         }
     }
 

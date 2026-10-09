@@ -1,88 +1,60 @@
-import com.hft.net.AbstractWsFeed;
-import io.netty.channel.Channel;
-import java.net.*;
 import java.util.*;
-import java.util.concurrent.*;
 import java.util.function.BooleanSupplier;
 
-/** Netty-фид (Binance, Bybit): переподключение после обрыва, отказа рукопожатия, тишины; одна цепочка попыток; пинги. */
+/** Netty-клиент WebSocket (ping/pong, предел размера, закрытие) и канал ордеров (отключение после отказов логина, повтор). */
 public class ReconnectCheck {
   static int pass, fail;
   static void ck(String n, boolean ok){ if(ok) pass++; else {fail++; System.out.println("FAIL "+n);} }
   static boolean await(BooleanSupplier c, long ms) throws Exception { long t=System.currentTimeMillis()+ms; while(System.currentTimeMillis()<t){ if(c.getAsBoolean()) return true; Thread.sleep(20);} return c.getAsBoolean(); }
 
-  /** Простой фид: URL сервера, считает подключения и кадры. */
-  static class TestFeed extends AbstractWsFeed {
-    final String url; final List<String> texts = new CopyOnWriteArrayList<>();
-    volatile int handshakes; volatile String heartbeat; volatile long hbMs = 200;
-    TestFeed(String url) { this.url = url; }
-    @Override protected URI buildUri() throws Exception { return new URI(url); }
-    @Override public List<String> activeSymbols() { return List.of("BTCUSDT"); }
-    @Override protected void onText(String json, long ns) { texts.add(json); }
-    @Override protected void onHandshakeComplete(Channel ch) { handshakes++; }
-    @Override protected String heartbeat() { return heartbeat; }
-    @Override protected long heartbeatIntervalMs() { return hbMs; }
-    @Override protected String name() { return "reconnect-test"; }
-    long reconnects() { return ((Number) connectionStats().get("reconnects")).longValue(); }
-  }
-
   public static void main(String[] a) throws Exception {
-    // 1. обрыв со стороны сервера — переподключение, данные снова идут
-    try (var ws = new MiniWsServer()) {
-      ws.onOpen = c -> c.text("{\"n\":1}");
-      var f = new TestFeed(ws.url()); f.tune(5_000, 100); f.start();
-      ck("connects", await(() -> f.isConnected() && f.texts.size() == 1, 3000));
-      ck("realtime after data", f.isRealtime());
-      for (var c : ws.conns) c.closeSocket();
-      ck("reconnects after drop", await(() -> f.handshakes == 2 && f.texts.size() == 2 && f.isConnected(), 5000));
-      ck("stats: reconnects counted, error recorded", f.reconnects() == 1 && !String.valueOf(f.connectionStats().get("lastError")).isEmpty());
-      // pong на ping сервера
-      ws.conns.get(ws.conns.size() - 1).ping();
-      ck("pong on server ping", await(() -> ws.pongs.get() == 1, 2000));
-      f.stop();
+    // ───── параметры соединения по биржам
+    var bin = com.hft.net.WsSettings.forExchange("binance");
+    ck("settings: binance 24h lifetime, 2 MB", bin.maxLifetimeMs() > 23 * 3_600_000L && bin.maxLifetimeMs() < 24 * 3_600_000L && bin.maxMessageBytes() == 2 << 20);
+    ck("settings: okx 4 MB", com.hft.net.WsSettings.forExchange("okx").maxMessageBytes() == 4 << 20);
+    boolean same = true;
+    for (var e : com.hft.exchange.Exchange.values()) same &= com.hft.net.WsSettings.forExchange(e.id()).maxLifetimeMs() == bin.maxLifetimeMs();
+    ck("settings: planned reconnect same for all exchanges", same);
+    ck("settings: uniswap 16 MB, longer timeouts", com.hft.net.WsSettings.forExchange("uniswapv2").maxMessageBytes() == 16 << 20 && com.hft.net.WsSettings.forExchange("uniswapv2").connectTimeoutMs() == 10_000);
+    ck("settings: unknown -> default", com.hft.net.WsSettings.forExchange("rpc-test") == com.hft.net.WsSettings.DEFAULT);
+
+    // ───── WsClient: сообщения, pong на ping, закрытие сервером, abort без onClose, предел размера
+    try (var srv = new MiniWsServer()) {
+      var texts = new java.util.concurrent.CopyOnWriteArrayList<String>();
+      var closes = new java.util.concurrent.atomic.AtomicInteger();
+      var listener = new com.hft.net.WsClient.Listener() {
+        public void onText(com.hft.net.WsClient.Connection c, char[] b, int n) { texts.add(new String(b, 0, n)); }
+        public void onClose(com.hft.net.WsClient.Connection c, int code, String reason) { closes.incrementAndGet(); }
+        public void onError(com.hft.net.WsClient.Connection c, Throwable e) { closes.incrementAndGet(); }
+      };
+      srv.onText = (c, t) -> c.text("echo:" + t);
+      var conn = com.hft.net.WsClient.connect(java.net.URI.create(srv.url()), listener);
+      conn.sendText("привет, мир").get(2, java.util.concurrent.TimeUnit.SECONDS);
+      ck("netty: send and receive utf-8", await(() -> texts.contains("echo:привет, мир"), 3000));
+      srv.conns.get(0).textFragmented("{\"part\":\"склейка фрагментов\"}");
+      ck("netty: fragments joined", await(() -> texts.contains("{\"part\":\"склейка фрагментов\"}"), 3000));
+      srv.conns.get(0).ping();
+      ck("netty: pong on server ping", await(() -> srv.pongs.get() == 1, 3000));
+      // предел сообщения — свой у каждой биржи: соединение с пределом 4 КБ рвётся на сообщении 5 КБ
+      var small = com.hft.net.WsClient.connect(java.net.URI.create(srv.url()), listener, new com.hft.net.WsSettings(4096, 5000, 10000, 0));
+      int before0 = closes.get();
+      srv.conns.get(srv.conns.size() - 1).text("y".repeat(5000));
+      ck("netty: message over exchange limit drops connection", await(() -> !small.isOpen() && closes.get() > before0, 5000));
+      ck("netty: other connection unaffected", conn.isOpen());
+      srv.conns.get(0).text("x".repeat(com.hft.net.WsClient.MAX_MESSAGE + 10));
+      ck("netty: oversized message drops connection", await(() -> !conn.isOpen() && closes.get() >= 2, 5000));
+      int before = closes.get();
+      var conn2 = com.hft.net.WsClient.connect(java.net.URI.create(srv.url()), listener);
+      conn2.abort();
       Thread.sleep(300);
-      int conns = ws.conns.size();
-      Thread.sleep(800);
-      ck("no reconnect after stop", ws.conns.size() == conns && !f.isConnected());
+      ck("netty: abort does not report close", closes.get() == before && !conn2.isOpen());
+      srv.accepting = false;
+      boolean refused = false;
+      try { com.hft.net.WsClient.connect(java.net.URI.create(srv.url()), listener); } catch (Exception e) { refused = true; }
+      ck("netty: refused handshake -> exception", refused);
     }
-    // 2. сервер отклоняет рукопожатие — одна цепочка попыток с нарастающей паузой, без лавины
-    try (var ws = new MiniWsServer()) {
-      ws.accepting = false;
-      var f = new TestFeed(ws.url()); f.tune(5_000, 100); f.start();     // старт не падает
-      ck("start survives refused handshake", !f.isConnected());
-      Thread.sleep(2_000);
-      // паузы ≈100, 200, 400, 800 мс (±20 %) — за 2 с не больше ~5 попыток; две цепочки дали бы вдвое больше
-      long r = f.reconnects();
-      ck("single backoff chain (attempts=" + r + ")", r >= 3 && r <= 6);
-      ws.accepting = true;
-      ws.onOpen = c -> c.text("{\"ok\":1}");
-      ck("recovers when server accepts again", await(() -> f.isConnected() && !f.texts.isEmpty(), 5000));
-      f.stop();
-    }
-    // 3. сервер недоступен (порт закрыт) — старт не падает, подключается, когда сервер появится
-    int port; try (var s = new ServerSocket(0)) { port = s.getLocalPort(); }
-    var f3 = new TestFeed("ws://127.0.0.1:" + port + "/ws"); f3.tune(5_000, 100); f3.start();
-    ck("start survives closed port", !f3.isConnected());
-    Thread.sleep(500);
-    try (var ws = new MiniWsServer(port)) {
-      ws.onOpen = c -> c.text("{\"up\":1}");
-      ck("connects once server is up", await(() -> f3.isConnected() && !f3.texts.isEmpty(), 8000));
-      f3.stop();
-    }
-    // 4. тишина дольше staleMs — соединение пересоздаётся
-    try (var ws = new MiniWsServer()) {
-      var f = new TestFeed(ws.url()); f.tune(1_000, 100); f.start();
-      ck("connected (silent server)", await(f::isConnected, 3000));
-      ck("silence -> reconnect", await(() -> f.handshakes >= 2, 5000));
-      f.stop();
-    }
-    // 5. пинг уровня приложения по таймеру
-    try (var ws = new MiniWsServer()) {
-      var f = new TestFeed(ws.url()); f.heartbeat = "{\"op\":\"ping\"}"; f.tune(5_000, 100); f.start();
-      ck("app heartbeat sent", await(() -> ws.received.stream().filter(t -> t.contains("\"ping\"")).count() >= 2, 3000));
-      f.stop();
-    }
-    // 6. канал ордеров: 5 отказов логина — отключён (ордера по REST), но через disabledRetry пробует снова
+
+    // канал ордеров: 5 отказов логина — отключён (ордера по REST), но через disabledRetry пробует снова
     try (var ws = new MiniWsServer()) {
       var good = new java.util.concurrent.atomic.AtomicBoolean(false);
       ws.onText = (c, t) -> { if (t.equals("login")) c.text(good.get() ? "ok" : "bad"); };

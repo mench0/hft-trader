@@ -32,7 +32,7 @@ public final class ExchangeCatalog {
         add(new ExchangeInfo(Exchange.BINANCE.id(), "Binance", Kind.CEX_TIER1, Adapter.NATIVE_LIVE,
                 "https://api.binance.com", 20, 0.10, 0.10, "USDT", "BTCUSDT",
                 "Полный адаптер: стакан, ордера (WebSocket API) и события аккаунта по WebSocket, REST — запасной. Фьючерсы (market=perp): USDⓈ-M.",
-                "wss://stream.binance.com:9443/ws", "https://testnet.binance.vision", "wss://testnet.binance.vision/ws"));
+                "wss://stream.binance.com:9443/stream", "https://testnet.binance.vision", "wss://stream.testnet.binance.vision/stream"));
         add(new ExchangeInfo(Exchange.BYBIT.id(), "Bybit", Kind.CEX_TIER1, Adapter.NATIVE_LIVE,
                 "https://api.bybit.com", 8, 0.10, 0.10, "USDT", "BTCUSDT",
                 "Полный адаптер: стакан, ордера (/v5/trade), исполнения и баланс (/v5/private) по WebSocket, REST — запасной. Блокирует IP многих дата-центров (403). Фьючерсы (market=perp): linear.",

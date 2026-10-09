@@ -34,19 +34,19 @@ public class ExchangeLifecycleCheck {
       gw.syncBalances();
       gw.stop();
     }
-    // Binance и Bybit — тот же GeneralExchange со своим Netty-фидом
+    // Binance и Bybit — тот же GeneralExchange с общим фидом (WS + REST-запас)
     try (var ws = new MiniWsServer()) {
-      ws.onOpen = c -> c.text("{\"stream\":\"btcusdt@depth20@100ms\",\"data\":{\"lastUpdateId\":1,\"bids\":[[\"99\",\"3\"]],\"asks\":[[\"101\",\"2\"]]}}");
-      var cfg = new ExchangeConfig("binance", false, "http://127.0.0.1:9", ws.url().replace("/ws", ""), 5000, List.of("BTCUSDT"), 20, 100,
+      ws.onText = (c, t) -> { if (t.contains("SUBSCRIBE")) c.text("{\"stream\":\"btcusdt@depth20@100ms\",\"data\":{\"lastUpdateId\":1,\"bids\":[[\"99\",\"3\"]],\"asks\":[[\"101\",\"2\"]]}}"); };
+      var cfg = new ExchangeConfig("binance", false, "http://127.0.0.1:9", ws.url(), 5000, List.of("BTCUSDT"), 20, 100,
           TradingParams.DEFAULTS.with(Map.of("market", "spot")));
       ExchangeGateway gw = ExchangeFactory.create("binance", cfg, app);
-      ck("binance spot is GeneralExchange with Netty feed", gw instanceof GeneralExchange se && se.feed() instanceof NettyBookFeed);
+      ck("binance spot is GeneralExchange with WS+REST feed", gw instanceof GeneralExchange se && se.feed() instanceof HybridBookFeed);
       gw.start();
       var b = gw.marketData().book("BTCUSDT");
-      ck("binance book through Netty feed", await(() -> b.bestBid()==99 && b.bestAsk()==101, 5000));
+      ck("binance book through WS feed", await(() -> b.bestBid()==99 && b.bestAsk()==101, 5000));
       int before = ws.conns.size();
       for (var c : ws.conns) c.closeSocket();          // обрыв: фид переподключается сам (не в потоке Netty)
-      ck("binance Netty feed reconnects", await(() -> ws.conns.size() > before && gw.isConnected(), 8000));
+      ck("binance WS feed reconnects", await(() -> ws.conns.size() > before && gw.isConnected(), 8000));
       ck("binance paper balance seeded", gw.balances().free("USDT") == 1000 && !((RequestStatsSource) gw).isLive());
       gw.stop();
     }
@@ -54,7 +54,7 @@ public class ExchangeLifecycleCheck {
       var cfg = new ExchangeConfig("bybit", false, "http://127.0.0.1:9", "ws://127.0.0.1:9", 5000, List.of("BTCUSDT"), 20, 100,
           TradingParams.DEFAULTS.with(Map.of("market", mkt)));
       ExchangeGateway gw = ExchangeFactory.create("bybit", cfg, app);
-      ck("bybit " + mkt + " is GeneralExchange", gw instanceof GeneralExchange se && se.feed() instanceof NettyBookFeed
+      ck("bybit " + mkt + " is GeneralExchange", gw instanceof GeneralExchange se && se.feed() instanceof HybridBookFeed
           && (gw.perp() != null) == mkt.equals("perp"));
     }
     // остальные классы конструируются и стартуют в paper-режиме (стакан возьмут REST-опросом позже; тут — только жизненный цикл)

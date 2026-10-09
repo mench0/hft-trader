@@ -42,7 +42,8 @@ public final class WsDialects {
                 case GATE: return Optional.of(new GateFutures(cfg.restUrl()));
                 case KUCOIN: return Optional.of(new Kucoin(true));
                 case MEXC: return Optional.of(new MexcFutures(cfg.restUrl()));
-                case null, default: break;                              // Hyperliquid — те же сообщения; Bybit — свой фид
+                case BYBIT: return Optional.of(new Bybit(true));
+                case null, default: break;                              // Hyperliquid — те же сообщения
             }
         }
         return Exchange.UNISWAPV2.is(id) ? Optional.of(new Uniswap(cfg.params().uniPools())) : forExchange(id);
@@ -53,9 +54,16 @@ public final class WsDialects {
         return new Aster("Binance futures", "wss://fstream.binance.com/stream", "wss://fstream.binancefuture.com/stream");
     }
 
+    /** Binance спот: комбинированные потоки /stream, частичный стакан depthN@100ms (формат Aster/Binance). */
+    public static WsDialect binanceSpot() {
+        return new Aster("Binance", "wss://stream.binance.com:9443/stream", "wss://stream.testnet.binance.vision/stream");
+    }
+
     /** WS-диалект биржи без её параметров (для Uniswap пулы пусты); пусто — у биржи нет WS-стакана. */
     public static Optional<WsDialect> forExchange(String id) {
         return switch (Exchange.find(id).orElse(null)) {
+            case BINANCE -> Optional.of(binanceSpot());
+            case BYBIT -> Optional.of(new Bybit(false));
             case OKX -> Optional.of(new Okx(false, ""));
             case GATE -> Optional.of(new Gate());
             case HYPERLIQUID -> Optional.of(new Hyperliquid());
@@ -788,6 +796,86 @@ public final class WsDialects {
             }
             if (out.venue == null) throw new IllegalStateException(name + ": стакан без stream " + abbreviate(c, len));
             out.snapshot = true;
+            if (out.tsMs == 0) out.tsMs = System.currentTimeMillis();
+            return null;
+        }
+    }
+
+    // ───────────────────────── Bybit ─────────────────────────
+
+    /**
+     * Bybit v5: orderbook.50.&lt;символ&gt; на /v5/public/spot или /v5/public/linear — снимок (type snapshot),
+     * затем изменения (delta, объём 0 — убрать уровень); пинг {"op":"ping"} раз в 20 с (без него Bybit закрывает сокет).
+     */
+    static final class Bybit implements WsDialect {
+        /** Фьючерсы linear (иначе спот). */
+        private final boolean linear;
+        Bybit(boolean linear) { this.linear = linear; }
+        /** Адрес по умолчанию (основная или тестовая сеть). */
+        public String defaultUrl(boolean testnet) {
+            return (testnet ? "wss://stream-testnet.bybit.com/v5/public/" : "wss://stream.bybit.com/v5/public/") + (linear ? "linear" : "spot");
+        }
+        /** Имя символа на бирже: как есть (BTCUSDT). */
+        public String venueSymbol(String s) { return s.toUpperCase(java.util.Locale.ROOT); }
+        /** Подписка: не больше 10 тем в сообщении. */
+        public List<String> subscribe(List<String> v, int d) { return op("subscribe", v); }
+        /** Отписка. */
+        public List<String> unsubscribe(List<String> v, int d) { return op("unsubscribe", v); }
+        /** Сообщения подписки/отписки пачками по 10. */
+        private List<String> op(String op, List<String> v) {
+            List<String> out = new ArrayList<>();
+            for (int i = 0; i < v.size(); i += 10) {
+                ObjectNode o = objectMapper.createObjectNode().put("op", op);
+                ArrayNode args = o.putArray("args");
+                for (String s : v.subList(i, Math.min(v.size(), i + 10))) args.add("orderbook.50." + s);
+                out.add(msg(o));
+            }
+            return out;
+        }
+        @Override public String pingMessage() { return "{\"op\":\"ping\"}"; }
+        @Override public long pingIntervalMs() { return 20_000; }
+
+        /** Разобрать сообщение биржи в out; ответы на подписку и pong — пропустить, ошибки — исключение. */
+        public String parse(char[] c, int len, BookBatch out) throws Exception {
+            out.reset();
+            boolean book = false, hasData = false, snap = false, reply = false, success = true;
+            String retMsg = null;
+            try (JsonParser p = open(c, len)) {
+                while (p.nextToken() == JsonToken.FIELD_NAME) {
+                    String f = p.currentName();
+                    p.nextToken();
+                    switch (f) {
+                        case "op" -> { reply = true; p.skipChildren(); }
+                        case "success" -> success = p.getValueAsBoolean(true);
+                        case "ret_msg" -> retMsg = p.getText();
+                        case "topic" -> book = p.getText().startsWith("orderbook.");
+                        case "type" -> snap = textIs(p, "snapshot");
+                        case "ts" -> out.tsMs = longOf(p, System.currentTimeMillis());
+                        case "data" -> {
+                            hasData = true;
+                            if (p.currentToken() != JsonToken.START_OBJECT) throw new IllegalStateException("Bybit: data не объект");
+                            while (p.nextToken() == JsonToken.FIELD_NAME) {
+                                String g = p.currentName();
+                                p.nextToken();
+                                switch (g) {
+                                    case "s" -> out.venue = out.resolve(p.getTextCharacters(), p.getTextOffset(), p.getTextLength());
+                                    case "b" -> levels(p, out, true);
+                                    case "a" -> levels(p, out, false);
+                                    default -> p.skipChildren();
+                                }
+                            }
+                        }
+                        default -> p.skipChildren();
+                    }
+                }
+            }
+            if (reply && !hasData) {                                 // ответ на подписку или pong
+                out.reset();
+                if (!success) throw new IllegalStateException("Bybit WS error: " + retMsg);
+                return null;
+            }
+            if (!book || !hasData || out.venue == null) throw new IllegalStateException("Bybit: неожиданное сообщение " + abbreviate(c, len));
+            out.snapshot = snap;
             if (out.tsMs == 0) out.tsMs = System.currentTimeMillis();
             return null;
         }

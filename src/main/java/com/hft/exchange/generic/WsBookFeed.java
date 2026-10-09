@@ -4,20 +4,16 @@ import com.hft.config.ExchangeConfig;
 import com.hft.exchange.catalog.ExchangeInfo;
 import com.hft.rest.RateBudget;
 import com.hft.rest.WsSender;
+import com.hft.net.WsClient;
 import com.hft.store.MarketDataStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.WebSocket;
-import java.nio.ByteBuffer;
-import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
@@ -25,7 +21,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
 /**
- * Стакан по WebSocket для биржи с диалектом {@link WsDialect}. Использует WebSocket из JDK
+ * Стакан по WebSocket для биржи с диалектом {@link WsDialect}. Транспорт — Netty ({@link WsClient})
  * (без Netty), поэтому не добавляет зависимостей.
  *
  * Жизненный цикл: подключиться → подписаться → читать; при обрыве, ошибке разбора подряд или
@@ -56,6 +52,8 @@ public final class WsBookFeed implements BookFeed {
     private final ExchangeInfo info;
     /** Подключение и параметры биржи. */
     private final ExchangeConfig cfg;
+    /** Параметры соединения биржи (предел сообщения, таймауты, плановое переподключение). */
+    private final com.hft.net.WsSettings ws;
     /** Формат WebSocket биржи. */
     private final WsDialect dialect;
     /** Куда записываются стаканы. */
@@ -70,7 +68,6 @@ public final class WsBookFeed implements BookFeed {
     private volatile Runnable onStateChange = () -> {};
 
     /** HTTP-клиент. */
-    private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
     /** Символы подписки (наш формат). */
     private final List<String> symbols = new CopyOnWriteArrayList<>();
     /** Символ биржи -> наш символ. */
@@ -104,7 +101,7 @@ public final class WsBookFeed implements BookFeed {
     /** Источник сдался. */
     private volatile boolean gaveUp;
     /** Текущий сокет. */
-    private volatile WebSocket socket;
+    private volatile WsClient.Connection socket;
     /** Очередь отправки в сокет. */
     private volatile WsSender sender;
     /** Буфер разбора текущего соединения. */
@@ -141,6 +138,7 @@ public final class WsBookFeed implements BookFeed {
                       TickSink onTick, Consumer<String> onBook, Runnable onGiveUp) {
         this.info = info;
         this.cfg = cfg;
+        this.ws = com.hft.net.WsSettings.forExchange(info.id());
         this.dialect = dialect;
         this.market = market;
         this.onTick = onTick;
@@ -212,7 +210,7 @@ public final class WsBookFeed implements BookFeed {
 
     @Override public synchronized void stop() {
         running = false;
-        WebSocket w = socket;
+        WsClient.Connection w = socket;
         if (w != null) w.abort();
         if (thread != null) thread.interrupt();
     }
@@ -229,7 +227,7 @@ public final class WsBookFeed implements BookFeed {
 
     @Override public Map<String, Object> stats() {
         var m = new LinkedHashMap<String, Object>();
-        m.put("transport", "websocket");
+        m.put("transport", WsClient.transport());
         m.put("url", url());
         m.put("connected", isConnected());
         m.put("messages", messages.get());
@@ -248,8 +246,9 @@ public final class WsBookFeed implements BookFeed {
     /** Подключаться и переподключаться с нарастающей паузой; после feedMaxFailures неудач — сдаться. */
     private void loop() {
         while (running) {
+            boolean planned = false;
             try {
-                connectAndServe();
+                planned = connectAndServe();
             } catch (InterruptedException e) {
                 return;
             } catch (Exception e) {
@@ -259,6 +258,7 @@ public final class WsBookFeed implements BookFeed {
             open = false;
             fireState();
             if (!running) return;
+            if (planned) { reconnects.incrementAndGet(); continue; }   // плановое — сразу, без паузы и без счёта неудач
             if (++failures >= maxFailures) { giveUp(); return; }
             reconnects.incrementAndGet();
             long pause = (long) (Math.min(30_000, baseBackoffMs << Math.min(failures, 10))
@@ -267,15 +267,18 @@ public final class WsBookFeed implements BookFeed {
         }
     }
 
-    /** Одно соединение: адрес (с токеном, если нужен), подписка, пинг, контроль тишины. */
-    private void connectAndServe() throws Exception {
+    /**
+     * Одно соединение: адрес (с токеном, если нужен), подписка, пинг, контроль тишины.
+     * @return true — плановое переподключение (жизнь соединения у биржи ограничена); обрыв и ошибки — исключение
+     */
+    private boolean connectAndServe() throws Exception {
         CompletableFuture<Void> closed = new CompletableFuture<>();
         Listener listener = new Listener(closed);
         RateBudget budget = RateBudget.of(info.id());
         budget.acquire(RateBudget.Kind.WS_CONNECT, 1, 60_000);   // лимит подключений на IP
-        WebSocket w = http.newWebSocketBuilder().connectTimeout(Duration.ofSeconds(5))
-                .buildAsync(URI.create(dialect.connectUrl(url(), cfg.restUrl().isBlank() ? info.restUrl() : cfg.restUrl())), listener)
-                .get(10, TimeUnit.SECONDS);
+        WsClient.Connection w = WsClient.connect(
+                URI.create(dialect.connectUrl(url(), cfg.restUrl().isBlank() ? info.restUrl() : cfg.restUrl())), listener, ws);
+        long connectedAt = System.currentTimeMillis();
         socket = w;
         WsSender snd = new WsSender(w, 1000);
         sender = snd;
@@ -301,12 +304,17 @@ public final class WsBookFeed implements BookFeed {
                 try { closed.get(500, TimeUnit.MILLISECONDS); } catch (java.util.concurrent.TimeoutException ignored) {}
                 long now = System.currentTimeMillis();
                 if (now - lastFrameMs > staleMs) throw new IllegalStateException("тишина " + (now - lastFrameMs) + " мс — переподключаюсь");
+                if (ws.maxLifetimeMs() > 0 && now - connectedAt > ws.maxLifetimeMs()) {
+                    log.info("[{}] WS: плановое переподключение (раз в {} мин)", info.id(), ws.maxLifetimeMs() / 60_000);
+                    return true;                               // без ошибки: цикл переподключится сразу
+                }
                 String ping = dialect.pingMessage();
                 if (ping != null && now - lastPing >= dialect.pingIntervalMs()) { lastPing = now; snd.send(ping); }
             }
             if (closed.isCompletedExceptionally()) closed.get();
             if (abortRequested) throw new IllegalStateException("повторные ошибки разбора — соединение сброшено");
             if (running) throw new IllegalStateException("сервер закрыл соединение");
+            return false;
         } finally {
             open = false;
             w.abort();
@@ -326,10 +334,10 @@ public final class WsBookFeed implements BookFeed {
     // ───────────────────────── обработка сообщений (поток чтения WS) ─────────────────────────
 
     /** Разобрать сообщение; ответ (pong) отправить сразу; стакан — применить. */
-    private void handle(WebSocket w, char[] buf, int len, BookBatch batch) { handle(w, buf, len, null, batch); }
+    private void handle(WsClient.Connection w, char[] buf, int len, BookBatch batch) { handle(w, buf, len, null, batch); }
 
     /** Разобрать текст (buf) или бинарный кадр (bin, если диалект разбирает их сам). */
-    private void handle(WebSocket w, char[] buf, int len, byte[] bin, BookBatch batch) {
+    private void handle(WsClient.Connection w, char[] buf, int len, byte[] bin, BookBatch batch) {
         messages.incrementAndGet();
         try {
             String reply = bin != null ? dialect.parseBinary(bin, bin.length, batch) : dialect.parse(buf, len, batch);
@@ -349,7 +357,7 @@ public final class WsBookFeed implements BookFeed {
     }
 
     /** Применить снимок или изменения к локальному стакану и опубликовать верх. */
-    private void apply(WebSocket w, BookBatch b) {
+    private void apply(WsClient.Connection w, BookBatch b) {
         SymbolState st = states.get(b.venue);
         if (st == null) return;                          // отписались или чужой символ
         boolean wasReady = st.book.isReady();
@@ -383,83 +391,45 @@ public final class WsBookFeed implements BookFeed {
         onBook.accept(st.internal);
     }
 
-    /** Слушатель сокета JDK: склейка фрагментов и кадры. */
-    private final class Listener implements WebSocket.Listener {
+    /** Обработчик соединения (поток Netty): сообщения целиком, ping, закрытие. */
+    private final class Listener implements WsClient.Listener {
         /** Завершается при закрытии сокета. */
         private final CompletableFuture<Void> closed;
         /** Буфер разбора сообщений этого соединения. */
         final BookBatch batch = new BookBatch();
-        /** Буфер склейки фрагментов текста. */
+        /** Буфер текста из бинарного кадра (gzip и т.п.). */
         private char[] buf = new char[8192];
-        /** Сколько символов в буфере. */
-        private int len;
-        /** Буфер склейки бинарных фрагментов. */
-        private ByteBuffer bin = ByteBuffer.allocate(0);
 
         Listener(CompletableFuture<Void> closed) { this.closed = closed; }
 
-        @Override public void onOpen(WebSocket w) { w.request(1); }
-
-        /** Дописать фрагмент текстового кадра в буфер. */
-        private void append(CharSequence data) {
-            int n = data.length();
-            if (len + n > buf.length) buf = java.util.Arrays.copyOf(buf, Math.max(buf.length * 2, len + n));
-            if (data instanceof String s) s.getChars(0, n, buf, len);
-            else for (int i = 0; i < n; i++) buf[len + i] = data.charAt(i);
-            len += n;
+        @Override public void onText(WsClient.Connection w, char[] text, int len) {
+            lastFrameMs = System.currentTimeMillis();
+            handle(w, text, len, batch);
         }
 
-        @Override public CompletionStage<?> onText(WebSocket w, CharSequence data, boolean last) {
+        @Override public void onBinary(WsClient.Connection w, byte[] bytes) {
             lastFrameMs = System.currentTimeMillis();
-            append(data);
-            if (last) { handle(w, buf, len, batch); len = 0; }
-            w.request(1);
-            return null;
-        }
-
-        @Override public CompletionStage<?> onBinary(WebSocket w, ByteBuffer data, boolean last) {
-            lastFrameMs = System.currentTimeMillis();
-            ByteBuffer merged = ByteBuffer.allocate(bin.remaining() + data.remaining());
-            merged.put(bin).put(data).flip();
-            bin = merged;
-            if (last) {
-                byte[] bytes = new byte[bin.remaining()];
-                bin.get(bytes);
-                bin = ByteBuffer.allocate(0);
-                if (dialect.parsesBinary()) { handle(w, null, 0, bytes, batch); w.request(1); return null; }
-                try {
-                    len = 0;
-                    append(dialect.decodeBinary(bytes));
-                    handle(w, buf, len, batch);
-                    len = 0;
-                } catch (Exception e) {
-                    parseErrors.incrementAndGet();
-                    lastError = "binary: " + e;
-                }
+            if (dialect.parsesBinary()) { handle(w, null, 0, bytes, batch); return; }
+            try {
+                String t = dialect.decodeBinary(bytes);
+                int n = t.length();
+                if (n > buf.length) buf = new char[Math.max(n, buf.length * 2)];
+                t.getChars(0, n, buf, 0);
+                handle(w, buf, n, batch);
+            } catch (Exception e) {
+                parseErrors.incrementAndGet();
+                lastError = "binary: " + e;
             }
-            w.request(1);
-            return null;
         }
 
-        @Override public CompletionStage<?> onPing(WebSocket w, ByteBuffer m) {
-            lastFrameMs = System.currentTimeMillis();
-            w.request(1);
-            return null;       // pong JDK отправляет сам
-        }
+        @Override public void onPing(WsClient.Connection w) { lastFrameMs = System.currentTimeMillis(); }
 
-        @Override public CompletionStage<?> onPong(WebSocket w, ByteBuffer m) {
-            lastFrameMs = System.currentTimeMillis();
-            w.request(1);
-            return null;
-        }
-
-        @Override public CompletionStage<?> onClose(WebSocket w, int code, String reason) {
+        @Override public void onClose(WsClient.Connection w, int code, String reason) {
             lastError = "close " + code + " " + reason;
             closed.complete(null);
-            return null;
         }
 
-        @Override public void onError(WebSocket w, Throwable e) {
+        @Override public void onError(WsClient.Connection w, Throwable e) {
             lastError = "ws error: " + e;
             closed.completeExceptionally(e);
         }

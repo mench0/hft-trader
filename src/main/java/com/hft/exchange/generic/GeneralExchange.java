@@ -16,7 +16,6 @@ import com.hft.store.PositionStore;
 import com.hft.risk.RiskManager;
 import com.hft.rest.ExchangeOrderApi;
 import com.hft.rest.TradingClient;
-import com.hft.net.AbstractWsFeed;
 import com.hft.store.BalanceStore;
 import com.hft.store.MarketDataStore;
 import com.hft.store.SymbolFilters;
@@ -30,7 +29,7 @@ import java.util.Map;
 /**
  * Биржа целиком — класс для всех бирж (Binance, Bybit, OKX, Gate, MEXC, KuCoin, Aster, Hyperliquid, Uniswap V2):
  * свои хранилища, клиент, риск-менеджер, сервис ордеров, конвейер тиков и фид.
- * Биржи отличаются клиентом ({@link TradingClient}) и, у Binance и Bybit, своим Netty-фидом — их передаёт фабрика.
+ * Биржи отличаются клиентом ({@link TradingClient}, его передаёт фабрика) и форматом стакана ({@link WsDialects}, {@link Dialects}).
  * LIVE включается только при ID_API_KEY/_SECRET и ID_LIVE=true, иначе — бумажный движок на живых данных.
  */
 public final class GeneralExchange implements ExchangeGateway, RequestStatsSource {
@@ -58,12 +57,6 @@ public final class GeneralExchange implements ExchangeGateway, RequestStatsSourc
         TradingClient create(ExchangeConfig config, Credentials credentials, SymbolFilters filters);
     }
 
-    /** Создаёт свой Netty-фид биржи (Binance, Bybit) вместо общего WS+REST. */
-    @FunctionalInterface
-    public interface FeedFactory {
-        /** Фид, публикующий тики в конвейер. */
-        AbstractWsFeed create(ExchangeConfig config, MarketDataStore market, TickPipeline pipeline);
-    }
 
     private final TradingClient rest;               // null в режиме PAPER
     private final PaperOrderApi paper;         // null в режиме LIVE
@@ -94,19 +87,13 @@ public final class GeneralExchange implements ExchangeGateway, RequestStatsSourc
      * @param settings параметры биржи
      * @param clientFactory создаёт REST-клиент для LIVE
      */
-    public GeneralExchange(String id, ExchangeConfig config, TradingSettings settings, ClientFactory clientFactory) {
-        this(id, config, settings, clientFactory, null);
-    }
-
     /**
      * @param id биржа из каталога
      * @param config подключение и параметры
      * @param settings параметры биржи
      * @param clientFactory создаёт REST-клиент для LIVE
-     * @param feedFactory свой Netty-фид биржи; null — общий фид (WS по диалекту, REST — запасной)
      */
-    public GeneralExchange(String id, ExchangeConfig config, TradingSettings settings,
-                             ClientFactory clientFactory, FeedFactory feedFactory) {
+    public GeneralExchange(String id, ExchangeConfig config, TradingSettings settings, ClientFactory clientFactory) {
         this.info = ExchangeCatalog.find(id).orElseThrow();
         this.config = config;
         this.credentials = Credentials.fromEnv(info.id());
@@ -137,10 +124,7 @@ public final class GeneralExchange implements ExchangeGateway, RequestStatsSourc
         this.dataHandler = new MarketDataHandler(market);
         this.strategy = new StrategySet(market, orderService, info.id(), settings);
         this.pipeline = new TickPipeline(dataHandler, strategy.handlers());
-        this.feed = feedFactory == null
-                ? ExchangeSupport.newFeed(info, config, market, pipeline, paper, this::onFeedGaveUp)
-                : nettyFeed(feedFactory.create(config, market, pipeline)
-                        .tune(config.params().wsStaleMs(), config.params().wsReconnectBaseMs()), paper);
+        this.feed = ExchangeSupport.newFeed(info, config, market, pipeline, paper, this::onFeedGaveUp);
         strategy.setRealtimeSource(feed::isRealtime);          // на REST-запасе новых входов нет
 
         if (!credentials.isPresent()) {
@@ -244,12 +228,6 @@ public final class GeneralExchange implements ExchangeGateway, RequestStatsSourc
         if (rest == null) return;
         try { rest.syncTime(); }
         catch (Exception e) { log.warn("[{}] Не удалось синхронизировать часы: {}", info.id(), e.getMessage()); }
-    }
-
-    /** Свой фид биржи; в бумажном режиме каждое обновление стакана сводит заявки. */
-    private static BookFeed nettyFeed(AbstractWsFeed ws, PaperOrderApi paper) {
-        if (paper != null) ws.onBook(paper::settle);
-        return new NettyBookFeed(ws);
     }
 
     /** Сторож позиций; null — спот. */
